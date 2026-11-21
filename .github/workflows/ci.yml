@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install package with dev and sigma extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,sigma]"
+
+      - name: Validate bash wrappers
+        run: |
+          bash -n scripts/sandbox-scan.sh
+          bash -n scripts/sandbox-analyze-tasks.sh
+          bash -n scripts/ollama-egress.sh
+          bash -n lab/kvm/lab-ctl.sh
+
+      - name: Run offline test suite
+        run: pytest -v -m "not live"
+
+      - name: Run multi-backend Sigma compilation check
+        run: artex-hunt sigma-compile --rules-dir rules/sigma

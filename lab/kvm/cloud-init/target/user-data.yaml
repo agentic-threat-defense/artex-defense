@@ -1,0 +1,81 @@
+#cloud-config
+hostname: artex-target-01
+fqdn: artex-target-01.lab.internal
+manage_etc_hosts: true
+
+users:
+  - name: labops
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: sudo, adm
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __LAB_SSH_PUBKEY__
+
+write_files:
+  - path: /etc/audit/rules.d/99-artex-execve.rules
+    permissions: '0640'
+    content: |
+      # Capture all process executions for defensive endpoint telemetry validation
+      -a always,exit -F arch=b64 -S execve -k artex_execve
+      -a always,exit -F arch=b32 -S execve -k artex_execve
+  - path: /usr/local/bin/benign-mock-portal.py
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env python3
+      """100% benign local mock HTTP portal for air-gapped sensor telemetry validation."""
+      import json
+      from http.server import BaseHTTPRequestHandler, HTTPServer
+
+      class MockPortalHandler(BaseHTTPRequestHandler):
+          def _send(self, code: int, body: dict):
+              payload = json.dumps(body).encode("utf-8")
+              self.send_response(code)
+              self.send_header("Content-Type", "application/json")
+              self.send_header("Content-Length", str(len(payload)))
+              self.end_headers()
+              self.wfile.write(payload)
+
+          def do_GET(self):
+              if self.path.startswith("/openapi.json"):
+                  self._send(200, {"openapi": "3.1.0", "paths": {"/api/v1/documents": {}}})
+              elif self.path.startswith("/health") or self.path.startswith("/api/v1/documents"):
+                  self._send(200, {"status": "ok", "path": self.path})
+              elif any(p in self.path for p in ("/vpn/", "/+CSCOE+/", "/auth/login", "nonexistent", "zzzrandom")):
+                  self._send(401 if "login" in self.path else 404, {"error": "unauthorized_or_not_found"})
+              else:
+                  self._send(200, {"service": "benign-lab-portal", "path": self.path})
+
+          def do_POST(self):
+              length = int(self.headers.get("Content-Length", "0") or 0)
+              _ = self.rfile.read(length) if length > 0 else b""
+              if any(p in self.path for p in ("/vpn/", "/+CSCOE+/", "/auth/login")):
+                  self._send(401, {"error": "invalid_credentials"})
+              else:
+                  self._send(200, {"accepted_bytes": length, "path": self.path})
+
+          def do_PUT(self):
+              self.do_POST()
+
+      if __name__ == "__main__":
+          HTTPServer(("192.168.250.20", 8080), MockPortalHandler).serve_forever()
+  - path: /etc/systemd/system/benign-mock-portal.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Benign Lab Mock HTTP Portal (Air-Gapped)
+      After=network-online.target
+
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/bin/benign-mock-portal.py
+      Restart=always
+      User=nobody
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - if command -v augenrules >/dev/null 2>&1; then augenrules --load || true; fi
+  - if systemctl list-unit-files | grep -q auditd; then systemctl enable --now auditd || true; fi
+  - systemctl daemon-reload
+  - systemctl enable --now benign-mock-portal.service || true

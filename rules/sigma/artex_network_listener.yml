@@ -1,0 +1,40 @@
+title: Potential ARTEX or ScopeWeaver Framework Artifact or Default Listener
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a001
+status: experimental
+description: >
+  Detects network connections to port 8787 or process/staging indicators associated
+  with ARTEX, ScopeWeaver, or related autonomous agentic offensive frameworks.
+references:
+  - https://www.ic3.gov
+  - https://cloud.google.com/blog/topics/threat-intelligence
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.execution
+  - attack.command_and_control
+  - attack.t1588.002
+logsource:
+  category: network_connection
+  product: windows
+detection:
+  selection_port:
+    DestinationPort:
+      - 8787
+      - 8788
+      - 8790
+      - 8890
+  selection_path:
+    Image|contains:
+      - 'ScopeWeaver'
+      - 'AntiFox'
+      - 'Pojun'
+      - 'FORANG'
+      - 'sco-fix2'
+      - 'artx5v'
+      - 'artex-server'
+      - 'artex-worker'
+      - 'norma-agent'
+  condition: selection_port or selection_path
+falsepositives:
+  - Legitimate internal developer services or RStudio Server instances listening on TCP 8787.
+level: high

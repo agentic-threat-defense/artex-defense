@@ -1,0 +1,31 @@
+title: Web Portal Sensitive Endpoint Access Following Automated Probing (Agentic Error-Correction Pivot)
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a013
+status: experimental
+description: >
+  Detects successful (200 OK) access to sensitive web portal files or webshell paths
+  (e.g., /.env, shell.php, cmd.jsp) via programmatic HTTP clients, commonly observed at the
+  culmination of an ARTEX LLM error-correction probing loop.
+references:
+  - https://cloud.google.com/blog/topics/threat-intelligence
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.initial_access
+  - attack.credential_access
+  - attack.t1190
+  - attack.t1552.001
+logsource:
+  category: webserver
+detection:
+  selection_sensitive_path:
+    c-uri|contains:
+      - '/.env'
+      - '/admin/shell.php'
+      - '/cmd.jsp'
+      - '/.git/config'
+  selection_success:
+    sc-status: 200
+  condition: selection_sensitive_path and selection_success
+falsepositives:
+  - Rare developer staging servers exposing non-production configuration files.
+level: critical

@@ -1,0 +1,106 @@
+// ============================================================================
+// ARTEX / Autonomous Agentic Offensive Framework — Microsoft MDE & Sentinel (KQL)
+// ============================================================================
+
+// 1. MDE: Compressed Endpoint Recon Burst (>= 5 Unique Discovery/Cloud Commands in 30s)
+DeviceProcessEvents
+| where Timestamp > ago(24h)
+| where ProcessCommandLine matches regex @"(?i)\b(whoami|ipconfig|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b"
+| summarize
+    CmdCount = count(),
+    UniqueCmds = dcount(ProcessCommandLine),
+    SampleCmds = make_set(ProcessCommandLine, 10),
+    MinTs = min(Timestamp),
+    MaxTs = max(Timestamp)
+    by DeviceName, AccountName, bin(Timestamp, 30s)
+| where UniqueCmds >= 5
+| order by UniqueCmds desc
+
+// 2. MDE: EDR Sensor Discovery + Web Parent Shell Spawn + ARTEX Staging Artifacts
+//    (Tightened: java/node parents require recon/download args; no bare "artex" substring trap)
+DeviceProcessEvents
+| where Timestamp > ago(24h)
+| where
+    (ProcessCommandLine has_any ("CSFalcon", "SentinelAgent", "WinDefend", "CbDefense", "Sysmon")
+     and ProcessCommandLine has_any ("sc query", "Get-Service", "tasklist"))
+    or (InitiatingProcessFileName in~ ("w3wp.exe", "nginx", "httpd", "php-fpm", "restjavad")
+        and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"))
+    or (InitiatingProcessFileName in~ ("java.exe", "java", "node.exe", "node")
+        and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh")
+        and ProcessCommandLine has_any ("whoami", "nltest", "sc query", "curl ", "wget ", "Invoke-WebRequest", "-enc", "base64"))
+    or FolderPath has_any (@"\ProgramData\artx5v\", "ScopeWeaver", "artex-server", "artex-worker", "BLOODALCHEMY", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml")
+    or (FileName in~ ("edge.exe", "msedge.exe") and not(FolderPath has_any (@"\Program Files\", @"\Program Files (x86)\", @"\Windows\System32\")) and ProcessCommandLine has "config.bin")
+    or ProcessCommandLine has_any ("artx5v", "ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/1.0", "Rex_Enrich", "artex-readonly/1.0", "ARTEX-worker/1.0", "LLMLeak-RedTeam/", "authorized-exposure-audit/", "authorized-security-research/", "ArtexProbe", "BLOODALCHEMY", "/Inform/logger/", "xcai.com", "xcai.pro", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "sk-ant-", "sk-proj-", "exploit_agent", "hermes-agent", "agent-zero", "carbonato", "qwen-code", "kimi-cli", "opencode", "chisel client", "R:socks", "proxychains -f", "ntlmrelayx", "smbserver.py")
+| project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, ProcessCommandLine
+
+// 3. MDE: Anomalous Server / Service-Account LLM API Egress, Webhook/DNSLog Exfil, or Ports 8787/8788/8790
+//    (Scoped away from user workstations to prevent Copilot/IDE alert fatigue)
+DeviceNetworkEvents
+| where Timestamp > ago(24h)
+| where RemotePort in (8787, 8788, 8790)
+    or RemoteUrl has_any (
+        "api.anthropic.com", "api.openai.com", "api.deepseek.com",
+        "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai",
+        "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn",
+        "xcai.com", "xcai.pro", "lanmao666.com", "lanmao666.xyz",
+        "webhook.site", "oast.live", "oast.fun", "interact.sh", "dnslog.cn", "api.telegram.org",
+        "/Inform/logger/", "/api/exploration/", "/api/sync/scopesentry"
+    )
+| where not(DeviceName startswith "DEV-AI-GW-" or DeviceName startswith "WKSTN-" or DeviceName startswith "LAPTOP-")
+| summarize Connections = count(), Destinations = make_set(RemoteUrl, 10), Ports = make_set(RemotePort, 5)
+    by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName, bin(Timestamp, 5m)
+
+// 4. Sentinel CommonSecurityLog: Edge Appliance Rapid Spray & Probing
+//    (Cisco ASA/FTD, Citrix NetScaler, PAN-OS GlobalProtect, F5 BIG-IP, Zscaler)
+CommonSecurityLog
+| where TimeGenerated > ago(24h)
+| where DeviceVendor in~ ("Cisco", "Citrix", "Palo Alto Networks", "F5", "Zscaler")
+| where RequestURL has_any ("/+CSCOE+/", "/+webvpn+/", "/vpn/", "/nf/auth/", "/global-protect/", "/ssl-vpn/", "/my.policy", "/tmui/", "/mgmt/tm/")
+    or DeviceEventClassID in ("113005", "113015", "716039")
+    or Activity has_any ("LOGIN_FAILED", "AAA user authentication Rejected", "gateway-auth")
+| summarize
+    EventCount = count(),
+    UniqueURIs = dcount(RequestURL),
+    SpanSec = datetime_diff('second', max(TimeGenerated), min(TimeGenerated)),
+    URIs = make_set(RequestURL, 10)
+    by SourceIP, DeviceVendor, DeviceProduct, bin(TimeGenerated, 2m)
+| where EventCount >= 6 and (SpanSec / todouble(EventCount)) <= 3.0
+
+// 5. Entra ID AuditLogs: Compressed High-Privilege Service Principal / OAuth Escalation Burst
+AuditLogs
+| where TimeGenerated > ago(24h)
+| where OperationName in (
+    "Add service principal credentials",
+    "Update application - Certificates and secrets management",
+    "Consent to application",
+    "Add app role assignment to service principal",
+    "Register security info",
+    "User registered security info"
+)
+| summarize Ops = make_set(OperationName), OpCount = count(), SpanSec = datetime_diff('second', max(TimeGenerated), min(TimeGenerated))
+    by tostring(InitiatedBy.app.displayName), tostring(InitiatedBy.user.userPrincipalName), bin(TimeGenerated, 5m)
+| where OpCount >= 2 and SpanSec <= 120
+
+// 6. Entra ID SigninLogs: Spray-Then-Success & 2FA Push Bombing (50126 / 500121 / 50074)
+SigninLogs
+| where TimeGenerated > ago(24h)
+| summarize
+    FailedUsers = dcountif(UserPrincipalName, ResultType in ("50126", "50053")),
+    MfaFails = countif(ResultType in ("500121", "50074")),
+    SuccessUsers = dcountif(UserPrincipalName, ResultType == "0"),
+    SampleUsers = make_set(UserPrincipalName, 10)
+    by IPAddress, bin(TimeGenerated, 15m)
+| where (FailedUsers >= 5 and SuccessUsers >= 1) or MfaFails >= 4
+| order by MfaFails desc, FailedUsers desc
+
+// 7. Entra ID AADServicePrincipalSignInLogs: Secret Guessing (7000215 -> 0) & Multi-Resource Fan-Out
+AADServicePrincipalSignInLogs
+| where TimeGenerated > ago(24h)
+| summarize
+    SecretFails = countif(ResultType in ("7000215", "7000222")),
+    Successes = countif(ResultType == "0"),
+    DistinctResources = dcount(ResourceDisplayName),
+    Resources = make_set(ResourceDisplayName, 10)
+    by ServicePrincipalName, IPAddress, bin(TimeGenerated, 15m)
+| where (SecretFails >= 2 and Successes >= 1) or DistinctResources >= 5
+| order by DistinctResources desc, SecretFails desc

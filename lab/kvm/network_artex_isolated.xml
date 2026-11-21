@@ -1,0 +1,12 @@
+<network>
+  <name>artex-lab-isolated</name>
+  <bridge name='virbr-artex' stp='on' delay='0'/>
+  <!-- SECURITY INVARIANT: Intentionally NO <forward> element (strict air-gap; zero WAN/LAN routing) -->
+  <ip address='192.168.250.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.250.100' end='192.168.250.200'/>
+      <host mac='52:54:00:a7:e0:10' name='artex-sensor-01' ip='192.168.250.10'/>
+      <host mac='52:54:00:a7:e0:20' name='artex-target-01' ip='192.168.250.20'/>
+    </dhcp>
+  </ip>
+</network>

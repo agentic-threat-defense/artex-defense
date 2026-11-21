@@ -1,0 +1,37 @@
+title: Rapid Automated EDR Sensor Discovery Commands
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a003
+status: experimental
+description: >
+  Detects process command lines enumerating endpoint detection and response (EDR)
+  services, a precursor step commonly embedded in autonomous agentic intrusion
+  workflows (such as ARTEX) before payload execution.
+references:
+  - https://www.crowdstrike.com
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.discovery
+  - attack.defense_evasion
+  - attack.t1518.001
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_tool:
+    CommandLine|contains:
+      - 'sc query'
+      - 'Get-Service'
+      - 'tasklist'
+      - 'wmic process'
+  selection_edr:
+    CommandLine|contains:
+      - 'CSFalcon'
+      - 'CrowdStrike'
+      - 'SentinelAgent'
+      - 'CbDefense'
+      - 'WinDefend'
+      - 'Sysmon'
+  condition: selection_tool and selection_edr
+falsepositives:
+  - Legitimate IT health-check scripts or endpoint management inventory tools.
+level: medium

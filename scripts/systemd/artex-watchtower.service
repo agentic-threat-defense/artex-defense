@@ -1,0 +1,14 @@
+[Unit]
+Description=ARTEX Defensive Threat-Intelligence Watchtower (Allowlisted Feeds + Local GPU Gap Digest)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust WorkingDirectory and ExecStart to your checkout path before enabling:
+WorkingDirectory=%h/Work/artex-defense
+ExecStart=%h/Work/artex-defense/.venv/bin/artex-hunt watchtower --state-dir quarantine/watchtower --rules-dir rules/sigma --with-gemma4
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=true
+NoNewPrivileges=true

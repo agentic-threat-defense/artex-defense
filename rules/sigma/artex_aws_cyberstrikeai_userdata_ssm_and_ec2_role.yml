@@ -1,0 +1,37 @@
+title: AWS CloudTrail Agentic EC2 userData Harvesting, SSM Decryption/SendCommand, or External EC2 Role Replay
+id: 7c2e41b8-5a93-4d7c-9e12-4b8f71a6c309
+status: experimental
+description: >
+  Detects AWS CloudTrail tradecraft documented in Elastic Security Labs' CyberStrikeAI intrusion
+  ("56 AWS API calls in 141ms"): bulk EC2 DescribeInstanceAttribute (userData) extraction,
+  SSM Parameter Store decryption (GetParametersByPath / GetParameter WithDecryption) and
+  SSM SendCommand remote execution, or compromised EC2 instance-role replay (assumed-role/.../i-*).
+references:
+  - https://www.elastic.co/security-labs/threat-command/cyberstrikeai-aws-cloudtrail-intrusion
+  - https://www.ic3.gov
+author: ARTEX Defensive Research Workbench
+date: 2026-11-21
+tags:
+  - attack.discovery
+  - attack.credential_access
+  - attack.execution
+  - attack.t1552.005
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection_userdata_or_ssm:
+    Action|contains:
+      - 'DescribeInstanceAttribute'
+      - 'GetParametersByPath'
+      - 'SendCommand'
+  selection_ec2_role_context:
+    CommandLine|contains:
+      - 'userData'
+      - 'WithDecryption'
+      - 'assumed-role/'
+  condition: selection_userdata_or_ssm and selection_ec2_role_context
+falsepositives:
+  - Approved cloud-inventory or configuration-management automation (allowlist by IaC/automation IP or role ARN).
+level: high

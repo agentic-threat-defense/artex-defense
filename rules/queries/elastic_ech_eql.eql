@@ -1,0 +1,91 @@
+// ============================================================================
+// ARTEX / Autonomous Agentic Offensive Framework — Elastic (ECH / EQL) Hunt Pack
+// Surfaces: Cisco ASA/FTD, Citrix NetScaler, PAN-OS, F5 BIG-IP, Zscaler,
+//           Web Portals, Endpoints, and Cloud/Identity
+// ============================================================================
+
+// 1. Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s)
+sequence by host.name with maxspan=30s
+  [process where event.type == "start" and
+   process.command_line : ("*whoami*", "*nltest*", "*ipconfig*", "*net localgroup*", "*aws sts*", "*az account*")]
+  [process where event.type == "start" and
+   process.command_line : ("*sc query*", "*Get-Service*", "*tasklist*", "*systemctl status*") and
+   process.command_line : ("*CSFalcon*", "*SentinelAgent*", "*WinDefend*", "*CbDefense*", "*Sysmon*")]
+
+// 2. Web Server / Edge Appliance Parent Process Spawning Interactive Shell
+//    (Separates true web daemons from noisy java/node builds which require recon/download args)
+process where event.type == "start" and
+  process.name : ("cmd.exe", "powershell.exe", "pwsh.exe", "sh", "bash") and (
+    process.parent.name : ("w3wp.exe", "nginx", "httpd", "apache2", "php-fpm", "restjavad") or
+    (process.parent.name : ("java", "node") and
+     process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*curl *", "*wget *", "*Invoke-WebRequest*", "*-enc*", "*base64*", "*/dev/tcp*"))
+  )
+
+// 3. ARTEX / ScopeWeaver / Norma SDK / BLOODALCHEMY Artifacts, Ports (8787/8788/8790), or Webhook Exfil
+any where
+  destination.port in (8787, 8788, 8790) or
+  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*BLOODALCHEMY*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/cmd-output/*") or
+  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel client*", "*R:socks*", "*proxychains -f*", "*proxychains4 -f*", "*ntlmrelayx*", "*smbserver.py*") or
+  url.path : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
+  url.domain : ("*xcai.com", "*xcai.pro", "*webhook.site", "*oast.live", "*oast.fun", "*interact.sh", "*dnslog.cn") or
+  user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*qwen-code/*", "*kimi-cli/*", "*opencode/*", "*hermes-agent/*", "*strix/*")
+
+// 6. Elastic ES|QL — ArtexProbe / User-Agents / AWS CloudWatch Secret Search / DryRun Sweeps
+// (Run in Kibana Discover -> ES|QL; adapted from ThreatDefence & Theori AIPT)
+// FROM logs-*
+// | WHERE process.command_line LIKE "*artex-probe-*"
+//      OR process.command_line LIKE "*ArtexProbe*"
+//      OR file.path RLIKE ".*/tasks/[0-9]+/i[0-9]+/cmd-output/.*"
+//      OR file.name IN ("mitmproxy-ca-cert.pem", "artex_config.json", "artex.yaml", "graphics-hook-filter64.dll")
+//      OR user_agent.original RLIKE "(?i)(norma/[0-9]|artex-(enrich|readonly|worker|audit|pentest|verify|spawn|selfupdate)|ArtEx/1\\.0|spa-api-recon|ReconProbe|HexStrike-|CyberStrikeAI-|ArtexProbe)"
+// | KEEP @timestamp, host.name, user.name, process.command_line, file.path, user_agent.original
+// | SORT @timestamp DESC
+//
+// 7. Elastic ES|QL — AWS CloudWatch FilterLogEvents Secret Search & DryRun Sweeps
+// FROM logs-aws.cloudtrail-*
+// | WHERE (event.action == "FilterLogEvents" AND aws.cloudtrail.request_parameters RLIKE "(?i).*(password|AKIA|secret|token|limit=1000).*")
+//      OR aws.cloudtrail.error_code IN ("Client.DryRunOperation", "AccessDenied", "UnauthorizedOperation")
+// | STATS calls = COUNT(*), apis = COUNT_DISTINCT(event.action) BY aws.cloudtrail.user_identity.arn, source.ip, event.action
+// | WHERE calls >= 5 OR event.action == "FilterLogEvents"
+// | SORT calls DESC
+
+// 4. Anomalous Server/Endpoint Egress to Commercial LLM APIs (Exclude Approved AI Gateways)
+network where
+  (dns.question.name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn") or
+   tls.client.server_name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn")) and
+  not host.name : ("DEV-AI-GW-*")
+
+// 5. Web Portal / Edge Appliance Error-Correction Pivot (4xx/5xx -> 200 OK on Sensitive Path <= 20s)
+sequence by source.ip with maxspan=20s
+  [network where http.response.status_code >= 400 and
+   url.path : ("*/+CSCOE+/*", "*/+webvpn+/*", "*/vpn/*", "*/nf/auth/*", "*/global-protect/*", "*/tmui/*", "*/mgmt/tm/*", "*/api/*")]
+  [network where http.response.status_code == 200 and
+   url.path : ("*/.env*", "*/admin/*", "*shell.php*", "*cmd.jsp*", "*/config*")]
+
+// 8. Elastic ES|QL — Okta 2FA Push Bombing, Rogue Factor Activation, Probe Registrations, Workflows & /api/v1/authn Spray
+// FROM logs-okta.system-*
+// | WHERE event.action IN ("user.session.start", "user.mfa.okta_verify.deny_push", "user.authentication.auth_via_mfa", "user.mfa.factor.activate", "user.mfa.factor.deactivate", "user.lifecycle.create", "user.risk.detect", "workflows.user.invoke")
+// | STATS
+//     failed_users = COUNT_DISTINCT(user.name) WHERE event.outcome == "failure",
+//     mfa_fails = COUNT(*) WHERE event.action IN ("user.mfa.okta_verify.deny_push", "user.authentication.auth_via_mfa") AND event.outcome == "failure",
+//     factor_changes = COUNT(*) WHERE event.action IN ("user.mfa.factor.activate", "user.mfa.factor.deactivate"),
+//     probe_signups = COUNT(*) WHERE event.action == "user.lifecycle.create",
+//     risk_hits = COUNT(*) WHERE event.action == "user.risk.detect",
+//     workflow_invokes = COUNT(*) WHERE event.action == "workflows.user.invoke",
+//     successes = COUNT(*) WHERE event.outcome == "success"
+//   BY source.ip, bucket = DATE_TRUNC(15 minutes, @timestamp)
+// | WHERE (failed_users >= 5 AND successes >= 1) OR mfa_fails >= 4 OR probe_signups >= 5 OR risk_hits >= 3 OR workflow_invokes >= 1 OR (factor_changes >= 1 AND (failed_users >= 1 OR mfa_fails >= 1))
+// | SORT mfa_fails DESC, probe_signups DESC, failed_users DESC
+//
+// 9. Elastic ES|QL — CyberStrikeAI CloudTrail: Sub-Second EC2 userData / SSM Burst & Multi-Identity External IP Pivot
+// FROM logs-aws.cloudtrail-*
+// | WHERE event.action IN ("DescribeInstanceAttribute", "GetParameter", "GetParametersByPath", "SendCommand", "GetSecretValue")
+// | STATS
+//     calls = COUNT(*),
+//     distinct_identities = COUNT_DISTINCT(aws.cloudtrail.user_identity.arn),
+//     ec2_roles = COUNT_DISTINCT(aws.cloudtrail.user_identity.arn) WHERE aws.cloudtrail.user_identity.arn RLIKE ".*/i-[0-9a-f]{8,17}$",
+//     send_cmds = COUNT(*) WHERE event.action == "SendCommand",
+//     userdata_calls = COUNT(*) WHERE event.action == "DescribeInstanceAttribute" AND aws.cloudtrail.request_parameters LIKE "*userData*"
+//   BY source.ip, bucket = DATE_TRUNC(15 minutes, @timestamp)
+// | WHERE distinct_identities >= 3 OR ec2_roles >= 1 OR send_cmds >= 1 OR userdata_calls >= 5
+// | SORT distinct_identities DESC, calls DESC

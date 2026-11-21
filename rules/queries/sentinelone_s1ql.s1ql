@@ -1,0 +1,40 @@
+// ============================================================================
+// ARTEX / Autonomous Agentic Offensive Framework — SentinelOne (S1QL / PowerQuery)
+// ============================================================================
+
+// 1. ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Ports (8787/8788/8790), & Host Forensics
+//    (Tightened: no bare "artex" substring collision)
+(tgt.file.path contains:anycase ("ProgramData\\artx5v", "BLOODALCHEMY", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "mitmproxy-ca-cert.pem", "/cmd-output/") OR
+ src.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich", "artex-readonly", "ARTEX-worker", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "BLOODALCHEMY") OR
+ url.address contains:anycase ("/Inform/logger/", "xcai.com", "xcai.pro", "dnslog.cn", "lanmao666.", "/api/exploration/", "/api/sync/scopesentry", "artex=") OR
+ dst.port.number in (8787, 8788, 8790))
+
+// 2. Automated EDR Sensor Discovery Probes (Including SentinelAgent / CrowdStrike)
+event.type == "Process Creation" AND
+src.process.cmdline contains:anycase ("sc query", "Get-Service", "tasklist", "systemctl status", "pgrep") AND
+src.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon", "CrowdStrike", "WinDefend", "Sysmon")
+
+// 3. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — java/node require recon/download args)
+event.type == "Process Creation" AND
+src.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "sh", "bash") AND (
+  src.process.parent.name in:anycase ("w3wp.exe", "nginx", "httpd", "php-fpm", "restjavad") OR
+  (src.process.parent.name in:anycase ("java", "java.exe", "node", "node.exe") AND
+   src.process.cmdline contains:anycase ("whoami", "nltest", "sc query", "curl ", "wget ", "Invoke-WebRequest", "-enc", "base64"))
+)
+
+// 4. Anomalous Server/DMZ Egress to LLM APIs or Webhook Exfiltration Domains (Exclude Workstations)
+event.type in ("DNS Resolved", "IP Connect") AND
+endpoint.type == "server" AND
+(event.dns.request contains:anycase (
+    "api.anthropic.com", "api.openai.com", "api.deepseek.com",
+    "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn",
+    "webhook.site", "oast.live", "interact.sh", "dnslog.cn"
+) OR dst.port.number in (8787, 8788, 8790))
+
+// 5. PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s)
+event.type == "Process Creation"
+| filter src.process.cmdline matches "(?i)(whoami|ipconfig|nltest|net localgroup|aws sts|az account|kubectl get|sc query|tasklist)"
+| bucket 30s
+| group cmd_count = count(), unique_cmds = estimate_distinct(src.process.cmdline) by endpoint.name, src.process.user, _timebucket
+| filter unique_cmds >= 5
+| sort -unique_cmds

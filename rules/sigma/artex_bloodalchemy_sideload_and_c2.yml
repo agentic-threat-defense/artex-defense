@@ -1,0 +1,38 @@
+title: VAPOR PANDA BLOODALCHEMY Sideloading, C2 URI, or ARTEX Config/Proxy Artifacts
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a016
+status: experimental
+description: >
+  Detects BLOODALCHEMY sideloaded OBS-masqueraded DLL/config artifacts, C2 URI (/Inform/logger/),
+  and ARTEX configuration/LLM proxy artifacts (artex_config.json, artex.yaml, xcai.com).
+references:
+  - https://www.crowdstrike.com
+  - https://www.elastic.co/security-labs
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.defense_evasion
+  - attack.command_and_control
+  - attack.t1574.002
+  - attack.t1071.001
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_ba_files:
+    CommandLine|contains:
+      - 'graphics-hook-filter64.dll'
+      - 'graphics-hook_config.bin'
+      - 'artex_config.json'
+      - 'artex.yaml'
+      - '\ProgramData\artx5v\'
+      - '/Inform/logger/'
+      - 'xcai.com'
+      - 'xcai.pro'
+  selection_trojan_docker:
+    CommandLine|contains:
+      - 'tomicdd/artex'
+      - 'congdonglinux/artex'
+  condition: 1 of selection*
+falsepositives:
+  - Verify xcai.com hits in proxy logs against approved business domains.
+level: critical

@@ -1,0 +1,9 @@
+version: 2
+ethernets:
+  nic0:
+    match:
+      macaddress: "52:54:00:a7:e0:10"
+    dhcp4: false
+    addresses:
+      - 192.168.250.10/24
+    # Intentionally NO routes / gateway4 -> strict air-gap on artex-lab-isolated

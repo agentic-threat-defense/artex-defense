@@ -1,0 +1,38 @@
+title: Potential ARTEX Webhook Exfiltration or Norma Agent Harness Network Activity
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a015
+status: experimental
+description: >
+  Detects outbound traffic to webhook/OAST exfiltration services (e.g., webhook.site,
+  interact.sh) or HTTP requests carrying norma agent harness indicators observed in
+  ARTEX campaigns.
+references:
+  - https://blog.talosintelligence.com
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.exfiltration
+  - attack.command_and_control
+  - attack.t1567
+  - attack.t1071.001
+logsource:
+  category: proxy
+detection:
+  selection_webhook:
+    DestinationHostname|contains:
+      - 'webhook.site'
+      - 'oast.live'
+      - 'oast.fun'
+      - 'interact.sh'
+  selection_norma:
+    cs-user-agent|contains:
+      - 'norma/'
+      - 'norma-agent'
+      - 'artex-enrich/'
+      - 'artex-readonly/'
+      - 'ARTEX-worker/'
+      - 'ArtexProbe'
+      - 'artex-probe'
+  condition: selection_webhook or selection_norma
+falsepositives:
+  - Developers debugging webhook integrations using webhook.site from dev workstations.
+level: high

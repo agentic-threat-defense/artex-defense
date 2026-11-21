@@ -1,0 +1,35 @@
+title: ARTEX Cloud Reconnaissance — AWS CloudWatch Secret Search or DryRun Permission Sweep
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a019
+status: experimental
+description: >
+  Detects AWS CloudWatch FilterLogEvents queries searching for hardcoded secrets
+  (password, AKIA, secret, token) or automated Client.DryRunOperation permission sweeps
+  observed in ARTEX cloud pivoting campaigns (ThreatDefence / Microsoft).
+references:
+  - https://github.com/ThreatDefence/artex-detections
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.credential_access
+  - attack.discovery
+  - attack.t1552.001
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection_cw_action:
+    Action: 'FilterLogEvents'
+  selection_cw_secret:
+    CommandLine|contains:
+      - 'password'
+      - 'AKIA'
+      - 'secret'
+      - 'token'
+  selection_dryrun:
+    CommandLine|contains:
+      - 'Client.DryRunOperation'
+  condition: (selection_cw_action and selection_cw_secret) or selection_dryrun
+falsepositives:
+  - Authorized security-engineering secret-scanning jobs running against CloudWatch Logs.
+level: high

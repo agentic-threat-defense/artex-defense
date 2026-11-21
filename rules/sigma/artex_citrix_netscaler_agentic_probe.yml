@@ -1,0 +1,39 @@
+title: Potential ARTEX Automated Probing or Harness Activity Against Citrix NetScaler Gateway
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a011
+status: experimental
+description: >
+  Detects automated agentic probing (HeadlessChrome, nuclei, norma harness) targeting
+  Citrix NetScaler ADC / Gateway authentication and management endpoints.
+references:
+  - https://www.ic3.gov
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.initial_access
+  - attack.reconnaissance
+  - attack.t1190
+  - attack.t1595.002
+logsource:
+  category: webserver
+  product: citrix_netscaler
+detection:
+  selection_citrix_paths:
+    c-uri|contains:
+      - '/vpn/'
+      - '/nf/auth/'
+      - '/logon/LogonPoint/'
+      - '/p/u/'
+      - '/nitro/v1'
+  selection_agentic_ua:
+    cs-user-agent|contains:
+      - 'HeadlessChrome'
+      - 'Nuclei'
+      - 'norma/'
+      - 'norma-agent'
+      - 'artex/'
+      - 'artex-'
+      - 'ScopeWeaver'
+  condition: selection_citrix_paths and selection_agentic_ua
+falsepositives:
+  - Authorized external attack-surface management or scheduled penetration tests.
+level: high

@@ -1,0 +1,37 @@
+title: Automated Agentic Fingerprinting Against Palo Alto PAN-OS or F5 BIG-IP Edge Endpoints
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a012
+status: experimental
+description: >
+  Detects automated scanner or headless agentic probing against Palo Alto GlobalProtect
+  and F5 BIG-IP APM/TMUI/iControl REST endpoints.
+references:
+  - https://www.ic3.gov
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.reconnaissance
+  - attack.initial_access
+  - attack.t1595.002
+  - attack.t1190
+logsource:
+  category: webserver
+detection:
+  selection_edge_uris:
+    c-uri|contains:
+      - '/global-protect/'
+      - '/ssl-vpn/'
+      - '/my.policy'
+      - '/tmui/'
+      - '/mgmt/tm/'
+  selection_automated_ua:
+    cs-user-agent|contains:
+      - 'Nuclei'
+      - 'HeadlessChrome'
+      - 'norma/'
+      - 'norma-agent'
+      - 'python-httpx'
+      - 'Go-http-client'
+  condition: selection_edge_uris and selection_automated_ua
+falsepositives:
+  - Authorized vulnerability scanners or external posture monitoring tools.
+level: high

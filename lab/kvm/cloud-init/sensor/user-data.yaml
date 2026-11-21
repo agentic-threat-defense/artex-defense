@@ -1,0 +1,42 @@
+#cloud-config
+hostname: artex-sensor-01
+fqdn: artex-sensor-01.lab.internal
+manage_etc_hosts: true
+
+users:
+  - name: labops
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: sudo, adm
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __LAB_SSH_PUBKEY__
+
+write_files:
+  - path: /etc/audit/rules.d/99-artex-execve.rules
+    permissions: '0640'
+    content: |
+      # Capture all 64-bit and 32-bit process executions for defensive telemetry validation
+      -a always,exit -F arch=b64 -S execve -k artex_execve
+      -a always,exit -F arch=b32 -S execve -k artex_execve
+  - path: /etc/zeek/site/local-artex.zeek
+    permissions: '0644'
+    content: |
+      # Emit JSON logs for deterministic ingestion into artex-hunt
+      @load policy/tuning/json-logs.zeek
+      redef LogAscii::use_json = T;
+      redef LogAscii::json_timestamps = JSON::TS_ISO8601;
+  - path: /usr/local/bin/artex-capture-start.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      mkdir -p /var/log/artex-lab
+      IFACE="$(ip -o -4 addr show | awk '/192\.168\.250\.10/ {print $2; exit}')"
+      echo "[sensor] Capturing air-gapped lab traffic on ${IFACE:-eth0} -> /var/log/artex-lab/capture.pcap"
+      exec tcpdump -i "${IFACE:-eth0}" -s 0 -w /var/log/artex-lab/capture.pcap 'net 192.168.250.0/24'
+
+runcmd:
+  - mkdir -p /var/log/artex-lab
+  - if command -v augenrules >/dev/null 2>&1; then augenrules --load || true; fi
+  - if systemctl list-unit-files | grep -q auditd; then systemctl enable --now auditd || true; fi

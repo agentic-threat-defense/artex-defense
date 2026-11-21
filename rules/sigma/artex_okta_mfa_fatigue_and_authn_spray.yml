@@ -1,0 +1,43 @@
+title: Okta 2FA / MFA Fatigue, Rogue Factor Enrollment, or Legacy /api/v1/authn Brute-Force Abuse
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a021
+status: experimental
+description: >
+  Detects Okta 2FA push bombing / OTP verification failures (deny_push, VERIFICATION_ERROR),
+  post-compromise MFA factor tampering (user.mfa.factor.activate / deactivate / reset_all),
+  and legacy direct /api/v1/authn API password-spraying failures bypassing browser policies.
+references:
+  - https://threatdefence.com/article/artex-agentic-attack-framework-detection-hunting
+  - https://www.ic3.gov
+author: ARTEX Defensive Research Workbench
+date: 2026-11-21
+tags:
+  - attack.credential_access
+  - attack.persistence
+  - attack.t1621
+  - attack.t1098.005
+  - attack.t1110.003
+logsource:
+  product: okta
+  service: okta
+detection:
+  selection_mfa_abuse:
+    Action|contains:
+      - 'user.mfa.okta_verify.deny_push'
+      - 'VERIFICATION_ERROR'
+      - 'user.mfa.factor.activate'
+      - 'user.mfa.factor.deactivate'
+      - 'user.mfa.factor.reset_all'
+      - 'user.risk.detect'
+      - 'workflows.user.invoke'
+  selection_legacy_authn:
+    c-uri|contains:
+      - '/api/v1/authn'
+    sc-status: 401
+  selection_workflow_invoke:
+    c-uri|contains:
+      - '/api/flo/'
+      - 'clientToken='
+  condition: selection_mfa_abuse or selection_legacy_authn or selection_workflow_invoke
+falsepositives:
+  - Legitimate users enrolling a new phone in Okta Verify (correlate with new ASN/IP or preceding auth failures).
+level: high

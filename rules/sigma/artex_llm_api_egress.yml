@@ -1,0 +1,45 @@
+title: Anomalous Server or Endpoint Egress to External LLM APIs
+id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a002
+status: experimental
+description: >
+  Detects outbound DNS or network connections to commercial LLM API providers
+  originating from unexpected hosts (such as servers, domain controllers, or
+  non-developer subnets), which may indicate an autonomous agentic framework
+  like ARTEX operating inside the network.
+references:
+  - https://www.ic3.gov
+author: ARTEX Defensive Research Workbench
+date: 2026-11-20
+tags:
+  - attack.command_and_control
+  - attack.t1102
+logsource:
+  category: dns_query
+  product: windows
+detection:
+  selection_llm_domains:
+    QueryName|endswith:
+      - 'api.anthropic.com'
+      - 'api.openai.com'
+      - 'api.deepseek.com'
+      - 'open.bigmodel.cn'
+      - 'api.x.ai'
+      - 'api.moonshot.cn'
+      - 'api.moonshot.ai'
+      - 'dashscope.aliyuncs.com'
+      - 'openrouter.ai'
+      - 'api.siliconflow.cn'
+      - 'xcai.com'
+      - 'xcai.pro'
+      - 'lanmao666.com'
+      - 'lanmao666.xyz'
+  filter_authorized_hosts:
+    # Scope to Servers / DMZ / DCs; suppress approved AI gateways and standard user workstations
+    Computer|startswith:
+      - 'DEV-AI-GW-'
+      - 'WKSTN-'
+      - 'LAPTOP-'
+  condition: selection_llm_domains and not filter_authorized_hosts
+falsepositives:
+  - Authorized developer IDE assistants, browser-based AI tools, or approved internal AI gateways.
+level: medium
