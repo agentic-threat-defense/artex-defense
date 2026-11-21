@@ -194,6 +194,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "web_error_handling_calibration": 70,
     "graphql_or_ai_mcp_discovery_probe": 70,
     "ja4_client_stack_whiplash": 70,
+    "ja4_proxy_collapse_multi_ua": 70,
     "touch_and_bail_edr_evasion": 70,
     "multi_worker_redundant_recon": 65,
     "think_act_bimodal_cadence": 65,
@@ -807,6 +808,41 @@ def _count_think_act_cycles(
     return cycles
 
 
+def _ua_client_family(ua: str) -> str:
+    """Collapse minor browser version drift while distinguishing true HTTP client stacks."""
+    low = ua.strip().lower()
+    if not low:
+        return ""
+    if "edg/" in low or "edge/" in low:
+        return "browser_edge"
+    if "firefox/" in low:
+        return "browser_firefox"
+    if "chrome/" in low or "crios/" in low:
+        return "browser_chrome"
+    if "safari/" in low and "mozilla/" in low:
+        return "browser_safari"
+    if "curl/" in low or low.startswith("curl"):
+        return "cli_curl"
+    if any(tok in low for tok in ("python", "urllib", "requests/", "httpx", "aiohttp")):
+        return "cli_python"
+    if "wget/" in low or low.startswith("wget"):
+        return "cli_wget"
+    if "go-http-client" in low or "golang" in low:
+        return "cli_go"
+    if "powershell" in low or "pwsh" in low:
+        return "cli_powershell"
+    if any(tok in low for tok in ("java/", "okhttp", "apache-httpclient")):
+        return "cli_java"
+    if any(tok in low for tok in ("ruby", "faraday")):
+        return "cli_ruby"
+    if any(tok in low for tok in ("perl", "libwww-perl")):
+        return "cli_perl"
+    if any(tok in low for tok in ("node", "undici", "axios")):
+        return "cli_node"
+    head = re.split(r"[\s/]+", low, maxsplit=1)[0]
+    return f"other_{head[:24]}" if head else "other_unknown"
+
+
 def _inspect_window_signals(
     events: list[dict[str, Any]],
     *,
@@ -830,8 +866,10 @@ def _inspect_window_signals(
     ja4_fingerprints: set[str] = set()
     ja4h_fingerprints: set[str] = set()
     distinct_uas: set[str] = set()
+    distinct_ua_families: set[str] = set()
     proc_check_hosts: set[str] = set()
     error_uas: set[str] = set()
+    error_ua_families: set[str] = set()
     cloud_dryrun_hits = 0
     cloud_secret_search_hits = 0
     cloud_denied_apis: set[str] = set()
@@ -1010,8 +1048,11 @@ def _inspect_window_signals(
         path_lower = ev_path.lower()
         ua_raw = ev.get("user_agent", "")
         ua_lower = ua_raw.lower()
+        ua_family = _ua_client_family(ua_raw) if ua_raw else ""
         if ua_raw:
             distinct_uas.add(ua_raw)
+        if ua_family:
+            distinct_ua_families.add(ua_family)
 
         for domain in MALICIOUS_LLM_RELAY_DOMAINS:
             if domain in dest_lower or domain in cmd_lower or domain in path_lower:
@@ -1073,6 +1114,8 @@ def _inspect_window_signals(
                 saw_non_asset_4xx = True
                 if ev.get("surface") in {"web_portal", "edge_appliance"} or ev_path:
                     non_asset_error_codes.add(int(status))
+                if ua_family:
+                    error_ua_families.add(ua_family)
             if ua_raw:
                 error_uas.add(ua_raw)
         elif (
@@ -1438,6 +1481,30 @@ def _inspect_window_signals(
     ):
         reasons.add("ja4_client_stack_whiplash")
         indicators.add(f"distinct_ja4:{len(ja4_fingerprints)},ja4h:{len(ja4h_fingerprints)}")
+
+    # Zero-IOC Detector 4b: Traffic-recording proxy TLS collapse (single JA4 + >=3 distinct UA families)
+    # Complements ja4_client_stack_whiplash when an agent routes curl/python/browser tools through an
+    # optional recording proxy (e.g., ARTEX's Go traffic recorder collapsing all tools to one Go TLS stack).
+    # SWG/NAT-safe: collapses browser version drift and requires non-asset 4xx or edge probing plus either
+    # a non-browser CLI/script UA mixed in or >=3 distinct UA families actively hitting non-asset errors.
+    has_non_browser_ua = any(not fam.startswith("browser_") for fam in distinct_ua_families)
+    if (
+        len(ja4_fingerprints) == 1
+        and len(distinct_ua_families) >= 3
+        and (
+            len(edge_path_probes) >= 1
+            or (
+                saw_non_asset_4xx
+                and error_count >= 3
+                and (has_non_browser_ua or len(error_ua_families) >= 3)
+            )
+        )
+    ):
+        reasons.add("ja4_proxy_collapse_multi_ua")
+        indicators.add(
+            f"single_ja4_proxy_collapse:{next(iter(ja4_fingerprints))}"
+            f"|ua_families:{','.join(sorted(distinct_ua_families))}"
+        )
 
     # Zero-IOC Detector 5: Touch-and-bail multi-host process/EDR check sweep
     if len(proc_check_hosts) >= 4:
