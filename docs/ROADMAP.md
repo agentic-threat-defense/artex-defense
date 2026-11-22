@@ -18,7 +18,7 @@
 - **Scheduled Defensive Threat-Intel Watchtower (`artex-hunt watchtower` + `scripts/systemd/`):**
   - 47 live-verified allowlisted HTTPS public defensive feeds (international CERTs, cloud/IdP TI, defensive repos, and categorized GitHub `releases.atom` tracking), SQLite deduplication (`quarantine/watchtower/state.sqlite`), streaming XML size & prolog DTD guards, optional local Ollama GPU gap analysis, and `systemd` 6-hour user timer templates.
 - **Validation & Adversarial Hardening:**
-  - 65+ automated tests (including adversarial security hardening, native CloudTrail/IdP/IPFIX parsers, and Zero-IOC regressions), 34-dataset synthetic precision/recall harness, and three rounds of blind stress testing (`docs/blind_stress_test_log.md`).
+  - 60+ automated tests (including adversarial security hardening, native CloudTrail/IdP/IPFIX parsers, and Zero-IOC regressions), 34-dataset synthetic precision/recall harness, and three rounds of blind stress testing (`docs/blind_stress_test_log.md`).
 
 ---
 

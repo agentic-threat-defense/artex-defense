@@ -307,30 +307,38 @@ def host_triage(
         "likely_artex_host": "bold red",
     }.get(report.verdict, "white")
 
+    payload = report.to_dict()
+    if sanitize:
+        payload = sanitize_payload(payload)
+
     console.print(
-        f"ARTEX Read-Only Host Triage ({report.mode} | {report.hostname}): "
-        f"[{verdict_color}]{report.verdict.upper()}[/{verdict_color}] "
-        f"({report.finding_count} findings; checks={', '.join(report.checks_run)})"
+        f"ARTEX Read-Only Host Triage ({rich_escape(str(payload['mode']))} | {rich_escape(str(payload['hostname']))}): "
+        f"[{verdict_color}]{rich_escape(str(payload['verdict']).upper())}[/{verdict_color}] "
+        f"({payload['finding_count']} findings; checks={', '.join(payload['checks_run'])})"
     )
 
-    if report.findings:
-        table = Table(title=f"Host Forensic Findings ({report.finding_count})")
+    if payload["findings"]:
+        table = Table(title=f"Host Forensic Findings ({payload['finding_count']})")
         table.add_column("Severity")
         table.add_column("Check", style="cyan")
         table.add_column("Target / PID")
         table.add_column("Summary")
         table.add_column("Evidence", style="yellow")
-        for f in report.findings:
-            sc = "bold red" if f.severity == "critical" else ("red" if f.severity == "high" else "yellow")
-            table.add_row(f"[{sc}]{f.severity}[/{sc}]", f.check, f.path_or_pid, f.summary, f.evidence)
+        for f in payload["findings"]:
+            sev = str(f.get("severity", ""))
+            sc = "bold red" if sev == "critical" else ("red" if sev == "high" else "yellow")
+            table.add_row(
+                f"[{sc}]{rich_escape(sev)}[/{sc}]",
+                rich_escape(str(f.get("check", ""))),
+                rich_escape(str(f.get("path_or_pid", ""))),
+                rich_escape(str(f.get("summary", ""))),
+                rich_escape(str(f.get("evidence", ""))),
+            )
         console.print(table)
     else:
         console.print("[green]No ARTEX operator-host or relay artifacts detected.[/green]")
 
     if out:
-        payload = report.to_dict()
-        if sanitize:
-            payload = sanitize_payload(payload)
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         console.print(f"Saved host triage report to [bold]{out}[/bold]")
 

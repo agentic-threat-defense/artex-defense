@@ -35,6 +35,8 @@ export {
 
     # Populate with corporate user-workstation & approved AI gateway subnets so LLM alerts focus on Server/DMZ tiers
     const approved_llm_sources: set[subnet] = {} &redef;
+    # Separate allowlist for authorized web/vuln scanners exempt from HTTP 4xx burst notices
+    const http_error_ignore_sources: set[subnet] = {} &redef;
     const error_burst_threshold: double = 20.0 &redef;
     const error_burst_window: interval = 60sec &redef;
 }
@@ -61,7 +63,7 @@ event zeek_init()
 
 event http_reply(c: connection, version: string, code: count, reason: string)
     {
-    if ( code >= 400 && ! (c$id$orig_h in approved_llm_sources) )
+    if ( code >= 400 && ! (c$id$orig_h in http_error_ignore_sources) )
         {
         SumStats::observe("artex.http_4xx_errors", [$host=c$id$orig_h], [$num=1]);
         }

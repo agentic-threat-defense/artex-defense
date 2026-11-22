@@ -16,6 +16,7 @@ import ipaddress
 import re
 import sqlite3
 import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -199,6 +200,23 @@ def _local_tag(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower() if "}" in tag else tag.lower()
 
 
+def _reject_xml_dtd_or_entity(xml_text: str, *, source: str) -> None:
+    """Use expat XML parser callbacks to block real DOCTYPE/ENTITY declarations regardless of comments/whitespace."""
+    parser = expat.ParserCreate()
+
+    def _forbid(*_args: Any, **_kwargs: Any) -> None:
+        raise ValueError(f"Watchtower rejected unsafe XML feed containing DOCTYPE/ENTITY declaration from {source}")
+
+    parser.StartDoctypeDeclHandler = _forbid
+    parser.EntityDeclHandler = _forbid
+    parser.UnparsedEntityDeclHandler = _forbid
+    try:
+        parser.Parse(xml_text, True)
+    except expat.ExpatError:
+        # Malformed XML will be handled gracefully by ET.fromstring() returning []
+        return
+
+
 def parse_feed_xml(
     xml_text: str,
     *,
@@ -209,12 +227,7 @@ def parse_feed_xml(
     """Parse RSS 2.0 or Atom XML into normalized FeedItem entries with DTD/entity & size guards."""
     if len(xml_text.encode("utf-8", errors="ignore")) > MAX_FEED_XML_BYTES:
         raise ValueError(f"Watchtower rejected oversized XML feed from {source} (>{MAX_FEED_XML_BYTES} bytes)")
-    # Inspect ONLY the XML prolog (before root <rss>/<feed>/<rdf:RDF>) for DOCTYPE/ENTITY declarations
-    # so XXE advisories mentioning "<!ENTITY" inside <description> never blind the feed.
-    prolog_match = re.search(r"<(?:rss|feed|rdf:rdf)\b", xml_text[:8192], re.IGNORECASE)
-    prolog = xml_text[: prolog_match.start()] if prolog_match else xml_text[:4096]
-    if XML_FORBIDDEN_DECL_RE.search(prolog):
-        raise ValueError(f"Watchtower rejected unsafe XML feed containing DOCTYPE/ENTITY declaration from {source}")
+    _reject_xml_dtd_or_entity(xml_text, source=source)
     items: list[FeedItem] = []
     try:
         root = ET.fromstring(xml_text)
@@ -366,10 +379,14 @@ def run_watchtower(
             validate_feed_url(cur_url)
             for hop in range(3):
                 with client.stream("GET", cur_url) as resp:
-                    if resp.status_code in {301, 302, 307, 308} and resp.headers.get("location") and hop < 2:
+                    if resp.status_code in {301, 302, 307, 308} and resp.headers.get("location"):
+                        if hop >= 2:
+                            raise ValueError("Too many redirects")
                         cur_url = urljoin(cur_url, resp.headers["location"])
                         validate_feed_url(cur_url)
                         continue
+                    if 300 <= resp.status_code < 400:
+                        raise ValueError(f"Unexpected redirect status {resp.status_code} without Location header")
                     resp.raise_for_status()
                     chunks: list[bytes] = []
                     total = 0

@@ -18,7 +18,7 @@ except ImportError:  # mcp 1.x compatibility
     from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[no-redef]
 
 from .detectors import correlate_kill_chains, scan_telemetry_file
-from .sanitizer import sanitize_payload, sanitize_text
+from .sanitizer import SanitizerContext, sanitize_payload, sanitize_text
 from .worker import GemmaWorker
 
 mcp = MCPServer("artex-gemma4")
@@ -77,18 +77,22 @@ def artex_scan_deterministic(
     do_sanitize = _effective_sanitize(sanitize)
     candidates = scan_telemetry_file(safe_path, fmt=fmt, bucket_seconds=bucket_seconds)
     storylines = correlate_kill_chains(candidates)
+    ctx = SanitizerContext() if do_sanitize else None
+    safe_name = ctx.sanitize_str(safe_path.name) if ctx else safe_path.name
+    storyline_dicts = [s.model_dump(mode="json") for s in storylines]
+    candidate_dicts = [c.model_dump(mode="json") for c in candidates]
+    if ctx:
+        storyline_dicts = ctx.sanitize_obj(storyline_dicts)
+        candidate_dicts = ctx.sanitize_obj(candidate_dicts)
     payload = {
         "security_notice": UNTRUSTED_OUTPUT_NOTE,
         "sanitized": do_sanitize,
-        "file_name": sanitize_text(safe_path.name) if do_sanitize else safe_path.name,
+        "file_name": safe_name,
         "candidate_count": len(candidates),
         "storyline_count": len(storylines),
-        "storylines": [s.model_dump(mode="json") for s in storylines],
-        "candidates": [c.model_dump(mode="json") for c in candidates],
+        "storylines": storyline_dicts,
+        "candidates": candidate_dicts,
     }
-    if do_sanitize:
-        payload["storylines"] = sanitize_payload(payload["storylines"])
-        payload["candidates"] = sanitize_payload(payload["candidates"])
     return json.dumps(payload, indent=2)
 
 
@@ -102,6 +106,8 @@ def gemma4_triage_logs(
     """Run Stage 1 multi-surface pre-filters & correlation, then delegate top flagged windows to the local Ollama LLM worker."""
     safe_path = _resolve_safe_mcp_path(file_path, max_bytes=MAX_MCP_LOG_BYTES)
     do_sanitize = _effective_sanitize(sanitize)
+    ctx = SanitizerContext() if do_sanitize else None
+    safe_name = ctx.sanitize_str(safe_path.name) if ctx else safe_path.name
     bounded_windows = max(1, min(int(max_windows), 20))
     candidates = scan_telemetry_file(safe_path, fmt=fmt)
     storylines = correlate_kill_chains(candidates)
@@ -110,7 +116,7 @@ def gemma4_triage_logs(
             {
                 "security_notice": UNTRUSTED_OUTPUT_NOTE,
                 "sanitized": do_sanitize,
-                "file_name": safe_path.name,
+                "file_name": safe_name,
                 "candidate_count": 0,
                 "storylines": [],
                 "verdicts": [],
@@ -120,14 +126,14 @@ def gemma4_triage_logs(
     worker = GemmaWorker()
     verdicts = [worker.triage_window(w).model_dump(mode="json") for w in candidates[:bounded_windows]]
     storyline_dicts = [s.model_dump(mode="json") for s in storylines]
-    if do_sanitize:
-        verdicts = sanitize_payload(verdicts)
-        storyline_dicts = sanitize_payload(storyline_dicts)
+    if ctx:
+        verdicts = ctx.sanitize_obj(verdicts)
+        storyline_dicts = ctx.sanitize_obj(storyline_dicts)
     return json.dumps(
         {
             "security_notice": UNTRUSTED_OUTPUT_NOTE,
             "sanitized": do_sanitize,
-            "file_name": safe_path.name,
+            "file_name": safe_name,
             "candidate_count": len(candidates),
             "storylines": storyline_dicts,
             "triaged_count": len(verdicts),
@@ -143,10 +149,11 @@ def gemma4_extract_intel(file_path: str, sanitize: bool = True) -> str:
     safe_path = _resolve_safe_mcp_path(file_path, max_bytes=MAX_MCP_TEXT_BYTES)
     do_sanitize = _effective_sanitize(sanitize)
     text = safe_path.read_text(encoding="utf-8", errors="replace")
+    src_name = sanitize_text(safe_path.name) if do_sanitize else safe_path.name
     if do_sanitize:
         text = sanitize_text(text)
     worker = GemmaWorker()
-    extraction = worker.extract_intel(text, source_name=sanitize_text(safe_path.name)).model_dump(mode="json")
+    extraction = worker.extract_intel(text, source_name=src_name).model_dump(mode="json")
     if do_sanitize:
         extraction = sanitize_payload(extraction)
     return json.dumps(

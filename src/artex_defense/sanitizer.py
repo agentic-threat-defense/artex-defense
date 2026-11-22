@@ -20,11 +20,11 @@ SECRET_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
     re.compile(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9\-._~+/]+=*\b"),
     re.compile(
-        r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|artex[_-]?token|client[_-]?secret|password|passwd|secret)[\"']?\s*[:=]\s*['\"]?([^\s'\",;}{]{6,})['\"]?"
+        r"""(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|artex[_-]?token|x[_-]artx[_-]key|client[_-]?secret|password|passwd|secret)["']?\s*[:=]\s*(?:"([^"\r\n]{6,})"|'([^'\r\n]{6,})'|([^\s'",;}{]{6,}))"""
     ),
 ]
 SENSITIVE_DICT_KEY_RE = re.compile(
-    r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|artex[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|secret)",
+    r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|artex[_-]?token|x[_-]artx[_-]key|client[_-]?secret|password|passwd|private[_-]?key|secret|\btoken\b|\bauthorization\b)",
     re.IGNORECASE,
 )
 URL_USERINFO_RE = re.compile(
@@ -33,17 +33,17 @@ URL_USERINFO_RE = re.compile(
 )
 
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
-IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+IPV4_RE = re.compile(r"(?<![A-Za-z0-9.])(?:\d{1,3}\.){3}\d{1,3}(?![A-Za-z0-9.])")
 IPV6_RE = re.compile(r"(?<![A-Za-z0-9:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![A-Za-z0-9:])")
 URL_SCHEME_RE = re.compile(r"\b(https?)://", re.IGNORECASE)
 DOMAIN_RE = re.compile(
-    r"\b("
+    r"(?<![A-Za-z0-9\-])("
     r"[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9\-]{1,63})*\."
     r"(?:com|net|org|io|ai|cn|ru|uk|de|gov|mil|edu|co|app|dev|xyz|top|info|local|corp|internal|"
     r"pro|site|live|fun|me|cc|su|biz|cloud|online|store|tech|lol|eu|kr|jp|au|icu|cfd|sbs|gg|ca|fr|nl|se|ch|in|br)"
     r"|[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9\-]{1,63})+\.(?:sh|zip)"
     r"|(?:interact|artex)\.sh"
-    r")\b",
+    r")(?![A-Za-z0-9\-])",
     re.IGNORECASE,
 )
 FENCE_END_RE = re.compile(r"<<<\s*END_[A-Z0-9_]+\s*>>>", re.IGNORECASE)

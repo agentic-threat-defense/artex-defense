@@ -393,3 +393,140 @@ def test_wave2_enterprise_fp_guards_c2_relay_scoring_and_bipartite_kill_chain(tm
     assert len(chains) == 1
     assert chains[0].storyline_id.startswith("KC-LONG-")
     assert set(chains[0].window_ids) == {"W-EXT", "W-INT"}
+
+
+def test_cto_gate_all_6_release_blockers_fixed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from artex_defense.detectors import correlate_kill_chains, scan_telemetry_file
+    from artex_defense.mcp_server import gemma4_triage_logs
+    from artex_defense.schemas import CadenceStats, CandidateWindow
+
+    # Blocker 1: Standard AWS CloudTrail S3 {"Records": [...]} multi-line JSON file must parse & detect (not 0 events!)
+    s3_ct = tmp_path / "cloudtrail_s3_export.json"
+    s3_payload = {
+        "Records": [
+            {
+                "eventVersion": "1.09",
+                "eventTime": f"2026-11-21T12:00:0{i}Z",
+                "eventSource": "ec2.amazonaws.com",
+                "eventName": "DescribeInstanceAttribute",
+                "sourceIPAddress": "203.0.113.241",
+                "userAgent": "Boto3/1.35.0",
+                "userIdentity": {"arn": "arn:aws:iam::111122223333:role/service-role/lambda-api-role"},
+                "requestParameters": {"attribute": "userData", "instanceId": f"i-000{i}"},
+            }
+            for i in range(4)
+        ]
+    }
+    s3_ct.write_text(json.dumps(s3_payload, indent=2), encoding="utf-8")
+    # Also verifies Blocker 3a: compromised Lambda role/service-role/* is NOT suppressed by CLOUD_IAC_ACTOR_ROLE_RE!
+    s3_cands = scan_telemetry_file(s3_ct)
+    assert s3_cands and any("cloud_ec2_userdata_or_ssm_burst" in c.reasons for c in s3_cands)
+
+    # Blocker 3b: Pass 9 must NOT fire on AWS internal service sourceIPAddress like cloudformation.amazonaws.com
+    cf_events = [
+        {
+            "eventTime": f"2026-11-21T12:10:0{i}Z",
+            "eventSource": "ec2.amazonaws.com",
+            "eventName": "DescribeSubnets",
+            "sourceIPAddress": "cloudformation.amazonaws.com",
+            "userAgent": "cloudformation.amazonaws.com",
+            "userIdentity": {"arn": f"arn:aws:iam::111122223333:user/dev{i}"},
+        }
+        for i in range(4)
+    ]
+    cf_path = tmp_path / "cloudformation_internal.jsonl"
+    cf_path.write_text("\n".join(json.dumps(e) for e in cf_events) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(cf_path) == []
+
+    # Blocker 2: Unrelated CloudTrail compromises hitting ec2.amazonaws.com & unrelated synthetic actors MUST NOT merge
+    t0 = datetime(2026, 11, 21, 14, 0, tzinfo=timezone.utc)
+    cad = CadenceStats(event_count=5, window_seconds=10.0, events_per_minute=30.0, error_count=0, error_ratio=0.0, unique_targets=1)
+    ct_a = CandidateWindow(
+        window_id="W-CT-A", source_host="198.51.100.33", actor="arn:aws:iam::111:role/RoleA", surface="cloud_iam",
+        start_time=t0, end_time=t0 + timedelta(seconds=10), reasons=["cloud_ec2_userdata_or_ssm_burst"],
+        risk_score=85, alert_tier="alert", cadence=cad, sample_events=[{"dest_host": "ec2.amazonaws.com"}],
+    )
+    ct_b = CandidateWindow(
+        window_id="W-CT-B", source_host="203.0.113.44", actor="arn:aws:iam::222:role/RoleB", surface="cloud_iam",
+        start_time=t0 + timedelta(minutes=2), end_time=t0 + timedelta(minutes=3), reasons=["cloud_ec2_userdata_or_ssm_burst"],
+        risk_score=85, alert_tier="alert", cadence=cad, sample_events=[{"dest_host": "ec2.amazonaws.com"}],
+    )
+    assert correlate_kill_chains([ct_a, ct_b]) == []
+
+    sp_a = CandidateWindow(
+        window_id="W-SP-A", source_host="198.51.100.10", actor="8_sprayed_accounts", surface="cloud_iam",
+        start_time=t0, end_time=t0 + timedelta(seconds=10), reasons=["multi_account_credential_spray"],
+        risk_score=75, alert_tier="alert", cadence=cad, sample_events=[],
+    )
+    sp_b = CandidateWindow(
+        window_id="W-SP-B", source_host="203.0.113.20", actor="8_sprayed_accounts", surface="cloud_iam",
+        start_time=t0 + timedelta(minutes=5), end_time=t0 + timedelta(minutes=6), reasons=["multi_account_credential_spray"],
+        risk_score=75, alert_tier="alert", cadence=cad, sample_events=[],
+    )
+    assert correlate_kill_chains([sp_a, sp_b]) == []
+
+    # Blocker 4: Expat DTD guard blocks comment-wrapped & 8200-space-padded DOCTYPEs
+    comment_xxe = '<?xml version="1.0"?><!-- <rss> --><!DOCTYPE rss [<!ENTITY lol "lol">]><rss><channel/></rss>'
+    padded_xxe = '<?xml version="1.0"?>' + (" " * 8200) + '<!DOCTYPE rss [<!ENTITY lol "lol">]><rss><channel/></rss>'
+    with pytest.raises(ValueError, match="DOCTYPE/ENTITY"):
+        parse_feed_xml(comment_xxe, source="comment_bypass")
+    with pytest.raises(ValueError, match="DOCTYPE/ENTITY"):
+        parse_feed_xml(padded_xxe, source="whitespace_bypass")
+
+    # Blocker 5: 2 mistyped VPN passwords in single Chrome session (3 JA4Hs) + 1 404 & 3 ULID 200 OKs -> 0 FP!
+    benign_vpn_ulid = [
+        {
+            "timestamp": "2026-11-21T15:00:01Z", "surface": "edge_appliance", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "GET", "http_path": "/vpn/index.html", "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36",
+            "ja4": "t13d1516h2_chrome_single", "ja4h": "ge11nn04_aaa", "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-21T15:00:05Z", "surface": "edge_appliance", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "POST", "http_path": "/vpn/login", "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36",
+            "ja4": "t13d1516h2_chrome_single", "ja4h": "po11cr06_bbb", "status_code": 401,
+        },
+        {
+            "timestamp": "2026-11-21T15:00:10Z", "surface": "edge_appliance", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "POST", "http_path": "/vpn/login", "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36",
+            "ja4": "t13d1516h2_chrome_single", "ja4h": "po11cr07_ccc", "status_code": 401,
+        },
+        {
+            "timestamp": "2026-11-21T15:00:15Z", "surface": "web_portal", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "GET", "http_path": "/old-link", "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36",
+            "status_code": 404,
+        },
+        {
+            "timestamp": "2026-11-21T15:00:18Z", "surface": "web_portal", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "GET", "http_path": "/api/orders/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36", "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-21T15:00:21Z", "surface": "web_portal", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "GET", "http_path": "/api/orders/01ARZ3NDEKTSV4RRFFQ69G5FBW",
+            "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36", "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-21T15:00:24Z", "surface": "web_portal", "source_ip": "10.9.9.10", "actor": "bob",
+            "http_method": "GET", "http_path": "/api/orders/01ARZ3NDEKTSV4RRFFQ69G5FCX",
+            "user_agent": "Mozilla/5.0 Chrome/131.0 Safari/537.36", "status_code": 200,
+        },
+    ]
+    ulid_path = tmp_path / "benign_vpn_ulid.jsonl"
+    ulid_path.write_text("\n".join(json.dumps(e) for e in benign_vpn_ulid) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(ulid_path) == []
+
+    # Blocker 6: MCP gemma4_triage_logs sanitizes file_name; sanitizer redacts spaced JSON passwords & x-artx-key/token
+    monkeypatch.setenv("ARTEX_MCP_ALLOWED_ROOT", str(tmp_path))
+    leaky_name = tmp_path / "198.51.100.77_evil.com.jsonl"
+    leaky_name.write_text('{"timestamp": "2026-11-21T12:00:00Z", "source_host": "10.0.0.1", "status_code": 200}\n', encoding="utf-8")
+    triage_out = json.loads(gemma4_triage_logs(str(leaky_name)))
+    assert "198.51.100.77" not in triage_out["file_name"]
+    assert "evil.com" not in triage_out["file_name"]
+
+    assert "my secret pass" not in sanitize_text('{"password": "my secret pass"}')
+    d_clean = sanitize_payload({"x-artx-key": "supersecret99", "token": "tok_real_secret_123", "authorization": "Custom abc123456"})
+    assert d_clean["x-artx-key"] == "[REDACTED_SECRET]"
+    assert d_clean["token"] == "[REDACTED_SECRET]"
+    assert d_clean["authorization"] == "[REDACTED_SECRET]"

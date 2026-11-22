@@ -654,6 +654,7 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
                 "sourceIPAddress",
                 "sourceIPv4Address",
                 "sourceIPv6Address",
+                "source_ip",
                 "src_ip",
             ),
             "unknown",
@@ -1117,9 +1118,34 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
     if chosen == "web_access":
         return parse_web_access_log(lines)
 
-    # Default: JSONL (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail, IdPs)
-    # Resilient per-line parsing: skip individual malformed/truncated lines instead of aborting the whole file.
-    events: list[dict[str, Any]] = []
+    # Default: JSON / JSONL (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail S3 {"Records": [...]}, IdPs)
+    raw_text = "\n".join(lines).strip()
+    if raw_text.startswith("{") or raw_text.startswith("["):
+        try:
+            whole = json.loads(raw_text)
+        except json.JSONDecodeError:
+            whole = None
+        if isinstance(whole, dict) and isinstance(whole.get("Records"), list):
+            events: list[dict[str, Any]] = []
+            for rec in whole["Records"]:
+                if isinstance(rec, dict):
+                    try:
+                        events.append(normalize_json_record(rec))
+                    except (ValueError, KeyError, TypeError):
+                        continue
+            return events
+        if isinstance(whole, list):
+            events = []
+            for rec in whole:
+                if isinstance(rec, dict):
+                    try:
+                        events.append(normalize_json_record(rec))
+                    except (ValueError, KeyError, TypeError):
+                        continue
+            return events
+
+    # Resilient per-line JSONL parsing: skip individual malformed/truncated lines instead of aborting the whole file.
+    events = []
     for raw_line in lines:
         line = raw_line.strip()
         if not line:
@@ -1127,7 +1153,15 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
         try:
             record = json.loads(line)
             if isinstance(record, dict):
-                events.append(normalize_json_record(record))
+                if isinstance(record.get("Records"), list):
+                    for sub in record["Records"]:
+                        if isinstance(sub, dict):
+                            try:
+                                events.append(normalize_json_record(sub))
+                            except (ValueError, KeyError, TypeError):
+                                continue
+                else:
+                    events.append(normalize_json_record(record))
         except (json.JSONDecodeError, ValueError, KeyError, TypeError):
             continue
     return events

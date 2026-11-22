@@ -392,27 +392,29 @@ SUSPICIOUS_RUNTIME_SHELL_ARG_RE = re.compile(
     re.IGNORECASE,
 )
 
-SHELL_CHILD_PROCESSES: tuple[str, ...] = (
-    "cmd.exe",
-    "powershell.exe",
-    "pwsh.exe",
-    "pwsh",
-    "/bin/sh",
-    "/bin/bash",
-    "bash",
-    "sh",
+SHELL_CHILD_BASES: frozenset[str] = frozenset(
+    {
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "pwsh",
+        "bash",
+        "sh",
+    }
 )
 # Direct interpreter / downloader children spawned by web daemons (nginx/w3wp/httpd/php-fpm)
-WEB_DAEMON_EXTRA_CHILDREN: tuple[str, ...] = (
-    "python",
-    "python3",
-    "perl",
-    "php",
-    "curl",
-    "wget",
-    "socat",
-    "certutil.exe",
-    "wmic.exe",
+WEB_DAEMON_EXTRA_CHILDREN: frozenset[str] = frozenset(
+    {
+        "python",
+        "python3",
+        "perl",
+        "php",
+        "curl",
+        "wget",
+        "socat",
+        "certutil.exe",
+        "wmic.exe",
+    }
 )
 
 CLOUD_IAM_HIGH_RISK_ACTIONS: set[str] = {
@@ -550,9 +552,12 @@ CLOUD_IAC_AUTOMATION_UA_RE = re.compile(
     r"(terraform|ansible|cloudcustodian|aws-config|datadog|wiz\.io|orca-security|prisma-cloud)",
     re.IGNORECASE,
 )
-# Identity-backed IaC / CSPM automation actor check (prevents attacker User-Agent: Terraform/1.9 spoofing)
+# Identity-backed IaC / CSPM automation actor check (prevents attacker User-Agent: Terraform/1.9 spoofing
+# while refusing broad terms like "service-role" or bare "wiz" that match compromised Lambda roles or "wizard").
 CLOUD_IAC_ACTOR_ROLE_RE = re.compile(
-    r"(terraform|ansible|cloudcustodian|aws-config|datadog|wiz|orca|prisma|github[-_]?actions|gitlab|cspm|ci[-_]?cd|service-role)",
+    r"(?:^|[:/_-])(?:terraform(?:[-_][a-z0-9]+)?|ansible(?:[-_][a-z0-9]+)?|cloudcustodian|aws-config|"
+    r"datadog[-_](?:cspm|integration|scanner)|wiz[-_](?:scanner|sensor|cspm|role)|"
+    r"orca[-_](?:scanner|security)|prisma[-_]cloud)(?:$|[:/_-])",
     re.IGNORECASE,
 )
 # Elastic Security Labs ("56 AWS API calls in 141ms" / CyberStrikeAI CloudTrail):
@@ -1150,10 +1155,13 @@ def _inspect_window_signals(
             indicators.add(f"sensitive_pivot_2xx:{ev_path}")
 
         if ev_path and _is_high_entropy_probe_slug(ev_path):
-            slug_base = ev_path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].split(".", 1)[0]
+            clean_p = ev_path.split("?", 1)[0]
+            parts = [seg for seg in clean_p.strip("/").split("/") if seg]
+            slug_base = parts[-1].split(".", 1)[0] if parts else ""
             is_pure_hex_id = bool(re.fullmatch(r"[0-9a-fA-F]{8,64}", slug_base))
-            if status == 404 or (status == 200 and saw_non_asset_4xx and not is_pure_hex_id):
-                random_slug_probe_paths.add(ev_path.split("?", 1)[0])
+            # Soft-404 (200 OK) only applies to root-level probes (depth <= 1), never /api/orders/<ULID>
+            if status == 404 or (status == 200 and saw_non_asset_4xx and len(parts) <= 1 and not is_pure_hex_id):
+                random_slug_probe_paths.add(clean_p)
 
         # Endpoint compressed recon commands, wrapper-stripped redundant worker recon, LLM CLI idioms, & touch-and-bail
         cmd_raw = ev.get("command_line", "")
@@ -1208,13 +1216,13 @@ def _inspect_window_signals(
         if parent_low and proc_low:
             parent_base = parent_low.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
             if any(wp in parent_low for wp in WEB_PARENT_PROCESSES) and (
-                any(sc in proc_low for sc in SHELL_CHILD_PROCESSES) or proc_base in WEB_DAEMON_EXTRA_CHILDREN
+                proc_base in SHELL_CHILD_BASES or proc_base in WEB_DAEMON_EXTRA_CHILDREN
             ):
                 reasons.add("web_parent_shell_spawn")
                 indicators.add(f"parent_child:{ev['parent_process']}->{ev['process']}")
             elif (
                 parent_base in RUNTIME_WEB_PARENTS
-                and any(sc in proc_low for sc in SHELL_CHILD_PROCESSES)
+                and proc_base in SHELL_CHILD_BASES
                 and SUSPICIOUS_RUNTIME_SHELL_ARG_RE.search(cmd_raw)
             ):
                 reasons.add("web_parent_shell_spawn")
@@ -1526,11 +1534,15 @@ def _inspect_window_signals(
         indicators.add("llm_idioms:" + ",".join(sorted(llm_idiom_types)))
 
     # Zero-IOC Detector 4: NAT-safe FoxIO JA4 / JA4H client stack whiplash from single IP
-    # Single-browser SPA sessions legitimately produce 3+ JA4H hashes (GET/cookie/POST), so ONLY match
-    # TLS JA4 whiplash under identical UA, and gate JA4H / shared-NAT checks on non-asset errors or edge auth failures.
+    # Single-browser sessions legitimately emit 3+ JA4H hashes across GET/cookie/POST even on 2 mistyped VPN
+    # passwords, so require TLS JA4 whiplash (>=3 JA4s) OR JA4H whiplash with >=2 distinct UAs + errors.
     if (
         (len(ja4_fingerprints) >= 3 and (len(distinct_uas) <= 1 or non_asset_error_count >= 3 or edge_auth_failures >= 2))
-        or (len(ja4h_fingerprints) >= 3 and (non_asset_error_count >= 3 or edge_auth_failures >= 2))
+        or (
+            len(ja4h_fingerprints) >= 3
+            and len(distinct_uas) >= 2
+            and (non_asset_error_count >= 3 or edge_auth_failures >= 2)
+        )
     ):
         reasons.add("ja4_client_stack_whiplash")
         indicators.add(f"distinct_ja4:{len(ja4_fingerprints)},ja4h:{len(ja4h_fingerprints)}")
@@ -1538,14 +1550,14 @@ def _inspect_window_signals(
     # Zero-IOC Detector 4b: Traffic-recording proxy TLS collapse (single JA4 + >=3 distinct UA families)
     # Complements ja4_client_stack_whiplash when an agent routes curl/python/browser tools through an
     # optional recording proxy (e.g., ARTEX's Go traffic recorder collapsing all tools to one Go TLS stack).
-    # SWG/NAT-safe: collapses browser version drift and requires actual edge auth failures or non-asset 4xx errors
-    # (never fires on zero-error 200 OK VPN portal loads behind Zscaler/Netskope).
+    # SWG/NAT-safe: requires non-browser CLI UA mixed in (or >=3 erroring UA families) so corporate SWGs
+    # forwarding Chrome/Firefox/Edge VPN typos never alert.
     has_non_browser_ua = any(not fam.startswith("browser_") for fam in distinct_ua_families)
     if (
         len(ja4_fingerprints) == 1
         and len(distinct_ua_families) >= 3
         and (
-            edge_auth_failures >= 2
+            (edge_auth_failures >= 2 and has_non_browser_ua)
             or (
                 saw_non_asset_4xx
                 and non_asset_error_count >= 3
@@ -2513,6 +2525,13 @@ def scan_telemetry_file(
 
     for mi_idx, mirow in enumerate(multi_id_rows, start=1):
         mi_host, mi_cnt, mi_ids, mi_min, mi_max, mi_actors = mirow
+        # Require a valid IP address (excludes AWS service principals like cloudformation.amazonaws.com / AWS Internal)
+        try:
+            ipaddress.ip_address(str(mi_host).strip())
+        except ValueError:
+            continue
+        if _is_allowlisted_scanner_ip(mi_host, authorized_scanner_ips):
+            continue
         mi_span = max(float(mi_max - mi_min), 1.0)
         mi_reasons = ["cloud_multi_identity_from_single_ip"]
         mi_risk, mi_tier = compute_risk_score(mi_reasons)
@@ -2549,15 +2568,17 @@ def scan_telemetry_file(
 
 
 _SYNTHETIC_ACTOR_RE = re.compile(
-    r"(?:rotating_ips|identities|lateral_sweep_|distributed:|probe_signups|unknown|^(?:\d{1,3}\.){3}\d{1,3}$)",
+    r"(?:rotating_ips|identities|lateral_sweep_|distributed:|probe_signups|sprayed_accounts|"
+    r"_2fa_activity|registered_probe_accounts|unknown|^(?:\d{1,3}\.){3}\d{1,3}$)",
     re.IGNORECASE,
 )
 
 
-def _window_entity_sets(cand: CandidateWindow) -> tuple[set[str], set[str], set[str]]:
-    """Extract (source_hosts, dest_hosts, non_ip_actors) for bipartite graph-edge kill-chain correlation."""
+def _window_entity_sets(cand: CandidateWindow) -> tuple[set[str], set[str], set[str], set[str]]:
+    """Extract (source_hosts, dest_hosts, distributed_targets, non_ip_actors) for bipartite graph correlation."""
     src_hosts: set[str] = set()
     dst_hosts: set[str] = set()
+    dist_targets: set[str] = set()
     actors: set[str] = set()
 
     sh = (cand.source_host or "").strip().lower()
@@ -2565,7 +2586,7 @@ def _window_entity_sets(cand: CandidateWindow) -> tuple[set[str], set[str], set[
         if sh.startswith("distributed:"):
             target = sh.split(":", 1)[1].strip()
             if target:
-                dst_hosts.add(target)
+                dist_targets.add(target)
         else:
             src_hosts.add(sh)
 
@@ -2580,28 +2601,29 @@ def _window_entity_sets(cand: CandidateWindow) -> tuple[set[str], set[str], set[
         ev_act = str(ev.get("actor") or "").strip().lower()
         if ev_act and ev_act != sh and not _SYNTHETIC_ACTOR_RE.search(ev_act):
             actors.add(ev_act)
-    return src_hosts, dst_hosts, actors
+    return src_hosts, dst_hosts, dist_targets, actors
 
 
 def _windows_entity_linked(
-    ent_a: tuple[set[str], set[str], set[str]],
-    ent_b: tuple[set[str], set[str], set[str]],
+    ent_a: tuple[set[str], set[str], set[str], set[str]],
+    ent_b: tuple[set[str], set[str], set[str], set[str]],
 ) -> bool:
-    """Return True if two candidate windows share a host, stolen identity, or external->internal pivot edge."""
-    src_a, dst_a, act_a = ent_a
-    src_b, dst_b, act_b = ent_b
+    """Return True if two windows share a source host, stolen identity, external->internal pivot, or distributed target."""
+    src_a, dst_a, dist_a, act_a = ent_a
+    src_b, dst_b, dist_b, act_b = ent_b
     return bool(
         (src_a & src_b)
         or (act_a & act_b)
         or (dst_a & src_b)
         or (dst_b & src_a)
-        or (dst_a & dst_b)
+        or (dist_a & (src_b | dst_b))
+        or (dist_b & (src_a | dst_a))
     )
 
 
 def _cluster_entity_linked(
     ordered: list[CandidateWindow],
-    entities: list[tuple[set[str], set[str], set[str]]],
+    entities: list[tuple[set[str], set[str], set[str], set[str]]],
     *,
     max_gap_seconds: float,
 ) -> list[list[CandidateWindow]]:
