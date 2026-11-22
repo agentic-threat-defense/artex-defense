@@ -1,6 +1,6 @@
 # Enterprise Threat-Intel & Infrastructure Hunting Query Templates (Offline Reference)
 
-> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** These are **offline query templates** for passive intelligence platforms (e.g., **Censys Platform**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, and **FoxIO JA4+**, or equivalent passive TI services). Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Inspect any retrieved artifacts or `TaskID` transcripts exclusively inside an isolated, snapshotted Tier 3 air-gapped VM (`artex-lab-isolated`) and sanitize/redact them via `scripts/sandbox-analyze-tasks.sh` before offline analysis.
+> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** These are **offline query templates** for passive intelligence platforms (e.g., **Censys Platform**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, and **FoxIO JA4+**, or equivalent passive TI services). Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Inspect any retrieved artifacts or `TaskID` transcripts exclusively inside an isolated, snapshotted Tier 3 host-only KVM VM (`artex-lab-isolated`) and sanitize/redact them via `scripts/sandbox-analyze-tasks.sh` before offline analysis.
 
 ---
 
@@ -71,7 +71,7 @@ WHERE http.headers.raw ILIKE '%WWW-Authenticate%realm="ARTEX"%'
 
 ### B. Open Python HTTP Staging Directories (Agent `TaskID` Logs & Action Outcomes)
 
-> **WARNING — Do NOT Browse Live Staging Directories from Bare Metal:** Never browse, download, or inspect raw attacker directories (`SimpleHTTP`) from a bare-metal host or corporate workstation. Use indexed response metadata from passive internet-intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **FOFA**, **URLScan.io**, **Validin**, **Silent Push**, or equivalent services) for triage; if an isolated research team exports `TaskID` transcripts inside an air-gapped Tier 3 VM, redact victim IPs/domains/credentials and run offline analysis strictly through `./scripts/sandbox-analyze-tasks.sh`.
+> **WARNING — Do NOT Browse Live Staging Directories from Bare Metal:** Never browse, download, or inspect raw attacker directories (`SimpleHTTP`) from a bare-metal host or corporate workstation. Use indexed response metadata from passive internet-intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **FOFA**, **URLScan.io**, **Validin**, **Silent Push**, or equivalent services) for triage; if an isolated research team exports `TaskID` transcripts inside a host-only isolated Tier 3 VM, redact victim IPs/domains/credentials and run offline analysis strictly through `./scripts/sandbox-analyze-tasks.sh`.
 
 Early and active ARTEX operators frequently spin up temporary Python HTTP servers (`python3 -m http.server`) exposing staging folders, agent `TaskID` logs, command outputs, and failed/retried task traces:
 
@@ -97,7 +97,7 @@ WHERE html.head.title = 'Directory listing for /'
     OR http.body ILIKE '%exploration_nodes%'
   );
 ```
-*(Note: ARTEX's Exploration Graph labels individual planner intents sequentially as `i1`, `i2`, `i12345`, etc. Pivot on ASN, SSL/TLS cert issuer, and co-hosted ports `8787`/`8788`/`8790`/`8890` to separate threat-actor staging servers from benign lab/CTF boxes. Any sanitized `TaskID` / `i<digits>` / `.jsonl` transcripts exported from an air-gapped Tier 3 VM can be digested locally via `artex-hunt analyze-tasks <path>`.)*
+*(Note: ARTEX's Exploration Graph labels individual planner intents sequentially as `i1`, `i2`, `i12345`, etc. Pivot on ASN, SSL/TLS cert issuer, and co-hosted ports `8787`/`8788`/`8790`/`8890` to separate threat-actor staging servers from benign lab/CTF boxes. Any sanitized `TaskID` / `i<digits>` / `.jsonl` transcripts exported from an isolated Tier 3 VM can be digested locally via `artex-hunt analyze-tasks <path>`.)*
 
 ---
 

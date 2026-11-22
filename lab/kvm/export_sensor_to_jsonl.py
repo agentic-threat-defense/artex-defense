@@ -137,7 +137,10 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
         if not m_ts:
             continue
         epoch_s, eid = float(m_ts.group(1)), m_ts.group(2)
-        entry = grouped.setdefault(eid, {"epoch": epoch_s, "args": {}, "exe": "", "comm": "", "uid": "unknown"})
+        entry = grouped.setdefault(
+            eid,
+            {"epoch": epoch_s, "args": {}, "exe": "", "comm": "", "uid": "unknown", "pid": "", "ppid": "", "success": ""},
+        )
 
         if line.startswith("type=SYSCALL"):
             for k, qv, uv in AUDIT_KV_RE.findall(line):
@@ -146,6 +149,12 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
                     entry["exe"] = val
                 elif k == "comm":
                     entry["comm"] = val
+                elif k == "pid":
+                    entry["pid"] = val
+                elif k == "ppid":
+                    entry["ppid"] = val
+                elif k == "success":
+                    entry["success"] = val
                 elif k in {"auid", "uid"} and entry["uid"] == "unknown":
                     entry["uid"] = val
         elif line.startswith("type=EXECVE"):
@@ -154,14 +163,21 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
                     idx = int(k[1:])
                     entry["args"][idx] = _decode_audit_arg(qv if qv != "" else uv, quoted=(qv != ""))
 
+    pid_to_exe: dict[str, str] = {}
     events: list[dict[str, Any]] = []
     for eid in sorted(grouped, key=lambda x: grouped[x]["epoch"]):
         g = grouped[eid]
+        # Skip failed execve() PATH-resolution probes (success=no, e.g. ENOENT with no EXECVE record)
+        if g["success"] == "no" and not g["args"]:
+            continue
         if not g["args"] and not g["exe"]:
             continue
         ordered_args = [g["args"][i] for i in sorted(g["args"])]
         cmdline = " ".join(ordered_args).strip() or g["exe"]
         proc = g["exe"] or (ordered_args[0] if ordered_args else g["comm"])
+        if g["pid"] and proc:
+            pid_to_exe[g["pid"]] = proc
+        parent_proc = pid_to_exe.get(g["ppid"], "") if g["ppid"] else ""
         events.append(
             {
                 "timestamp": _iso_from_epoch(g["epoch"]),
@@ -171,6 +187,7 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
                 "surface": "endpoint",
                 "appliance": "linux_auditd",
                 "process": proc,
+                "parent_process": parent_proc,
                 "command_line": cmdline,
                 "status_code": 0,
                 "action": "execve",

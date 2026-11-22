@@ -1,4 +1,4 @@
-"""100% harmless mock OpenAPI / web portal target for air-gapped purple-team telemetry validation."""
+"""100% harmless mock OpenAPI / web portal target for non-routed isolated purple-team telemetry validation."""
 
 from __future__ import annotations
 

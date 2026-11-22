@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end Air-Gapped Docker Purple-Team Validation Runner
+# End-to-end Non-Routed Isolated Docker Purple-Team Validation Runner
 # Runs REAL Suricata 7, REAL Zeek LTS, REAL YARA, REAL Nginx, and `artex-hunt scan`
-# over an `internal: true` (zero-WAN) Docker network.
+# over an `internal: true` (zero-WAN) Docker bridge network.
 set -euo pipefail
 
 RANGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +16,7 @@ trap cleanup EXIT
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}/suricata_base" "${OUT_DIR}/suricata_atk" "${OUT_DIR}/zeek_base" "${OUT_DIR}/zeek_atk" "${OUT_DIR}/yara_fixtures"
 
-echo "=== [1/7] Building sensor/target image & booting air-gapped range (internal: true) ==="
+echo "=== [1/7] Building sensor/target image & booting non-routed isolated range (internal: true) ==="
 docker compose -f "${RANGE_DIR}/docker-compose.yml" build --quiet
 docker compose -f "${RANGE_DIR}/docker-compose.yml" up -d
 sleep 2

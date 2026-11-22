@@ -69,7 +69,7 @@ python3 -m venv .venv
 </details>
 
 <details>
-<summary><strong>Offline Docker Sandbox, Air-Gapped KVM Lab & Watchtower</strong></summary>
+<summary><strong>Offline Docker Sandbox, Isolated Validation Ranges & Watchtower</strong></summary>
 
 ```bash
 # Re-compile Sigma rules across 8 SIEM/XDR target packs (full-pack ES|QL/Lucene/KQL/CQL/SPL + Windows-endpoint MDE/ASIM/S1QL)
@@ -82,7 +82,10 @@ python3 -m venv .venv
 # Allowlisted public threat-intel Watchtower (HTTPS allowlist + SQLite dedup + optional local LLM gap digest)
 .venv/bin/artex-hunt watchtower --with-gemma4
 
-# Air-gapped KVM/QEMU sensor + target lab (zero <forward> network invariant)
+# Non-routed isolated Docker purple-team range (real Suricata 7, Zeek LTS, YARA, Nginx + automated assertions)
+bash lab/docker-range/run-range.sh
+
+# Host-only isolated KVM/QEMU sensor + target lab (zero <forward> network invariant, real Linux auditd)
 ./lab/kvm/lab-ctl.sh check
 ```
 
@@ -101,7 +104,8 @@ python3 -m venv .venv
 - [docs/artex_threat_model.md](docs/artex_threat_model.md) & [docs/edge_to_endpoint_hardening.md](docs/edge_to_endpoint_hardening.md) — Threat model and hardening controls
 - [docs/quarantine_sop.md](docs/quarantine_sop.md) — Tier 1–3 quarantine handling and artifact OpSec
 - [docs/ROADMAP.md](docs/ROADMAP.md) — Known limitations and open engineering work
-- [lab/kvm/README.md](lab/kvm/README.md) — Reproducible air-gapped Zeek/Auditd KVM lab setup
+- [lab/docker-range/README.md](lab/docker-range/README.md) — Non-routed isolated Docker validation range (real Suricata 7, Zeek LTS, YARA, Nginx)
+- [lab/kvm/README.md](lab/kvm/README.md) — Reproducible host-only isolated KVM/QEMU Zeek & Linux Auditd lab setup
 
 </details>
 

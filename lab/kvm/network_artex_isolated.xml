@@ -1,7 +1,7 @@
 <network>
   <name>artex-lab-isolated</name>
   <bridge name='virbr-artex' stp='on' delay='0'/>
-  <!-- SECURITY INVARIANT: Intentionally NO <forward> element (strict air-gap; zero WAN/LAN routing) -->
+  <!-- SECURITY INVARIANT: Intentionally NO <forward> element (host-only isolated; zero WAN/LAN routing) -->
   <ip address='192.168.250.1' netmask='255.255.255.0'>
     <dhcp>
       <range start='192.168.250.100' end='192.168.250.200'/>

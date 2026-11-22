@@ -6,4 +6,4 @@ ethernets:
     dhcp4: false
     addresses:
       - 192.168.250.10/24
-    # Intentionally NO routes / gateway4 -> strict air-gap on artex-lab-isolated
+    # Intentionally NO routes / gateway4 -> strict host-only isolation on artex-lab-isolated

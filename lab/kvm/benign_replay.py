@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""100% benign behavioral traffic replay strictly scoped to the air-gapped 192.168.250.0/24 KVM lab.
+"""100% benign behavioral traffic replay strictly scoped to the host-only isolated 192.168.250.0/24 KVM lab.
 
 Generates real HTTP wire traffic (benign browsing, growing-payload sawtooth POSTs, Unit 42 control-404
 paths, and REST write->readback verification) so Zeek + Auditd capture authentic raw telemetry for
@@ -17,10 +17,10 @@ import urllib.request
 LAB_SUBNET = ipaddress.ip_network("192.168.250.0/24")
 
 
-def _assert_airgap_ip(host: str) -> None:
+def _assert_isolated_lab_ip(host: str) -> None:
     ip = ipaddress.ip_address(host)
     if ip not in LAB_SUBNET:
-        raise SystemExit(f"REFUSED: Target {host} is outside air-gapped lab subnet {LAB_SUBNET}!")
+        raise SystemExit(f"REFUSED: Target {host} is outside host-only isolated lab subnet {LAB_SUBNET}!")
 
 
 def _req(url: str, *, method: str = "GET", body: bytes | None = None, ua: str = "Mozilla/5.0 Chrome/131.0") -> int:
@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=("baseline", "sawtooth", "canary_spec"), default="baseline")
     args = parser.parse_args()
 
-    _assert_airgap_ip(args.target)
+    _assert_isolated_lab_ip(args.target)
     base = f"http://{args.target}:{args.port}"
 
     if args.mode == "baseline":

@@ -8,7 +8,7 @@ set -euo pipefail
 # WARNING — Operational Safety (Zero Bare-Metal Exposure):
 # Never browse, curl, download, or inspect raw attacker directories (SimpleHTTP),
 # exposed operator consoles, or suspect C2 infrastructure from a bare-metal host.
-# Only pass transcripts exported from passive intel platforms or an air-gapped Tier 3 VM.
+# Only pass transcripts exported from passive intel platforms or an isolated Tier 3 VM.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"

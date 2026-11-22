@@ -33,7 +33,7 @@ write_files:
       set -euo pipefail
       mkdir -p /var/log/artex-lab
       IFACE="$(ip -o -4 addr show | awk '/192\.168\.250\.10/ {print $2; exit}')"
-      echo "[sensor] Capturing air-gapped lab traffic on ${IFACE:-eth0} -> /var/log/artex-lab/capture.pcap"
+      echo "[sensor] Capturing isolated lab traffic on ${IFACE:-eth0} -> /var/log/artex-lab/capture.pcap"
       exec tcpdump -i "${IFACE:-eth0}" -s 0 -w /var/log/artex-lab/capture.pcap 'net 192.168.250.0/24'
 
 runcmd:

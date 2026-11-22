@@ -1,6 +1,6 @@
 # ARTEX Research Quarantine & OpSec Standard Operating Procedure
 
-> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Identify and triage exposed infrastructure strictly through passive intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, or equivalent passive TI services). Any retrieved artifacts or `TaskID` transcripts must be inspected exclusively inside an isolated, snapshotted analysis VM (Tier 3 air-gapped KVM/QEMU) and sanitized/redacted (stripping victim IPs, domains, and credentials) prior to offline analysis or rule tuning.
+> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Identify and triage exposed infrastructure strictly through passive intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, or equivalent passive TI services). Any retrieved artifacts or `TaskID` transcripts must be inspected exclusively inside an isolated, snapshotted analysis VM (Tier 3 host-only isolated KVM/QEMU — or dedicated physically air-gapped hardware for live malware detonation) and sanitized/redacted (stripping victim IPs, domains, and credentials) prior to offline analysis or rule tuning.
 
 ## Four-Tier Isolation Model
 
@@ -8,7 +8,7 @@
 | :--- | :--- | :--- | :--- |
 | **Tier 1 (Host)** | Bare-metal Linux + Local GPU | Local Ollama (`gemma4-hunter`), rule authoring, reviewing sanitized reports | `ollama.service` locked to `127.0.0.1:11434` with `IPAddressDeny=any` + `IPAddressAllow=localhost` |
 | **Tier 2 (Offline Container)** | Docker (`scripts/sandbox-scan.sh`, `scripts/sandbox-analyze-tasks.sh`) | Parsing untrusted JSONL/telemetry exports via Stage 1 DuckDB + sanitizer | `--network=none`, `--read-only`, `--cap-drop=ALL`, non-root, single read-only file mount |
-| **Tier 3 (Air-Gapped VMs)** | KVM/QEMU (`virt-manager` / `libvirt`) | Inspecting untrusted repos/artifacts, binary/YARA testing, isolated target + sensor labs | `artex-lab-isolated` (`192.168.250.0/24`, **no WAN/LAN forwarding**), snapshots before every run |
+| **Tier 3 (Host-Only Isolated VMs)** | KVM/QEMU (`virt-manager` / `libvirt`) | Inspecting untrusted repos/artifacts, YARA testing, isolated target + sensor behavioral replays *(not a physical air-gap)* | `artex-lab-isolated` (`192.168.250.0/24`, **no WAN/LAN forwarding**), snapshots before every run |
 | **Tier 4 (External / MCP Boundary)** | Stdio MCP Server (`artex-gemma4`) | Orchestration, rule review, architecture | Automatic secret/email redaction, IP pseudonymization, URL/domain defanging (`sanitize=True` default) |
 
 ---
@@ -40,8 +40,8 @@ Both wrappers execute inside an ephemeral `--network=none --read-only --cap-drop
 
 ---
 
-## 3. Spinning Up Air-Gapped Lab VMs (Tier 3)
-A strictly isolated virtual network **`artex-lab-isolated`** (`virbr-artex`, `192.168.250.0/24`) is preconfigured with **no `<forward>` directive** (zero internet or LAN routing).
+## 3. Spinning Up Host-Only Isolated Lab VMs (Tier 3)
+A non-routed virtual network **`artex-lab-isolated`** (`virbr-artex`, `192.168.250.0/24`) is preconfigured with **no `<forward>` directive** (zero internet or LAN routing). Because VMs on a networked host still share the host hypervisor and host-only management bridge, treat Tier 3 as host-only network isolation (suitable for behavioral replays and offline log triage), not a physical air-gap.
 
 Recommended workflow in `virt-manager`:
 1. Create your analysis VM (e.g., REMnux / Ubuntu / Windows+Sysmon with `edk2-ovmf` + `swtpm`) attached **only** to `artex-lab-isolated`.

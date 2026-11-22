@@ -4,7 +4,7 @@
 > **Classification / Provenance:** 100% Clean-Room Open-Source & Public Threat Intelligence (zero proprietary or internal data; zero unverified indicators)
 > **Date:** 2026-11-21
 >
-> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Identify and triage exposed infrastructure strictly through passive intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, or equivalent passive TI services). Any retrieved artifacts or `TaskID` transcripts must be inspected exclusively inside an isolated, snapshotted analysis VM (Tier 3 air-gapped KVM/QEMU) and sanitized/redacted (stripping victim IPs, domains, and credentials via `scripts/sandbox-analyze-tasks.sh` or `artex-hunt sanitize`) prior to offline analysis or rule tuning.
+> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Identify and triage exposed infrastructure strictly through passive intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, or equivalent passive TI services). Any retrieved artifacts or `TaskID` transcripts must be inspected exclusively inside an isolated, snapshotted analysis VM (Tier 3 host-only isolated KVM/QEMU) and sanitized/redacted (stripping victim IPs, domains, and credentials via `scripts/sandbox-analyze-tasks.sh` or `artex-hunt sanitize`) prior to offline analysis or rule tuning.
 
 ---
 
@@ -43,7 +43,7 @@ To prevent single-author bias, every detection layer was validated against both 
 | **Multi-Backend `pySigma` Compilation (16 Rules)** | **0 schema issues**; `16/16` Elastic ES\|QL, Lucene, KQL, CrowdStrike LogScale CQL, Splunk SPL; `5/5` MDE XDR, Sentinel ASIM, SentinelOne S1QL | `rules/queries/compiled_sigma/` |
 | **GTI Enterprise Livehunt & Retrohunt YARA** | Verified compiling cleanly on Google Threat Intelligence console | `rules/yara/` |
 | **Read-Only Operator Host Triage (`artex-hunt host-triage`)** | `CLEAN (0 findings)` on benign host; `6/6` forensic categories detected on simulated relay | `tests/test_host_triage.py` |
-| **Air-Gapped KVM/QEMU Lab Scaffold (`lab/kvm/`)** | Verified zero `<forward>` air-gap invariant, zero cloud-init gateways, valid `cidata` ISOs, raw Zeek JSON + Auditd converter | `tests/test_kvm_lab.py` |
+| **Host-Only Isolated KVM/QEMU Lab Scaffold (`lab/kvm/`)** | Verified zero `<forward>` isolation invariant, zero cloud-init gateways, valid `cidata` ISOs, raw Zeek JSON + Auditd converter | `tests/test_kvm_lab.py` |
 
 ---
 

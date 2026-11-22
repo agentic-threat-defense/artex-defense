@@ -1,8 +1,8 @@
-# Air-Gapped Docker Purple-Team Validation Range (`lab/docker-range/`)
+# Non-Routed Isolated Docker Purple-Team Validation Range (`lab/docker-range/`)
 
-Runs **real Suricata 7**, **real Zeek LTS**, **real YARA**, **real Nginx**, and **`artex-hunt scan`** end-to-end over a strictly isolated (`internal: true`, zero-WAN) Docker bridge (`172.30.0.0/24`).
+Runs **real Suricata 7**, **real Zeek LTS**, **real YARA**, **real Nginx**, and **`artex-hunt scan`** end-to-end over a non-routed (`internal: true`, zero-WAN) Docker bridge (`172.30.0.0/24`).
 
-> **Safety Invariant:** Zero third-party offensive frameworks, zero live C2 infrastructure, zero external network access. All traffic consists of 100% harmless synthetic HTTP/TLS behavioral replays against the local isolated mock OpenAPI/web portal (`172.30.0.20`), plus benign & seeded local byte fixtures for YARA.
+> **Safety & Isolation Boundary:** Zero third-party offensive frameworks, zero live C2 infrastructure, zero external network routing. All traffic consists of 100% harmless synthetic HTTP/TLS behavioral replays against the local isolated mock OpenAPI/web portal (`172.30.0.20`), plus benign & seeded local byte fixtures for YARA. Note that Docker `internal: true` provides non-routed network isolation on a shared host kernel — it is **not** a physical air-gap and must never be used to detonate live untrusted malware.
 
 ## Architecture
 

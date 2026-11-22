@@ -1,7 +1,7 @@
 """Offline analyzer for sanitized threat-actor staging / agent TaskID JSONL & transcript files.
 
 Designed strictly for defensive detection engineering: parses sanitized TaskID logs
-(exported from air-gapped Tier 3 VM analysis or enterprise threat-intel platforms),
+(exported from isolated Tier 3 VM analysis or enterprise threat-intel platforms),
 quantifies command sequences, failure-to-retry mutations, and tool distributions, and
 produces a compact summary ready for local Gemma 4 rule drafting.
 """

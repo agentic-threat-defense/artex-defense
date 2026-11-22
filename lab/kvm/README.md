@@ -1,6 +1,6 @@
-# Tier 3 Reproducible Air-Gapped KVM/QEMU Sensor + Target Lab
+# Tier 3 Reproducible Host-Only Isolated KVM/QEMU Sensor + Target Lab
 
-> **OpSec Invariant:** Both VMs attach **exclusively** to libvirt network `artex-lab-isolated` (`virbr-artex`, `192.168.250.0/24`), which has **no `<forward>` directive** and **no default gateway** in cloud-init. Clipboard and host-folder sharing are disabled.
+> **Isolation Boundary Note:** Both VMs attach **exclusively** to libvirt network `artex-lab-isolated` (`virbr-artex`, `192.168.250.0/24`), which has **no `<forward>` directive** and **no default gateway** in cloud-init (guests cannot route to WAN or LAN). Clipboard and host-folder sharing are disabled. Because VMs on a networked host still share the host hypervisor and host-only management bridge, this is a **host-only / non-routed isolated lab** — not a physical air-gap — and is intended for harmless behavioral telemetry replays and offline log validation, not detonating live untrusted malware.
 
 ## Architecture
 | VM | Static IP | MAC | Role | Telemetry Emitted |
@@ -10,16 +10,16 @@
 
 ## Quick-Start Workflow
 ```bash
-# 1. Verify KVM/QEMU tooling & air-gap invariant
+# 1. Verify KVM/QEMU tooling & non-routed network invariant
 ./lab/kvm/lab-ctl.sh check
 
-# 2. Download an official minimal cloud base image ONCE (e.g. Debian 12 GenericCloud):
-mkdir -p ~/.local/share/artex-kvm-lab/base
+# 2. Download an official minimal cloud base image ONCE into a qemu-traversable directory (0755):
+mkdir -p /var/tmp/artex-kvm-lab/base && chmod 755 /var/tmp/artex-kvm-lab /var/tmp/artex-kvm-lab/base
 curl -fL "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2" \
-  -o ~/.local/share/artex-kvm-lab/base/debian-12-genericcloud-amd64.qcow2
+  -o /var/tmp/artex-kvm-lab/base/debian-12-genericcloud-amd64.qcow2
 
-# 3. Boot both air-gapped VMs with thin CoW overlays + automatic `clean-baseline` snapshot
-./lab/kvm/lab-ctl.sh up ~/.local/share/artex-kvm-lab/base/debian-12-genericcloud-amd64.qcow2
+# 3. Boot both host-only isolated VMs with thin CoW overlays + automatic `clean-baseline` snapshot
+./lab/kvm/lab-ctl.sh up /var/tmp/artex-kvm-lab/base/debian-12-genericcloud-amd64.qcow2
 
 # 4. Run 100% benign behavioral replay inside 192.168.250.0/24
 python3 ./lab/kvm/benign_replay.py --target 192.168.250.20 --mode sawtooth

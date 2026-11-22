@@ -1,4 +1,4 @@
-"""100% harmless behavioral traffic replayer for air-gapped Docker Purple-Team Range.
+"""100% harmless behavioral traffic replayer for the non-routed isolated Docker Purple-Team Range.
 
 Generates ONLY benign HTTP/TLS wire traffic against the local isolated mock target (172.30.0.20)
 to exercise real Suricata 7, real Zeek LTS, and real Nginx -> `artex-hunt scan` pipelines.

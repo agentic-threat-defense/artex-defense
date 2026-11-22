@@ -1,4 +1,4 @@
-"""Automated validation for the reproducible air-gapped KVM/QEMU Sensor + Target Lab (`lab/kvm/`)."""
+"""Automated validation for the reproducible host-only isolated KVM/QEMU Sensor + Target Lab (`lab/kvm/`)."""
 
 import importlib.util
 import os
@@ -24,13 +24,13 @@ def _load_exporter():
     return mod
 
 
-def test_kvm_network_xml_enforces_strict_airgap() -> None:
+def test_kvm_network_xml_enforces_strict_host_only_isolation() -> None:
     xml_path = LAB_DIR / "network_artex_isolated.xml"
     tree = ET.parse(xml_path)
     root = tree.getroot()
     assert root.findtext("name") == "artex-lab-isolated"
     # HARD SECURITY INVARIANT: zero <forward> directive allowed
-    assert root.find("forward") is None, "Air-gapped network XML must NOT contain <forward>!"
+    assert root.find("forward") is None, "Host-only isolated network XML must NOT contain <forward>!"
     ip_el = root.find("ip")
     assert ip_el is not None and ip_el.attrib.get("address") == "192.168.250.1"
 
@@ -154,20 +154,20 @@ def test_zeek_ssl_uid_joins_sni_and_ja4_onto_conn_log_for_per_sni_sawtooth(tmp_p
     assert "llm_sawtooth_context_flow" in observed
 
 
-def test_lab_ctl_airgap_xml_check_ignores_xml_comments() -> None:
-    """`require_airgap_xml` and `require_airgap_stdin` must parse XML elements rather than grepping comments."""
+def test_lab_ctl_isolated_xml_check_ignores_xml_comments() -> None:
+    """`require_isolated_xml` and `require_isolated_stdin` must parse XML elements rather than grepping comments."""
     ctl = LAB_DIR / "lab-ctl.sh"
     xml_path = LAB_DIR / "network_artex_isolated.xml"
     res = subprocess.run(
-        ["bash", "-c", f'source <(sed "/^case /,\\$d" "{ctl}"); NET_XML="{xml_path}"; require_airgap_xml'],
+        ["bash", "-c", f'source <(sed "/^case /,\\$d" "{ctl}"); NET_XML="{xml_path}"; require_isolated_xml'],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert res.returncode == 0, f"require_airgap_xml failed on air-gapped XML: {res.stderr}"
+    assert res.returncode == 0, f"require_isolated_xml failed on isolated XML: {res.stderr}"
 
     res_stdin_ok = subprocess.run(
-        ["bash", "-c", f'source <(sed "/^case /,\\$d" "{ctl}"); require_airgap_stdin'],
+        ["bash", "-c", f'source <(sed "/^case /,\\$d" "{ctl}"); require_isolated_stdin'],
         input="<network><!-- no <forward> --><name>artex-lab-isolated</name></network>",
         capture_output=True,
         text=True,
@@ -176,10 +176,32 @@ def test_lab_ctl_airgap_xml_check_ignores_xml_comments() -> None:
     assert res_stdin_ok.returncode == 0
 
     res_stdin_bad = subprocess.run(
-        ["bash", "-c", f'source <(sed "/^case /,\\$d" "{ctl}"); require_airgap_stdin'],
+        ["bash", "-c", f'source <(sed "/^case /,\\$d" "{ctl}"); require_isolated_stdin'],
         input='<network><name>bad</name><forward mode="nat"/></network>',
         capture_output=True,
         text=True,
         check=False,
     )
     assert res_stdin_bad.returncode != 0
+
+
+def test_auditd_exporter_skips_failed_path_probes_resolves_ppid_and_decodes_hex() -> None:
+    """Real Linux kernel auditd emits `success=no` ENOENT PATH probes, `pid`/`ppid`, and hex-encoded EXECVE args."""
+    exporter = _load_exporter()
+    # Hex for `pgrep -a csfalcon` -> 7067726570202D6120637366616C636F6E
+    audit_lines = [
+        'type=SYSCALL msg=audit(1795369199.100:250): arch=c000003e syscall=59 success=yes exit=0 ppid=900 pid=910 auid=1000 uid=1000 comm="bash" exe="/usr/bin/bash"',
+        'type=EXECVE msg=audit(1795369199.100:250): argc=3 a0="bash" a1="-c" a2=7067726570202D6120637366616C636F6E',
+        # Failed PATH lookup (success=no, exit=-2, no EXECVE) -> must be skipped
+        'type=SYSCALL msg=audit(1795369199.116:251): arch=c000003e syscall=59 success=no exit=-2 ppid=910 pid=911 auid=1000 uid=1000 comm="env" exe="/usr/bin/env"',
+        # Child process referencing ppid=910 -> parent_process must resolve to /usr/bin/bash
+        'type=SYSCALL msg=audit(1795369199.120:252): arch=c000003e syscall=59 success=yes exit=0 ppid=910 pid=912 auid=1000 uid=1000 comm="pgrep" exe="/usr/bin/pgrep"',
+        'type=EXECVE msg=audit(1795369199.120:252): argc=3 a0="pgrep" a1="-a" a2="csfalcon"',
+    ]
+    events = exporter.convert_auditd_lines(audit_lines)
+    assert len(events) == 2
+    assert events[0]["process"] == "/usr/bin/bash"
+    assert events[0]["command_line"] == "bash -c pgrep -a csfalcon"
+    assert events[1]["process"] == "/usr/bin/pgrep"
+    assert events[1]["parent_process"] == "/usr/bin/bash"
+    assert events[1]["command_line"] == "pgrep -a csfalcon"
