@@ -251,8 +251,6 @@ AGENTIC_USER_AGENTS: tuple[str, ...] = (
     "artex-pentest/",
     "artex-verify/",
     "artex-spawn/",
-    "artex-agent",
-    "artex-judge-",
     "artex-selfupdate",
     "artex-i",
     "artex/1.0",
@@ -286,7 +284,6 @@ AGENTIC_USER_AGENTS: tuple[str, ...] = (
     "nuclei",
     "norma-agent",
     "artex/",
-    "artex-",
     "scopeweaver",
     "python-httpx",
     "go-http-client",
@@ -303,8 +300,6 @@ EXPLICIT_FRAMEWORK_UAS: tuple[str, ...] = (
     "artex-pentest/",
     "artex-verify/",
     "artex-spawn/",
-    "artex-agent",
-    "artex-judge-",
     "artex-selfupdate",
     "artex/1.0",
     "artexverify/",
@@ -326,6 +321,12 @@ EXPLICIT_FRAMEWORK_UAS: tuple[str, ...] = (
     "kimi-cli/",
     "opencode/",
     "hermes-agent/",
+)
+
+# Token-bounded Dragos/CloudTrail ARTEX UAs (avoids unanchored `smartex-agent` / `smartex-judge-*` FPs)
+EXPLICIT_BOUNDED_ARTEX_UA_RE = re.compile(
+    r"(?:^|[^a-z0-9_])artex-(?:agent(?=$|[^a-z0-9_])|judge-[a-z0-9_-]+)",
+    re.IGNORECASE,
 )
 
 # Behavioral catch-all for LLM-invented "self-proclaimed authorized" scanner User-Agents
@@ -572,19 +573,33 @@ EC2_USERDATA_ACTION_RE = re.compile(r"(describeinstanceattribute.*userdata|userd
 SSM_SENSITIVE_ACTION_RE = re.compile(r"(sendcommand|getparametersbypath|getparameter.*withdecryption)", re.IGNORECASE)
 GRAPHQL_INTROSPECTION_RE = re.compile(r"(__schema|__type\b|introspectionquery)", re.IGNORECASE)
 AI_MCP_DISCOVERY_PATH_RE = re.compile(
-    r"(^|/)(?:mcp(?:/|$)|mcp-rest/test/tools/list|mcp-rest/|sse(?:/|$)|\.well-known/agent\.json|v1/models|api/tags|api/ps|gradio_api|v1/assistants)",
+    r"(^|/)(?:mcp(?:/|$)|mcp-rest/|sse(?:/|$)|\.well-known/agent\.json|v1/models|api/tags|api/ps|gradio_api|v1/assistants)",
     re.IGNORECASE,
 )
 # Behavioral process-tree signal (ThreatDefence v2.7.0): AI agent / coding harness shell spawning
-# explicit offensive pentest/exploitation tools (benign dev tools like git/pytest/npm/curl are never flagged)
+# explicit offensive pentest/exploitation tools (benign dev tools like git/grep/pytest/npm/curl are never flagged)
 AI_AGENT_PARENT_RE = re.compile(
     r"(?:^|[/\\])(?:claude(?:\.exe)?|codex(?:\.exe)?|opencode(?:\.exe)?|qwen-code(?:\.exe)?|"
     r"kimi-cli(?:\.exe)?|hermes-agent(?:\.exe)?)$|shell-snapshots|claude_code_shell_launcher_script",
     re.IGNORECASE,
 )
-OFFENSIVE_TOOL_CHILD_RE = re.compile(
-    r"(?:^|[/\\\s\"'])(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
-    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump)(?:\.exe)?(?=$|[\s\"'])",
+AI_AGENT_CMD_WRAPPER_RE = re.compile(
+    r"(?:shell-snapshots|claude_code_shell_launcher_script)",
+    re.IGNORECASE,
+)
+AI_AGENT_SHELL_PROC_RE = re.compile(
+    r"(?:^|[/\\])(?:sh|bash|zsh|dash|fish|cmd\.exe|powershell\.exe|pwsh(?:\.exe)?|python(?:\d+(?:\.\d+)?)?(?:\.exe)?)$",
+    re.IGNORECASE,
+)
+OFFENSIVE_TOOL_PROC_RE = re.compile(
+    r"(?:^|[/\\])(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
+    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump)(?:\.exe)?$",
+    re.IGNORECASE,
+)
+OFFENSIVE_TOOL_CMD_HEAD_RE = re.compile(
+    r"(?:^|(?:&&|\|\||[;|]|-c\s+['\"]?|\bsudo\s+|\beval\s+))\s*(?:[^\s;|&'\"]*[/\\])?"
+    r"(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
+    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump)(?:\.exe)?(?=$|[\s\"';|&])",
     re.IGNORECASE,
 )
 SENSITIVE_CONFIG_FILE_RE = re.compile(
@@ -1124,8 +1139,10 @@ def _inspect_window_signals(
                     reasons.add("webhook_exfil_egress")
                     indicators.add(f"server_bot_c2:{domain}")
 
-        if any(sig in ua_lower for sig in EXPLICIT_FRAMEWORK_UAS) or (
-            ua_raw and SELF_PROCLAIMED_AUTH_UA_RE.search(ua_raw)
+        if (
+            any(sig in ua_lower for sig in EXPLICIT_FRAMEWORK_UAS)
+            or (ua_raw and EXPLICIT_BOUNDED_ARTEX_UA_RE.search(ua_raw))
+            or (ua_raw and SELF_PROCLAIMED_AUTH_UA_RE.search(ua_raw))
         ):
             reasons.add("agentic_user_agent_burst")
             indicators.add(f"explicit_framework_ua:{ua_raw[:60]}")
@@ -1205,11 +1222,19 @@ def _inspect_window_signals(
             indicators.add(f"llm_api_key_harvest:{cmd_raw[:80]}")
         parent_raw = str(ev.get("parent_process") or "")
         proc_raw = str(ev.get("process") or "")
-        if (
-            ev.get("surface") == "endpoint"
-            and (AI_AGENT_PARENT_RE.search(parent_raw) or AI_AGENT_PARENT_RE.search(cmd_raw))
-            and (OFFENSIVE_TOOL_CHILD_RE.search(proc_raw) or OFFENSIVE_TOOL_CHILD_RE.search(cmd_raw))
-        ):
+        is_ai_agent_parent = bool(
+            (parent_raw and AI_AGENT_PARENT_RE.search(parent_raw))
+            or (cmd_raw and AI_AGENT_CMD_WRAPPER_RE.search(cmd_raw))
+        )
+        is_offensive_child = bool(
+            (proc_raw and OFFENSIVE_TOOL_PROC_RE.search(proc_raw))
+            or (
+                cmd_raw
+                and (not proc_raw or AI_AGENT_SHELL_PROC_RE.search(proc_raw))
+                and OFFENSIVE_TOOL_CMD_HEAD_RE.search(cmd_raw)
+            )
+        )
+        if ev.get("surface") == "endpoint" and is_ai_agent_parent and is_offensive_child:
             reasons.add("ai_agent_spawns_offensive_tool")
             indicators.add(f"ai_agent_tool:{parent_raw or 'shell'}->{proc_raw or cmd_raw[:50]}")
         if ev.get("surface") == "endpoint" and cmd_raw:
