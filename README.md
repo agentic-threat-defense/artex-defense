@@ -96,6 +96,7 @@ python3 -m venv .venv
 - [docs/soc_siem_validation_playbook.md](docs/soc_siem_validation_playbook.md) — Positive-control schema checks and 7-day shadow-mode tuning
 - [docs/production_adaptation_pack.md](docs/production_adaptation_pack.md) — YAF IPFIX, JA4X/JA4S, and Spark SQL query templates
 - [docs/blind_stress_test_log.md](docs/blind_stress_test_log.md) — Multi-round blind out-of-distribution stress-test findings
+- [docs/ADVERSARIAL_REVIEW_BOARD.md](docs/ADVERSARIAL_REVIEW_BOARD.md) — 5-seat fresh-context Adversarial Review Board & CTO release-gate methodology
 - [docs/artex_threat_model.md](docs/artex_threat_model.md) & [docs/edge_to_endpoint_hardening.md](docs/edge_to_endpoint_hardening.md) — Threat model and hardening controls
 - [docs/quarantine_sop.md](docs/quarantine_sop.md) — Tier 1–3 quarantine handling and artifact OpSec
 - [docs/ROADMAP.md](docs/ROADMAP.md) — Known limitations and open engineering work
