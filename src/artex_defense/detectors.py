@@ -839,16 +839,17 @@ def _detect_sawtooth_context_flow(events: list[dict[str, Any]]) -> list[str]:
 
 
 def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]:
-    """Detect autonomous AI agent loops inside persistent TLS 1.3 (HTTP/2 / Keep-Alive) TCP streams.
+    """Detect autonomous AI agent loops inside persistent TLS 1.2/1.3 (HTTP/2 / Keep-Alive) TCP streams.
 
-    Separates autonomous tool-calling agents (even over custom self-hosted LiteLLM proxies with large
-    30-40KB system prompts) from benign REST/analytics traffic and human chat users via 4 invariants:
-      1. Server LLM inference latency >= 0.35s (eliminates 10-80ms REST/analytics APIs).
+    Separates autonomous tool-calling agents (including fast GPU/vLLM relays, WAN tools taking 1-5s,
+    mid-stream reasoning pauses, and context compaction) from benign REST/analytics traffic and human
+    web-LLM users via 4 invariants:
+      1. Server LLM inference latency >= 0.18s (eliminates 10-80ms REST/analytics APIs).
       2. Non-trivial prompt + streamed completion payloads (`bytes_out >= 4000`, `bytes_in >= 800`).
-      3. Sidecar-resilient monotonic outbound context growth (>=4 main turns, >=75% strictly increasing,
-         net growth >= +2000B, peak >= 10000B).
-      4. Autonomous machine turnaround (>=2 fast turnarounds <= 1.5s and median turnaround <= 2.5s,
-         eliminating human chat users who pause 5-60s to read and type).
+      3. Sidecar- and compaction-resilient monotonic outbound context growth (>=4 main turns, peak >= 10000B,
+         and either a >=4-turn climb >= +2000B, >=75% positive steps totaling >= +2000B, or >=2 compacted climbs).
+      4. Autonomous tool-loop turnaround (>=2 turnarounds <= 5.0s and median turnaround <= 6.0s,
+         accommodating real WAN tools while still rejecting human chat users who pause 8-60s+).
     """
     by_stream: dict[tuple[str, str], list[tuple[float, int, int, float, float | None]]] = {}
     for ev in events:
@@ -890,7 +891,7 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
             continue
         pts.sort(key=lambda x: x[0])
         # Filter to substantive LLM-like turns (non-trivial prompt/response + real server inference latency)
-        llm_turns = [p for p in pts if p[1] >= 4000 and p[2] >= 800 and p[3] >= 0.35]
+        llm_turns = [p for p in pts if p[1] >= 4000 and p[2] >= 800 and p[3] >= 0.18]
         if len(llm_turns) < 4:
             continue
 
@@ -907,23 +908,41 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
             continue
 
         outs = [p[1] for p in main_turns]
+        climbs: list[list[int]] = []
+        cur_climb = [outs[0]]
+        for b in outs[1:]:
+            if b > cur_climb[-1]:
+                cur_climb.append(b)
+            else:
+                climbs.append(cur_climb)
+                cur_climb = [b]
+        climbs.append(cur_climb)
+
+        best_climb = max(climbs, key=len)
+        compacted_climbs = [c for c in climbs if len(c) >= 3 and (c[-1] - c[0]) >= 2000]
         inc_transitions = sum(1 for a, b in zip(outs, outs[1:]) if b > a)
         mono_ratio = inc_transitions / max(len(outs) - 1, 1)
-        net_growth = outs[-1] - outs[0]
+        pos_growth = sum(max(0, b - a) for a, b in zip(outs, outs[1:]))
         peak_out = max(outs)
 
-        # Evaluate autonomous client turnaround across turns (use explicit wire turnaround when present)
+        growth_ok = (
+            (len(best_climb) >= 4 and (best_climb[-1] - best_climb[0]) >= 2000)
+            or (mono_ratio >= 0.75 and pos_growth >= 2000)
+            or (len(compacted_climbs) >= 2)
+        )
+
+        # Evaluate autonomous client turnaround across turns (accommodates 1-5s WAN tools, rejects >=8s human chat)
         turnarounds = [p[4] for p in main_turns[1:] if p[4] is not None]
         if not turnarounds:
             continue
         sorted_ta = sorted(turnarounds)
         med_ta = sorted_ta[len(sorted_ta) // 2]
-        fast_ta = sum(1 for t in turnarounds if t <= 1.5)
+        fast_ta = sum(1 for t in turnarounds if t <= 5.0)
 
-        if mono_ratio >= 0.75 and net_growth >= 2000 and peak_out >= 10000 and fast_ta >= 2 and med_ta <= 2.5:
+        if growth_ok and peak_out >= 10000 and fast_ta >= 2 and med_ta <= 6.0:
             seen_dests.add(dest)
             hits.append(
-                f"tls_agent_loop:{dest}(turns={len(main_turns)},growth=+{net_growth}B,peak={peak_out}B,med_turn={med_ta:.2f}s)"
+                f"tls_agent_loop:{dest}(turns={len(main_turns)},growth=+{pos_growth}B,peak={peak_out}B,med_turn={med_ta:.2f}s)"
             )
     return hits
 

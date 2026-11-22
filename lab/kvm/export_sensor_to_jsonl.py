@@ -204,13 +204,13 @@ def extract_pcap_tls_turns(
     pcap_path: Path,
     *,
     ssl_by_tuple: dict[tuple[str, int, str, int], tuple[str, str]] | None = None,
-    burst_gap_sec: float = 1.5,
+    min_reversal_bytes: int = 128,
 ) -> list[dict[str, Any]]:
     """Stream-parse a PCAP (Ethernet DLT=1, Linux SLL DLT=113, or SLL2 DLT=276) into persistent TLS turn events.
 
-    Slices single-socket HTTP/2 or Keep-Alive TLS 1.3 streams into directional `(OUT, IN)` turns so
-    `artex-hunt` can detect autonomous agent loops even when Zeek `conn.log` collapses an entire
-    multi-minute session into a single flow row.
+    Slices single-socket HTTP/2 or Keep-Alive TLS 1.2/1.3 streams into directional `(OUT, IN)` turns by
+    coalescing same-direction payload bursts until the opposite direction sends `>= min_reversal_bytes`
+    (ignoring tiny HTTP/2 `WINDOW_UPDATE`/`PING` control frames and surviving multi-second reasoning pauses).
     """
     streams: dict[tuple[str, int, str, int], list[tuple[float, str, int]]] = {}
     tracked_ports = set(TLS_LLM_PORTS)
@@ -301,7 +301,11 @@ def extract_pcap_tls_turns(
         pkts.sort(key=lambda x: x[0])
         bursts: list[list[Any]] = []
         for ts, direction, nbytes in pkts:
-            if bursts and bursts[-1][1] == direction and (ts - bursts[-1][2]) < burst_gap_sec:
+            # Ignore tiny opposite-direction HTTP/2 WINDOW_UPDATE/PING/TLS control frames so
+            # mid-stream server SSE responses are not shattered into fragments.
+            if nbytes < min_reversal_bytes and bursts and bursts[-1][1] != direction:
+                continue
+            if bursts and bursts[-1][1] == direction:
                 bursts[-1][2] = ts
                 bursts[-1][3] += nbytes
             else:
@@ -319,8 +323,8 @@ def extract_pcap_tls_turns(
             else:
                 i += 1
 
-        # Emit only streams showing real multi-turn server inference latency (>=2 turns with lat >= 0.25s)
-        if len(turns) < 3 or sum(1 for t in turns if (t[3] - t[1]) >= 0.25) < 2:
+        # Emit only streams showing real multi-turn server inference latency (>=2 turns with lat >= 0.18s)
+        if len(turns) < 3 or sum(1 for t in turns if (t[3] - t[1]) >= 0.18) < 2:
             continue
 
         src, sport, dst, dport = key

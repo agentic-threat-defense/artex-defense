@@ -306,3 +306,101 @@ def test_persistent_tls_agent_turn_loop_detects_single_socket_agent_and_rejects_
     # 4. Guard: explicit nonexistent --pcap path raises FileNotFoundError instead of silently falling back
     with pytest.raises(FileNotFoundError):
         exporter.convert_directory(raw_h, tmp_path / "missing.jsonl", pcap_path=tmp_path / "does_not_exist.pcap")
+
+
+def test_persistent_tls_turn_slicer_generalizes_across_wan_tools_vllm_compaction_and_benign_traps(tmp_path: Path) -> None:
+    """De-overtuning regression suite: 6 realistic agent variations (TP) + 5 benign persistent-TLS traps (0 FP)."""
+    exporter = _load_exporter()
+
+    def run_case(name: str, pkts: list[tuple[float, str, int, str, int, int]]) -> list[str]:
+        pcap = tmp_path / f"{name}.pcap"
+        _write_synthetic_pcap(pcap, pkts, linktype=1)
+        raw = tmp_path / f"{name}_raw"
+        raw.mkdir()
+        out_j = tmp_path / f"{name}.jsonl"
+        exporter.convert_directory(raw, out_j, pcap_path=pcap)
+        return [r for c in scan_telemetry_file(out_j) for r in c.reasons]
+
+    # TP 1: Agent running real 3-5s WAN tools (nmap/ffuf/curl) between turns
+    pkts: list[tuple[float, str, int, str, int, int]] = []
+    t = 1795400000.0
+    for ob, ib, tool_s in [(32000, 90000, 3.8), (34500, 85000, 4.5), (37100, 95000, 2.9), (39800, 92000, 5.2), (43000, 88000, 0.0)]:
+        pkts.append((t, "192.0.2.10", 50001, "198.51.100.1", 443, ob))
+        t += 1.4
+        pkts.append((t, "198.51.100.1", 443, "192.0.2.10", 50001, ib))
+        t += tool_s
+    assert "encrypted_tls_agent_turn_loop" in run_case("a1_wan_tools", pkts)
+
+    # TP 2: Fast H100/vLLM proxy (0.22s TTFT)
+    pkts = []
+    t = 1795400000.0
+    for ob, ib in [(28000, 45000), (30200, 48000), (32500, 44000), (35100, 50000), (38000, 47000)]:
+        pkts.append((t, "192.0.2.10", 50002, "198.51.100.2", 443, ob))
+        t += 0.22
+        pkts.append((t, "198.51.100.2", 443, "192.0.2.10", 50002, ib))
+        t += 0.30
+    assert "encrypted_tls_agent_turn_loop" in run_case("a2_fast_vllm", pkts)
+
+    # TP 3: HTTP/2 48B WINDOW_UPDATE interleaved mid-SSE-stream + 2.5s reasoning pause
+    pkts = []
+    t = 1795400000.0
+    for ob, ib in [(35000, 90000), (36500, 95000), (38200, 92000), (40100, 98000), (42300, 96000)]:
+        pkts.append((t, "192.0.2.10", 50003, "198.51.100.3", 443, ob))
+        t += 1.5
+        pkts.append((t, "198.51.100.3", 443, "192.0.2.10", 50003, 12000))
+        t += 0.3
+        pkts.append((t, "192.0.2.10", 50003, "198.51.100.3", 443, 48))  # H2 WINDOW_UPDATE
+        t += 2.5  # reasoning thinking pause mid-stream
+        pkts.append((t, "198.51.100.3", 443, "192.0.2.10", 50003, ib - 12000))
+        t += 0.15
+    assert "encrypted_tls_agent_turn_loop" in run_case("a3_h2_reasoning_pause", pkts)
+
+    # TP 4: Mid-session context compaction (35K->37K->39K -> compact to 18K -> 21K -> 24K)
+    pkts = []
+    t = 1795400000.0
+    for ob, ib in [(35000, 60000), (37000, 62000), (39000, 58000), (18000, 55000), (21000, 60000), (24000, 61000)]:
+        pkts.append((t, "192.0.2.10", 50004, "198.51.100.4", 443, ob))
+        t += 1.3
+        pkts.append((t, "198.51.100.4", 443, "192.0.2.10", 50004, ib))
+        t += 0.2
+    assert "encrypted_tls_agent_turn_loop" in run_case("a4_compaction", pkts)
+
+    # FP 1: Fast-reading human web-LLM user (8.5-12s pauses) -> 0 candidates
+    pkts = []
+    t = 1795400000.0
+    for ob, ib, pause in [(6000, 12000, 9.0), (9000, 14000, 11.0), (12500, 11000, 8.5), (16000, 15000, 12.0), (20000, 13000, 0.0)]:
+        pkts.append((t, "192.0.2.20", 51001, "198.51.100.11", 443, ob))
+        t += 1.6
+        pkts.append((t, "198.51.100.11", 443, "192.0.2.20", 51001, ib))
+        t += pause
+    assert run_case("b1_fast_human", pkts) == []
+
+    # FP 2: Chunked S3/Docker upload (fixed 64KB chunks) -> 0 candidates
+    pkts = []
+    t = 1795400000.0
+    for _ in range(6):
+        pkts.append((t, "192.0.2.20", 51002, "198.51.100.12", 443, 65536))
+        t += 0.45
+        pkts.append((t, "198.51.100.12", 443, "192.0.2.20", 51002, 1200))
+        t += 0.05
+    assert run_case("b2_chunked_upload", pkts) == []
+
+    # FP 3: Slow BI/GraphQL dashboard (chaotic sizes, 1.2s DB latency) -> 0 candidates
+    pkts = []
+    t = 1795400000.0
+    for ob, ib in [(8000, 45000), (14000, 12000), (6500, 88000), (19000, 5400), (9200, 31000)]:
+        pkts.append((t, "192.0.2.20", 51003, "198.51.100.13", 443, ob))
+        t += 1.2
+        pkts.append((t, "198.51.100.13", 443, "192.0.2.20", 51003, ib))
+        t += 0.2
+    assert run_case("b3_bi_graphql", pkts) == []
+
+    # FP 4: Slow API pagination (+50B req, growing resp) -> 0 candidates
+    pkts = []
+    t = 1795400000.0
+    for ob, ib in [(4200, 20000), (4250, 40000), (4300, 60000), (4350, 80000), (4400, 100000)]:
+        pkts.append((t, "192.0.2.20", 51004, "198.51.100.14", 443, ob))
+        t += 0.8
+        pkts.append((t, "198.51.100.14", 443, "192.0.2.20", 51004, ib))
+        t += 0.1
+    assert run_case("b4_api_pagination", pkts) == []
