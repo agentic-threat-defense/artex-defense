@@ -97,23 +97,32 @@ def test_compiled_siem_packs_pass_real_wire_schema_and_syntax_linter(tmp_path: P
     assert report["all_ok"] is True
     by_key = {t["key"]: t for t in report["targets"]}
 
-    # 1. KQL packs: no double-quoted identifiers, no single-quoted string-literal field names,
-    #    and no quoted string ports on integer columns
+    # 1. KQL packs: no double-quoted identifiers, no bracket-quoted dotted JSON paths,
+    #    no quoted string ports on integer columns, and no `=~` on booleans
     for kql_key in ("kusto_generic", "kusto_mde_xdr", "kusto_sentinel_asim"):
         text = Path(by_key[kql_key]["exported_file"]).read_text(encoding="utf-8")
         assert "''c-uri''" not in text, f"{kql_key} emitted double-quoted field"
         assert "''" not in text, f"{kql_key} emitted double-quoted identifier"
+        assert "['requestParameters." not in text, f"{kql_key} bracket-quoted nested JSON path"
+        assert "['status.errorCode']" not in text, f"{kql_key} bracket-quoted nested JSON path"
+        assert "['debugContext." not in text, f"{kql_key} bracket-quoted nested JSON path"
         assert 'in~ ("8787"' not in text, f"{kql_key} emitted quoted string ports on integer column"
         assert 'in~ ("7000215"' not in text, f"{kql_key} emitted quoted string Entra errorCode"
         assert "=~ true" not in text and "=~ false" not in text, f"{kql_key} used string operator =~ on bool"
+        if kql_key == "kusto_generic":
+            assert "requestParameters.withDecryption == true" in text
+            assert "status.errorCode in (7000215, 7000222, 500121)" in text
         if kql_key in ("kusto_mde_xdr", "kusto_sentinel_asim"):
             assert "in (8787, 8788, 8790, 8890)" in text, f"{kql_key} missing unquoted integer port list"
 
     # 2. Elastic ES|QL pack: every *.caseless like/in literal must be all-lowercase,
+    #    ECS keyword fields (event.code, azure.signinlogs.result_type) must use quoted strings,
     #    and DNS ComputerName must map to ECS winlog.computer_name/host.name (never winlog.event_data.Computer)
     esql_text = Path(by_key["esql_ecs"]["exported_file"]).read_text(encoding="utf-8")
     assert "winlog.event_data.Computer" not in esql_text
     assert "winlog.computer_name" in esql_text or "host.name" in esql_text
+    assert 'event.code in ("113015", "716039")' in esql_text
+    assert 'azure.signinlogs.result_type in ("7000215", "7000222", "500121")' in esql_text
     for match in re.finditer(r'\b[\w.]+\.caseless\s+like\s+"([^"]+)"', esql_text):
         lit = match.group(1)
         assert lit == lit.lower(), f"ES|QL .caseless literal contains uppercase chars: {lit!r}"

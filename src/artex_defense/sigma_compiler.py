@@ -32,6 +32,13 @@ from sigma.validation import SigmaValidator
 from sigma.validators.core import validators as core_validators
 
 _KQL_SIMPLE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_KQL_DOTTED_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+_ECS_KEYWORD_FIELDS: frozenset[str] = frozenset(
+    {
+        "event.code",
+        "azure.signinlogs.result_type",
+    }
+)
 
 
 def _lowercase_sigma_string(val: SigmaString) -> SigmaString:
@@ -42,13 +49,26 @@ def _lowercase_sigma_string(val: SigmaString) -> SigmaString:
 
 
 class HardenedKustoBackend(KustoBackend):
-    """KustoBackend fixed for valid KQL identifier quoting (['field']), boolean `==`, and unquoted numeric in (...)."""
+    """KustoBackend fixed for valid KQL identifier quoting (['field']), dynamic dotted paths, boolean `==`, and numeric `in (...)`."""
 
     def escape_and_quote_field(self, field_name: str) -> str:
-        if _KQL_SIMPLE_IDENT_RE.match(field_name):
+        # Leave plain identifiers and clean dotted dynamic-JSON paths (e.g. status.errorCode,
+        # requestParameters.filterPattern) unbracketed so KQL resolves nested JSON properties
+        # instead of looking for a literal flat column containing a dot.
+        if _KQL_DOTTED_PATH_RE.match(field_name):
             return field_name
         if field_name.startswith("['") and field_name.endswith("']"):
             return field_name
+        if "." in field_name:
+            parts = field_name.split(".")
+            rendered: list[str] = []
+            for idx, seg in enumerate(parts):
+                if _KQL_SIMPLE_IDENT_RE.match(seg):
+                    rendered.append(seg if idx == 0 else f".{seg}")
+                else:
+                    esc = seg.replace("'", "\\'")
+                    rendered.append(f"['{esc}']")
+            return "".join(rendered)
         escaped = field_name.replace("'", "\\'")
         return f"['{escaped}']"
 
@@ -130,7 +150,7 @@ class HardenedKustoBackend(KustoBackend):
 
 
 class HardenedESQLBackend(ESQLBackend):
-    """ESQLBackend fixed to lowercase literals matched against Elastic ECS `*.caseless` fields."""
+    """ESQLBackend fixed for lowercase `*.caseless` literals and string-typed ECS `keyword` fields."""
 
     def convert_condition_field_eq_val_str(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
@@ -142,25 +162,44 @@ class HardenedESQLBackend(ESQLBackend):
             )
         return super().convert_condition_field_eq_val_str(cond, state)
 
+    def convert_condition_field_eq_val_num(
+        self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
+    ) -> str | DeferredQueryExpression:
+        if cond.field in _ECS_KEYWORD_FIELDS and isinstance(cond.value, SigmaNumber):
+            str_cond = ConditionFieldEqualsValueExpression(
+                field=cond.field,
+                value=SigmaString(str(cond.value.number)),
+            )
+            return super().convert_condition_field_eq_val_str(str_cond, state)
+        return super().convert_condition_field_eq_val_num(cond, state)
+
     def convert_condition_as_in_expression(
         self, cond: ConditionOR | ConditionAND, state: ConversionState
     ) -> str | DeferredQueryExpression:
-        if (
-            cond.args
-            and isinstance(cond.args[0], ConditionFieldEqualsValueExpression)
-            and cond.args[0].field
-            and cond.args[0].field.endswith(".caseless")
-        ):
-            lowered_args = [
-                ConditionFieldEqualsValueExpression(
-                    field=arg.field,
-                    value=_lowercase_sigma_string(arg.value) if isinstance(arg.value, SigmaString) else arg.value,
-                )
-                if isinstance(arg, ConditionFieldEqualsValueExpression)
-                else arg
-                for arg in cond.args
-            ]
-            cond = type(cond)(lowered_args)
+        if cond.args and isinstance(cond.args[0], ConditionFieldEqualsValueExpression):
+            field_name = cond.args[0].field
+            if field_name and field_name.endswith(".caseless"):
+                lowered_args = [
+                    ConditionFieldEqualsValueExpression(
+                        field=arg.field,
+                        value=_lowercase_sigma_string(arg.value) if isinstance(arg.value, SigmaString) else arg.value,
+                    )
+                    if isinstance(arg, ConditionFieldEqualsValueExpression)
+                    else arg
+                    for arg in cond.args
+                ]
+                cond = type(cond)(lowered_args)
+            elif field_name in _ECS_KEYWORD_FIELDS:
+                str_args = [
+                    ConditionFieldEqualsValueExpression(
+                        field=arg.field,
+                        value=SigmaString(str(arg.value.number)) if isinstance(arg.value, SigmaNumber) else arg.value,
+                    )
+                    if isinstance(arg, ConditionFieldEqualsValueExpression)
+                    else arg
+                    for arg in cond.args
+                ]
+                cond = type(cond)(str_args)
         return super().convert_condition_as_in_expression(cond, state)
 
 
