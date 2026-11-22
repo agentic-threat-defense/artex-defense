@@ -57,6 +57,11 @@ ALLOWED_FEED_HOSTS: frozenset[str] = frozenset(
         "www.greynoise.io",
         "threatdefence.com",
         "hunt.io",
+        "research.checkpoint.com",
+        "socradar.io",
+        "blog.ostorlab.co",
+        "cloudsecurityalliance.org",
+        "feeds.feedburner.com",
         # National / International CERTs, Agencies & Diaries
         "www.cisa.gov",
         "www.ic3.gov",
@@ -103,6 +108,12 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     FeedSpec("Okta Security (sec.okta.com)", "https://sec.okta.com/rss.xml"),
     FeedSpec("Arctic Wolf Security Bulletins", "https://arcticwolf.com/resources/tag/security-bulletins/feed/"),
     FeedSpec("GreyNoise Blog", "https://www.greynoise.io/blog/rss.xml"),
+    FeedSpec("Check Point Research", "https://research.checkpoint.com/feed/"),
+    FeedSpec("SOCRadar Threat Research", "https://socradar.io/feed/"),
+    FeedSpec("Ostorlab Blog", "https://blog.ostorlab.co/feed/rss.xml"),
+    FeedSpec("Cloud Security Alliance", "https://cloudsecurityalliance.org/feed/"),
+    FeedSpec("ThreatDefence Blog", "https://threatdefence.com/feed"),
+    FeedSpec("The Hacker News", "https://feeds.feedburner.com/TheHackersNews"),
     FeedSpec("SANS ISC Handler Diaries", "https://isc.sans.edu/rssfeed.xml"),
     FeedSpec("Risky Business", "https://risky.biz/feeds/risky-business/"),
     # National & International CERTs / Advisories (US, UK, EU, JP, AU, KR)
@@ -118,13 +129,16 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
 )
 
 WATCHTOWER_RELEVANCE_RE = re.compile(
-    r"(\bartex\b|\bantifox\b|\bscopeweaver\b|\bpojun\b|\bforang\b|guanlan\s*sec|\bbloodalchemy\b|"
-    r"norma/|artexprobe|artex-probe|\bhexstrike\b|\bcyberstrikeai\b|\bpentagi\b|\bcairn\b|"
+    r"(\bartex\b|artex\s*pro|autumn-27|\bantifox\b|\bscopeweaver\b|\bpojun\b|\bforang\b|guanlan\s*sec|"
+    r"\bbloodalchemy\b|\bdarksword\b|\bbabidighost\b|norma/|artexprobe|artex-probe|zzz[-_]nonexistent|"
+    r"\bhexstrike\b|\bcyberstrikeai\b|\bpentagi\b|\bcairn\b|"
     r"\bstrix\b.*\bagent|\bshannon\b.*\bagent|\breaper\b.*\bartex|hermes[-_ ]agent|agent[-_ ]zero|"
     r"\bcarbonato\b|qwen[-_ ]code|kimi[-_ ]cli|\bopencode\b|exploit_agent|storm-0940|"
     r"storm-3358|vapor\s*panda|madpot|openbullet|sub2api|xcai\.pro|lanmao666|"
     r"agentic\s+(?:attack|pentest|offensive|exploit|framework|intrusion)|"
     r"autonomous\s+(?:pentest|penetration|exploit|red\s*team|offensive)|"
+    r"\bmcp\b.*(?:pentest|offensive|exploit|agent)|"
+    r"(?:litellm|ragflow|open\s*webui|langflow|dify|ollama).*(?:exploit|cve|rce|api\s*key|exposed|hijack|steal|harvest|attack|artex|compromise)|"
     r"okta.*(?:mfa|2fa|fatigue|agent|workflow|brute)|entra.*(?:service\s+principal|mfa\s+fatigue)|"
     r"인공지능.*(?:공격|침해|해킹|에이전트)|AI\s*에이전트|자율\s*침투|아텍스)",
     re.IGNORECASE,

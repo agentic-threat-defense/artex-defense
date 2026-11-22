@@ -60,6 +60,12 @@ def test_validate_feed_url_enforces_https_and_strict_allowlist() -> None:
     validate_feed_url("https://sec.okta.com/rss.xml")
     validate_feed_url("https://www.greynoise.io/blog/rss.xml")
     validate_feed_url("https://isc.sans.edu/rssfeed.xml")
+    validate_feed_url("https://research.checkpoint.com/feed/")
+    validate_feed_url("https://socradar.io/feed/")
+    validate_feed_url("https://blog.ostorlab.co/feed/rss.xml")
+    validate_feed_url("https://cloudsecurityalliance.org/feed/")
+    validate_feed_url("https://threatdefence.com/feed")
+    validate_feed_url("https://feeds.feedburner.com/TheHackersNews")
 
     with pytest.raises(ValueError, match="HTTPS"):
         validate_feed_url("http://unit42.paloaltonetworks.com/feed/")
