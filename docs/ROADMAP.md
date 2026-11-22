@@ -16,7 +16,7 @@
   - Read-only operator/relay host forensic triage (`artex-hunt host-triage`).
   - Non-routed isolated Docker Purple-Team range (`lab/docker-range/`, validated live against real Suricata 7, Zeek LTS, YARA, and Nginx) and reproducible host-only isolated KVM/QEMU sensor + target lab (`lab/kvm/`, validated live against real Linux kernel `auditd` and Zeek).
 - **Scheduled Defensive Threat-Intel Watchtower (`artex-hunt watchtower` + `scripts/systemd/`):**
-  - 52 live-verified allowlisted HTTPS public defensive feeds (international CERTs, cloud/IdP TI, defensive repos, and categorized GitHub `releases.atom` tracking), SQLite deduplication (`quarantine/watchtower/state.sqlite`), streaming XML size & prolog DTD guards, optional local Ollama GPU gap analysis, and `systemd` 6-hour user timer templates.
+  - 54 live-verified allowlisted HTTPS public defensive feeds (international CERTs, cloud/IdP TI, PCAP/NSM archives, defensive repos, and categorized GitHub `releases.atom` tracking), SQLite deduplication (`quarantine/watchtower/state.sqlite`), streaming XML size & prolog DTD guards, optional local Ollama GPU gap analysis, and `systemd` 6-hour user timer templates.
 - **Validation & Adversarial Hardening:**
   - 78+ automated tests (including adversarial security hardening, native CloudTrail/IdP/IPFIX parsers, rule-pack hygiene linters, and Zero-IOC regressions), 34-dataset synthetic precision/recall harness, three rounds of blind stress testing (`docs/blind_stress_test_log.md`), and real-sensor validation across Suricata 7, Zeek LTS, YARA, Nginx, and Linux kernel `auditd`.
 

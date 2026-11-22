@@ -70,6 +70,8 @@ def test_validate_feed_url_enforces_https_and_strict_allowlist() -> None:
     validate_feed_url("https://github.com/kh20134/artex-defense-kit/commits/main.atom")
     validate_feed_url("https://github.com/Kshot3000/artex-defense-kit/commits/main.atom")
     validate_feed_url("https://feeds.feedburner.com/TheHackersNews")
+    validate_feed_url("https://www.malware-traffic-analysis.net/blog-entries.rss")
+    validate_feed_url("https://suricata.io/feed/")
     for spec in DEFAULT_FEEDS:
         validate_feed_url(spec.url)
 
@@ -138,3 +140,40 @@ def test_parse_release_atom_category_preserved() -> None:
     assert len(rel_items) == 1
     assert rel_items[0].category == "release"
     assert rel_items[0].always_relevant is True
+
+
+def test_watchtower_highlights_agentic_pcap_drops_without_non_agentic_spam(tmp_path: Path) -> None:
+    mta_rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Malware-Traffic-Analysis</title>
+    <item>
+      <title>2026-11-23 - ARTEX / BLOODALCHEMY traffic capture (.pcap) and Suricata alerts</title>
+      <link>https://www.malware-traffic-analysis.net/2026/11/23/index.html</link>
+      <pubDate>Mon, 23 Nov 2026 10:00:00 GMT</pubDate>
+      <description>Sanitized packet capture (.pcapng) of autonomous pentest framework hitting edge gateway.</description>
+    </item>
+    <item>
+      <title>2026-11-22 - Commodity infostealer traffic capture (.pcap)</title>
+      <link>https://www.malware-traffic-analysis.net/2026/11/22/index.html</link>
+      <pubDate>Sun, 22 Nov 2026 10:00:00 GMT</pubDate>
+      <description>Routine commodity infostealer traffic capture from phishing email.</description>
+    </item>
+  </channel>
+</rss>
+"""
+    feed_file = tmp_path / "mta.xml"
+    feed_file.write_text(mta_rss, encoding="utf-8")
+    res = run_watchtower(
+        state_dir=tmp_path / "wt_pcap",
+        rules_dir=Path("rules/sigma"),
+        offline_feed_files=[feed_file],
+        with_gemma4=False,
+    )
+    assert res["new_relevant_count"] == 1
+    assert res["new_pcap_drops_count"] == 1
+    assert res["new_ignored"] == 1
+    digest = Path(res["digest_path"]).read_text(encoding="utf-8")
+    assert "## PCAP & Network-Capture Drops (High Priority)" in digest
+    assert "BLOODALCHEMY" in digest
+    assert "Commodity infostealer" not in digest

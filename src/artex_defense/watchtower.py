@@ -74,6 +74,8 @@ ALLOWED_FEED_HOSTS: frozenset[str] = frozenset(
         "www.boho.or.kr",
         "isc.sans.edu",
         "risky.biz",
+        "www.malware-traffic-analysis.net",
+        "suricata.io",
     }
 )
 
@@ -134,6 +136,8 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     FeedSpec("The Hacker News", "https://feeds.feedburner.com/TheHackersNews"),
     FeedSpec("SANS ISC Handler Diaries", "https://isc.sans.edu/rssfeed.xml"),
     FeedSpec("Risky Business", "https://risky.biz/feeds/risky-business/"),
+    FeedSpec("Malware-Traffic-Analysis (PCAP Archive)", "https://www.malware-traffic-analysis.net/blog-entries.rss"),
+    FeedSpec("Suricata News & Releases", "https://suricata.io/feed/"),
     # National & International CERTs / Advisories (US, UK, EU, JP, AU, KR)
     FeedSpec("CISA Advisories", "https://www.cisa.gov/cybersecurity-advisories/all.xml"),
     FeedSpec("FBI IC3 CSA / FLASH", "https://www.ic3.gov/CSA/RSS"),
@@ -159,6 +163,11 @@ WATCHTOWER_RELEVANCE_RE = re.compile(
     r"(?:litellm|ragflow|open\s*webui|langflow|dify|ollama).*(?:exploit|cve|rce|api\s*key|exposed|hijack|steal|harvest|attack|artex|compromise)|"
     r"okta.*(?:mfa|2fa|fatigue|agent|workflow|brute)|entra.*(?:service\s+principal|mfa\s+fatigue)|"
     r"인공지능.*(?:공격|침해|해킹|에이전트)|AI\s*에이전트|자율\s*침투|아텍스)",
+    re.IGNORECASE,
+)
+
+WATCHTOWER_PCAP_DROP_RE = re.compile(
+    r"(\.pcap(?:ng)?\b|\bpacket\s+captures?\b|\bpcap\b|\bzeek\s+logs?\b|\bsuricata\s+(?:eve|rules)\b)",
     re.IGNORECASE,
 )
 
@@ -431,12 +440,23 @@ def run_watchtower(
         else:
             new_ignored += 1
 
-    # Prioritize major rule-pack releases first, then keyword-matched advisories, then raw commits
-    _cat_rank = {"release": 0, "advisory": 1, "commit": 2}
-    new_relevant.sort(key=lambda it: (_cat_rank.get(it.category, 1), 1 if (it.category != "release" and it.always_relevant) else 0))
+    # Prioritize PCAP/capture drops & major rule-pack releases first, then advisories, then raw commits
+    def _is_pcap_drop(it: FeedItem) -> bool:
+        return bool(WATCHTOWER_PCAP_DROP_RE.search(f"{it.title} {it.summary}"))
 
-    new_releases = [it for it in new_relevant if it.category == "release"]
-    new_advisories = [it for it in new_relevant if it.category != "release"]
+    _cat_rank = {"release": 0, "advisory": 1, "commit": 2}
+    new_relevant.sort(
+        key=lambda it: (
+            0 if _is_pcap_drop(it) else 1,
+            _cat_rank.get(it.category, 1),
+            1 if (it.category != "release" and it.always_relevant) else 0,
+        )
+    )
+
+    new_pcap_drops = [it for it in new_relevant if _is_pcap_drop(it)]
+    pcap_ids = {it.item_id for it in new_pcap_drops}
+    new_releases = [it for it in new_relevant if it.category == "release" and it.item_id not in pcap_ids]
+    new_advisories = [it for it in new_relevant if it.category != "release" and it.item_id not in pcap_ids]
 
     llm_gap_analysis: str | None = None
     if with_gemma4 and new_relevant:
@@ -485,6 +505,7 @@ def run_watchtower(
             "> **Review Required:** Automated public-feed triage only. Never auto-merge detections or browse "
             "suspect attacker infrastructure from bare metal.",
             "",
+            f"- **PCAP & Network-Capture Drops:** {len(new_pcap_drops)}",
             f"- **New Rule-Pack Releases:** {len(new_releases)}",
             f"- **New Advisories & Commits:** {len(new_advisories)}",
             f"- **Already Seen (Skipped):** {already_seen}",
@@ -492,6 +513,10 @@ def run_watchtower(
             f"- **Feed Errors:** {len(feed_errors)}",
             "",
         ]
+        if new_pcap_drops:
+            lines.extend(["## PCAP & Network-Capture Drops (High Priority)", ""])
+            for it in new_pcap_drops:
+                lines.extend(_render_item_block(it))
         if new_releases:
             lines.extend(["## Major Detection Rule-Pack Releases", ""])
             for it in new_releases:
@@ -512,6 +537,7 @@ def run_watchtower(
         "total_fetched": len(fetched_items),
         "already_seen": already_seen,
         "new_ignored": new_ignored,
+        "new_pcap_drops_count": len(new_pcap_drops),
         "new_releases_count": len(new_releases),
         "new_relevant_count": len(new_relevant),
         "new_relevant_titles": [f"[{it.source}] {sanitize_text(it.title)}" for it in new_relevant],
