@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from artex_defense.watchtower import (
+    DEFAULT_FEEDS,
     parse_feed_xml,
     run_watchtower,
     validate_feed_url,
@@ -65,7 +66,12 @@ def test_validate_feed_url_enforces_https_and_strict_allowlist() -> None:
     validate_feed_url("https://blog.ostorlab.co/feed/rss.xml")
     validate_feed_url("https://cloudsecurityalliance.org/feed/")
     validate_feed_url("https://threatdefence.com/feed")
+    validate_feed_url("https://threatdefence.com/security-advisories/feed")
+    validate_feed_url("https://github.com/kh20134/artex-defense-kit/commits/main.atom")
+    validate_feed_url("https://github.com/Kshot3000/artex-defense-kit/commits/main.atom")
     validate_feed_url("https://feeds.feedburner.com/TheHackersNews")
+    for spec in DEFAULT_FEEDS:
+        validate_feed_url(spec.url)
 
     with pytest.raises(ValueError, match="HTTPS"):
         validate_feed_url("http://unit42.paloaltonetworks.com/feed/")

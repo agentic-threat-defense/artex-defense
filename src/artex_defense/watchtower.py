@@ -93,6 +93,8 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     FeedSpec("jiwoochris/artex-global", "https://github.com/jiwoochris/artex-global/commits/main.atom", True, "commit"),
     FeedSpec("ja1sh/artex-defense", "https://github.com/ja1sh/artex-defense/commits/main.atom", True, "commit"),
     FeedSpec("logsexe/artex-detection-as-code", "https://github.com/logsexe/artex-detection-as-code/commits/main.atom", True, "commit"),
+    FeedSpec("kh20134/artex-defense-kit", "https://github.com/kh20134/artex-defense-kit/commits/main.atom", True, "commit"),
+    FeedSpec("Kshot3000/artex-defense-kit", "https://github.com/Kshot3000/artex-defense-kit/commits/main.atom", True, "commit"),
     # Filtered AI-Agent & Community Detection Repos (commits, gated by WATCHTOWER_RELEVANCE_RE)
     FeedSpec("Agent-Threat-Rule/agent-threat-rules", "https://github.com/Agent-Threat-Rule/agent-threat-rules/commits/main.atom", False, "commit"),
     FeedSpec("agentshield-ai/sigma-ai", "https://github.com/agentshield-ai/sigma-ai/commits/main.atom", False, "commit"),
@@ -104,6 +106,8 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     FeedSpec("jiwoochris/artex-global [Releases]", "https://github.com/jiwoochris/artex-global/releases.atom", True, "release"),
     FeedSpec("ja1sh/artex-defense [Releases]", "https://github.com/ja1sh/artex-defense/releases.atom", True, "release"),
     FeedSpec("logsexe/artex-detection-as-code [Releases]", "https://github.com/logsexe/artex-detection-as-code/releases.atom", True, "release"),
+    FeedSpec("kh20134/artex-defense-kit [Releases]", "https://github.com/kh20134/artex-defense-kit/releases.atom", True, "release"),
+    FeedSpec("Kshot3000/artex-defense-kit [Releases]", "https://github.com/Kshot3000/artex-defense-kit/releases.atom", True, "release"),
     FeedSpec("Agent-Threat-Rule/agent-threat-rules [Releases]", "https://github.com/Agent-Threat-Rule/agent-threat-rules/releases.atom", True, "release"),
     FeedSpec("agentshield-ai/sigma-ai [Releases]", "https://github.com/agentshield-ai/sigma-ai/releases.atom", True, "release"),
     # Independent Researchers & Vendor / Cloud / Identity Threat Intelligence
@@ -126,6 +130,7 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     FeedSpec("Ostorlab Blog", "https://blog.ostorlab.co/feed/rss.xml"),
     FeedSpec("Cloud Security Alliance", "https://cloudsecurityalliance.org/feed/"),
     FeedSpec("ThreatDefence Blog", "https://threatdefence.com/feed"),
+    FeedSpec("ThreatDefence Security Advisories", "https://threatdefence.com/security-advisories/feed"),
     FeedSpec("The Hacker News", "https://feeds.feedburner.com/TheHackersNews"),
     FeedSpec("SANS ISC Handler Diaries", "https://isc.sans.edu/rssfeed.xml"),
     FeedSpec("Risky Business", "https://risky.biz/feeds/risky-business/"),
