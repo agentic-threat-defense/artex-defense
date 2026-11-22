@@ -1,23 +1,53 @@
 // ============================================================================
 // ARTEX / Autonomous Agentic Offensive Framework — SentinelOne (S1QL 2.0 / PowerQuery)
+//
+// HOW TO USE THIS PACK:
+//   - Start with TIER 1 (high-confidence triage, near-zero FPs across ALL endpoints).
+//   - Move to TIER 2 for behavioral & server-scoped hunts (baseline required).
 // Note: In S1QL 2.0 Process Creation events, `src.process.*` is the PARENT process
 //       and `tgt.process.*` is the newly CREATED CHILD process.
 // ============================================================================
 
-// 1. ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Ports (8787-8890, excl. Zscaler 8890), & Host Forensics
+
+// ============================================================================
+// TIER 1 — HIGH-CONFIDENCE TRIAGE (Run First — Near-Zero FPs, ALL Endpoints)
+// ============================================================================
+
+// T1-A. Confirmed ARTEX / BLOODALCHEMY C2 Relay Domains (DNS Resolved — Any Hit = Escalate)
+event.type == "DNS Resolved" AND
+event.dns.request matches "(?i)(?:^|\\.)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|artex\\.noog2infra\\.site|artex\\.ok7777\\.eu\\.cc|artex\\.tokena2b\\.top)$"
+
+// T1-B. Explicit ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Control-Plane URIs, & Framework Artifacts
+//       (Generic high ports 8787-8890 and webhook.site are isolated in Tier 2 T2-A below)
 (tgt.file.path contains:anycase ("ProgramData\\artx5v", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "mitmproxy-ca-cert.pem") OR
  (tgt.file.path contains:anycase "/tasks/" AND tgt.file.path contains:anycase "/cmd-output/") OR
- tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe") OR
+ tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent", "ntlmrelayx") OR
  url.address contains:anycase ("/Inform/logger/", "/api/exploration/", "/api/sync/scopesentry", "?artex=", "&artex=") OR
- url.address matches "(?i)(?:^|\\.|//)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|dnslog\\.cn)(?:[:/]|$)" OR
- (dst.port.number in (8787, 8788, 8790, 8890) AND NOT (dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA")))
+ url.address matches "(?i)(?:^|\\.|//)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com)(?:[:/]|$)")
 
-// 2. Automated EDR Sensor Discovery Probes (Including SentinelAgent / CrowdStrike)
+// T1-C. Automated EDR Sensor Discovery Probes (Including SentinelAgent / CrowdStrike)
 event.type == "Process Creation" AND
 tgt.process.cmdline contains:anycase ("sc query", "Get-Service", "tasklist", "systemctl status", "pgrep") AND
 tgt.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon", "falcon-sensor", "CrowdStrike", "WinDefend", "Sysmon")
 
-// 3. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — scopes GCP metadata.google.internal exemption to standalone curl/wget only)
+
+// ============================================================================
+// TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
+// ============================================================================
+
+// T2-A. External Console Ports 8787-8890 (Excl. Zscaler 8890 & RFC1918) & Non-Browser Webhook/OAST Exfil
+(event.type == "IP Connect" AND
+ dst.port.number in (8787, 8788, 8790, 8890) AND
+ NOT (dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA") AND
+ NOT (dst.ip.address matches "^(10\\.|127\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.)")) OR
+(event.type == "DNS Resolved" AND
+ event.dns.request matches "(?i)(?:^|\\.)(?:oast\\.(?:live|fun|me)|interact\\.sh|dnslog\\.cn)$") OR
+(event.type == "DNS Resolved" AND
+ event.dns.request matches "(?i)(?:^|\\.)webhook\\.site$" AND
+ NOT (src.process.name in:anycase ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "postman.exe", "code.exe", "MsSense.exe") OR
+      src.process.name startsWith:anycase "ZSA"))
+
+// T2-B. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — scopes GCP metadata.google.internal exemption to standalone curl/wget only)
 event.type == "Process Creation" AND
 tgt.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") AND (
   src.process.name in:anycase ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe") OR
@@ -28,18 +58,12 @@ tgt.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "s
   ))
 )
 
-// 4A. High-Confidence C2 Relays, Webhook/OAST Exfil, or Console Ports 8787-8890 (ALL Endpoints, excl. Zscaler 8890)
-event.type in ("DNS Resolved", "IP Connect") AND (
-  event.dns.request matches "(?i)(?:^|\\.)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|artex\\.noog2infra\\.site|artex\\.ok7777\\.eu\\.cc|artex\\.tokena2b\\.top|webhook\\.site|oast\\.(?:live|fun|me)|interact\\.sh|dnslog\\.cn)$" OR
-  (dst.port.number in (8787, 8788, 8790, 8890) AND NOT (dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA"))
-)
-
-// 4B. Anomalous Server/DMZ Egress to Commercial LLM APIs (Excludes Workstations)
+// T2-C. Server-Only Commercial LLM API & Wildcard-IP DNS Egress (Native S1 Server Role Filter)
 event.type == "DNS Resolved" AND
 endpoint.type == "server" AND
-event.dns.request matches "(?i)(?:^|\\.)(?:api\\.anthropic\\.com|api\\.openai\\.com|api\\.deepseek\\.com|open\\.bigmodel\\.cn|api\\.x\\.ai|api\\.moonshot\\.(?:cn|ai)|dashscope\\.aliyuncs\\.com|openrouter\\.ai|api\\.siliconflow\\.cn)$"
+event.dns.request matches "(?i)(?:^|\\.)(?:api\\.anthropic\\.com|api\\.openai\\.com|api\\.deepseek\\.com|open\\.bigmodel\\.cn|api\\.x\\.ai|api\\.moonshot\\.(?:cn|ai)|dashscope\\.aliyuncs\\.com|openrouter\\.ai|api\\.siliconflow\\.cn|sslip\\.io|nip\\.io|xip\\.io|traefik\\.me)$"
 
-// 5. Singularity Data Lake PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s)
+// T2-D. Singularity Data Lake PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s)
 event.type == "Process Creation"
 | filter tgt.process.cmdline matches "(?i)\\b(whoami|ipconfig|ifconfig|nltest|net\\s+localgroup|aws\\s+sts|az\\s+account|kubectl\\s+get|sc\\s+query|get-service|tasklist)\\b"
 | let tb = timebucket(event.time, "30s")

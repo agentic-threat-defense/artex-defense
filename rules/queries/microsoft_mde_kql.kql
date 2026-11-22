@@ -1,8 +1,104 @@
 // ============================================================================
 // ARTEX / Autonomous Agentic Offensive Framework — Microsoft MDE & Sentinel (KQL)
+//
+// HOW TO USE THIS PACK:
+//   - Start with TIER 1 (high-confidence triage, near-zero FPs across ALL hosts/tenants).
+//   - Move to TIER 2 for behavioral & server-scoped hunting (LFO ascending counts + org baseline).
 // ============================================================================
 
-// 1. MDE: Compressed Endpoint Recon Burst (>= 5 Unique Discovery/Cloud Commands in 30s)
+
+// ============================================================================
+// TIER 1 — HIGH-CONFIDENCE TRIAGE (Run First — Near-Zero FPs)
+// ============================================================================
+
+// T1-A. MDE: Confirmed ARTEX / BLOODALCHEMY C2 Relay Domains (ALL Hosts — Any Hit = Escalate)
+DeviceNetworkEvents
+| where Timestamp > ago(7d)
+| where RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:xcai\.(?:com|pro)|lanmao666\.(?:com|xyz)|artex\.lol|nginxmysql\.com|vietnam852\.com|zhzy999\.net|sqlserver-sqlite\.com|artex\.noog2infra\.site|artex\.ok7777\.eu\.cc|artex\.tokena2b\.top)(?:[:/]|$)"
+| summarize Connections = count(), Destinations = make_set(RemoteUrl, 10), RemoteIPs = make_set(RemoteIP, 10), Ports = make_set(RemotePort, 5)
+    by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName, bin(Timestamp, 5m)
+
+// T1-B. MDE: Explicit ARTEX / BLOODALCHEMY Artifacts, Relocated Sideloading, EDR Enumeration & Post-Exploit Tools
+//       (Note: DLL/config files like graphics-hook-filter64.dll should also be hunted in DeviceImageLoadEvents / DeviceFileEvents)
+DeviceProcessEvents
+| where Timestamp > ago(7d)
+| where
+    (ProcessCommandLine has_any ("CSFalcon", "falcon-sensor", "SentinelAgent", "WinDefend", "CbDefense", "Sysmon")
+     and ProcessCommandLine has_any ("sc query", "Get-Service", "tasklist", "systemctl status"))
+    or FolderPath has_any (@"\ProgramData\artx5v\", "ScopeWeaver", "artex-server", "artex-worker")
+    or (FileName in~ ("edge.exe", "msedge.exe")
+        and not(FolderPath has_any (@"\Program Files\", @"\Program Files (x86)\", @"\Windows\System32\", @"\Windows\SysWOW64\", @"\Windows\WinSxS\", @"\AppData\Local\Microsoft\Edge\Application\", @"\AppData\Local\Microsoft\EdgeUpdate\"))
+        and ProcessCommandLine has "config.bin")
+    or (FileName =~ "svchost.exe"
+        and not(FolderPath has_any (@"\Windows\System32\", @"\Windows\SysWOW64\", @"\Windows\WinSxS\")))
+    or ProcessCommandLine has_any ("artx5v", "ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "artex-enrich/1.0", "Rex_Enrich", "artex-readonly/1.0", "ARTEX-worker/1.0", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit/", "authorized-security-research/", "ArtexProbe", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "/Inform/logger/", "xcai.com", "xcai.pro", "artex.lol", "sqlserver-sqlite.com", "exploit_agent", "hermes-agent", "agent-zero", "carbonato", "ntlmrelayx", "smbserver.py", "evil-winrm", "netexec", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent")
+    or (ProcessCommandLine has "chisel" and ProcessCommandLine has "client")
+| project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, ProcessCommandLine
+
+// T1-C. Sentinel Entra ID SigninLogs: Spray-Then-Success & 2FA Push Bombing (50126 / 50053 / 500121)
+//       (Note: ResultType "50074" is a normal MFA challenge prompt — NEVER count it as an MFA denial!)
+SigninLogs
+| where TimeGenerated > ago(24h)
+| summarize
+    FailedUsers = dcountif(UserPrincipalName, ResultType in ("50126", "50053")),
+    MfaDenials = countif(ResultType == "500121"),
+    SuccessUsers = dcountif(UserPrincipalName, ResultType == "0"),
+    SampleUsers = make_set(UserPrincipalName, 10)
+    by IPAddress, bin(TimeGenerated, 15m)
+| where (FailedUsers >= 5 and SuccessUsers >= 1) or MfaDenials >= 4
+| order by MfaDenials desc, FailedUsers desc
+
+// T1-D. Sentinel Entra ID AADServicePrincipalSignInLogs: Secret Guessing (7000215 -> 0) & Multi-Resource Fan-Out
+AADServicePrincipalSignInLogs
+| where TimeGenerated > ago(24h)
+| summarize
+    SecretFails = countif(ResultType == "7000215"),
+    Successes = countif(ResultType == "0"),
+    DistinctResources = dcount(ResourceDisplayName),
+    Resources = make_set(ResourceDisplayName, 10)
+    by ServicePrincipalName, IPAddress, bin(TimeGenerated, 15m)
+| where (SecretFails >= 2 and Successes >= 1) or DistinctResources >= 5
+| order by DistinctResources desc, SecretFails desc
+
+
+// ============================================================================
+// TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
+// ============================================================================
+
+// T2-A. MDE: External Console Ports 8787/8788/8790/8890 (Public IPs Only, Excl. Zscaler 8890) & Non-Browser Webhook/OAST Exfil
+DeviceNetworkEvents
+| where Timestamp > ago(7d)
+| where (RemoteIPType == "Public"
+         and RemotePort in (8787, 8788, 8790, 8890)
+         and not(RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"))
+    or (RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:webhook\.site|oast\.(?:live|fun|me)|interact\.sh|dnslog\.cn)(?:[:/]|$)"
+        and not(RemoteUrl has "webhook.site"
+                and (InitiatingProcessFileName in~ ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "postman.exe", "code.exe", "MsSense.exe")
+                     or InitiatingProcessFileName startswith "ZSA")))
+| summarize Hits = count(), Destinations = make_set(RemoteUrl, 10), RemoteIPs = make_set(RemoteIP, 10), Ports = make_set(RemotePort, 5), FirstSeen = min(Timestamp), LastSeen = max(Timestamp)
+    by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName
+| order by Hits asc
+
+// T2-B. MDE: Web / App Daemon Spawning Shell — Least-Frequency-of-Occurrence (LFO) Fleet Hunt
+//       (Scopes GCP metadata.google.internal exemption strictly to standalone curl/wget probes; uses matches regex for shell punctuation)
+DeviceProcessEvents
+| where Timestamp > ago(7d)
+| where
+    (InitiatingProcessFileName in~ ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe")
+     and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh"))
+    or (InitiatingProcessFileName in~ ("java.exe", "java", "node.exe", "node")
+        and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh")
+        and (ProcessCommandLine has_any ("whoami", "nltest", "sc query", "Invoke-WebRequest", "base64", "encodedcommand", "/dev/tcp")
+             or ProcessCommandLine matches regex @"(?i)(?:\s|^)-enc\s"
+             or (ProcessCommandLine matches regex @"(?i)(?:curl|wget)\s"
+                 and not(ProcessCommandLine has "metadata.google.internal"
+                         and not(ProcessCommandLine has_any ("service-accounts", "/token", "ssh-keys", "kube-env", "recursive=true", "iam/security-credentials")
+                                 or ProcessCommandLine matches regex @"[;|&`]|\$\(")))))
+| summarize Hits = count(), Hosts = dcount(DeviceName), SampleHosts = make_set(DeviceName, 5), FirstSeen = min(Timestamp), LastSeen = max(Timestamp)
+    by InitiatingProcessFileName, FileName, ProcessCommandLine
+| order by Hits asc
+
+// T2-C. MDE: Compressed Endpoint Recon Burst (>= 5 Unique Discovery/Cloud Commands in 30s)
 DeviceProcessEvents
 | where Timestamp > ago(24h)
 | where ProcessCommandLine matches regex @"(?i)\b(whoami|ipconfig|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b"
@@ -16,55 +112,20 @@ DeviceProcessEvents
 | where UniqueCmds >= 5
 | order by UniqueCmds desc
 
-// 2. MDE: EDR Sensor Discovery + Web Parent Shell Spawn + ARTEX Staging Artifacts
-//    (Note: DLL/config files like graphics-hook-filter64.dll should also be hunted in DeviceImageLoadEvents / DeviceFileEvents)
-DeviceProcessEvents
-| where Timestamp > ago(24h)
-| where
-    (ProcessCommandLine has_any ("CSFalcon", "falcon-sensor", "SentinelAgent", "WinDefend", "CbDefense", "Sysmon")
-     and ProcessCommandLine has_any ("sc query", "Get-Service", "tasklist", "systemctl status"))
-    or (InitiatingProcessFileName in~ ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe")
-        and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh"))
-    or (InitiatingProcessFileName in~ ("java.exe", "java", "node.exe", "node")
-        and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh")
-        and (ProcessCommandLine has_any ("whoami", "nltest", "sc query", "Invoke-WebRequest", "base64", "encodedcommand", "/dev/tcp")
-             or ProcessCommandLine matches regex @"(?i)(?:\s|^)-enc\s"
-             or (ProcessCommandLine matches regex @"(?i)(?:curl|wget)\s"
-                 and not(ProcessCommandLine has "metadata.google.internal"
-                         and not(ProcessCommandLine has_any ("service-accounts", "/token", "ssh-keys", "kube-env", "recursive=true", "iam/security-credentials")
-                                 or ProcessCommandLine matches regex @"[;|&`]|\$\(")))))
-    or FolderPath has_any (@"\ProgramData\artx5v\", "ScopeWeaver", "artex-server", "artex-worker")
-    or (FileName in~ ("edge.exe", "msedge.exe")
-        and not(FolderPath has_any (@"\Program Files\", @"\Program Files (x86)\", @"\Windows\System32\", @"\Windows\SysWOW64\", @"\Windows\WinSxS\", @"\AppData\Local\Microsoft\Edge\Application\", @"\AppData\Local\Microsoft\EdgeUpdate\"))
-        and ProcessCommandLine has "config.bin")
-    or (FileName =~ "svchost.exe"
-        and not(FolderPath has_any (@"\Windows\System32\", @"\Windows\SysWOW64\", @"\Windows\WinSxS\")))
-    or ProcessCommandLine has_any ("artx5v", "ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "artex-enrich/1.0", "Rex_Enrich", "artex-readonly/1.0", "ARTEX-worker/1.0", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit/", "authorized-security-research/", "ArtexProbe", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "/Inform/logger/", "xcai.com", "xcai.pro", "artex.lol", "sqlserver-sqlite.com", "exploit_agent", "hermes-agent", "agent-zero", "carbonato", "ntlmrelayx", "smbserver.py", "evil-winrm", "netexec")
-    or (ProcessCommandLine has "chisel" and ProcessCommandLine has "client")
-    or (not(DeviceName startswith "WKSTN-" or DeviceName startswith "LAPTOP-" or DeviceName startswith "MACBOOK-" or DeviceName startswith "DESKTOP-")
-        and ProcessCommandLine has_any ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"))
-| project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, ProcessCommandLine
-
-// 3A. MDE: High-Confidence C2 Relays, Webhook/OAST Exfil, or Console Ports 8787/8788/8790/8890 (ALL Hosts — NEVER Suppress Workstations)
-//     (Note: Excludes Zscaler Client Connector ZSA* on TCP 8890; DeviceNetworkEvents.RemoteUrl holds SNI/hostname on TLS)
+// T2-D. MDE: Server-Role Commercial LLM API & Wildcard-IP DNS Egress (Uses DeviceInfo Server Role, Not Fragile Hostname Prefixes)
+let ServerDevices = DeviceInfo
+| where Timestamp > ago(7d)
+| where DeviceType =~ "Server" or OSPlatform has "Server"
+| distinct DeviceId;
 DeviceNetworkEvents
-| where Timestamp > ago(24h)
-| where (RemotePort in (8787, 8788, 8790, 8890)
-         and not(RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"))
-    or RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:xcai\.(?:com|pro)|lanmao666\.(?:com|xyz)|artex\.lol|nginxmysql\.com|vietnam852\.com|zhzy999\.net|sqlserver-sqlite\.com|artex\.noog2infra\.site|artex\.ok7777\.eu\.cc|artex\.tokena2b\.top|webhook\.site|oast\.(?:live|fun|me)|interact\.sh|dnslog\.cn)(?:[:/]|$)"
-| summarize Connections = count(), Destinations = make_set(RemoteUrl, 10), RemoteIPs = make_set(RemoteIP, 10), Ports = make_set(RemotePort, 5)
-    by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName, bin(Timestamp, 5m)
+| where Timestamp > ago(7d)
+| where DeviceId in (ServerDevices)
+| where RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|open\.bigmodel\.cn|api\.x\.ai|api\.moonshot\.(?:cn|ai)|dashscope\.aliyuncs\.com|openrouter\.ai|api\.siliconflow\.cn|sslip\.io|nip\.io|xip\.io|traefik\.me)(?:[:/]|$)"
+| summarize Connections = count(), Destinations = make_set(RemoteUrl, 10), FirstSeen = min(Timestamp), LastSeen = max(Timestamp)
+    by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName
+| order by Connections asc
 
-// 3B. MDE: Anomalous Server / DMZ Egress to Commercial LLM APIs (Excludes Approved Gateways & Workstations)
-DeviceNetworkEvents
-| where Timestamp > ago(24h)
-| where RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|open\.bigmodel\.cn|api\.x\.ai|api\.moonshot\.(?:cn|ai)|dashscope\.aliyuncs\.com|openrouter\.ai|api\.siliconflow\.cn)(?:[:/]|$)"
-| where not(DeviceName startswith "DEV-AI-GW-" or DeviceName startswith "WKSTN-" or DeviceName startswith "LAPTOP-" or DeviceName startswith "MACBOOK-" or DeviceName startswith "DESKTOP-")
-| summarize Connections = count(), Destinations = make_set(RemoteUrl, 10)
-    by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName, bin(Timestamp, 5m)
-
-// 4. Sentinel CommonSecurityLog: Edge Appliance Rapid Auth-Failure Spray & Recon Probing
-//    (Requires auth failure / high-signal probe URIs so normal AnyConnect/Citrix login asset loads do not alert)
+// T2-E. Sentinel CommonSecurityLog: Edge Appliance Rapid Auth-Failure Spray & Recon Probing
 CommonSecurityLog
 | where TimeGenerated > ago(24h)
 | where DeviceVendor in~ ("Cisco", "Citrix", "Palo Alto Networks", "F5", "Zscaler")
@@ -84,8 +145,7 @@ CommonSecurityLog
     by SourceIP, DeviceVendor, DeviceProduct, bin(TimeGenerated, 2m)
 | where EventCount >= 6 and (SpanSec / todouble(EventCount)) <= 3.0
 
-// 5. Entra ID AuditLogs: Compressed High-Privilege Service Principal / OAuth Escalation Burst
-//    (Excludes routine 2-event user MFA self-registration pairs; requires Result == "success")
+// T2-F. Sentinel Entra ID AuditLogs: Compressed High-Privilege Service Principal / OAuth Escalation Burst
 AuditLogs
 | where TimeGenerated > ago(24h)
 | where Result =~ "success"
@@ -99,28 +159,3 @@ AuditLogs
 | summarize Ops = make_set(OperationName), UniqueOps = dcount(OperationName), OpCount = count(), SpanSec = datetime_diff('second', max(TimeGenerated), min(TimeGenerated))
     by ActorApp, ActorUser, bin(TimeGenerated, 5m)
 | where UniqueOps >= 2 and SpanSec <= 120
-
-// 6. Entra ID SigninLogs: Spray-Then-Success & 2FA Push Bombing (50126 / 50053 / 500121)
-//    (Note: ResultType "50074" is a normal MFA challenge prompt — NEVER count it as an MFA denial!)
-SigninLogs
-| where TimeGenerated > ago(24h)
-| summarize
-    FailedUsers = dcountif(UserPrincipalName, ResultType in ("50126", "50053")),
-    MfaDenials = countif(ResultType == "500121"),
-    SuccessUsers = dcountif(UserPrincipalName, ResultType == "0"),
-    SampleUsers = make_set(UserPrincipalName, 10)
-    by IPAddress, bin(TimeGenerated, 15m)
-| where (FailedUsers >= 5 and SuccessUsers >= 1) or MfaDenials >= 4
-| order by MfaDenials desc, FailedUsers desc
-
-// 7. Entra ID AADServicePrincipalSignInLogs: Secret Guessing (7000215 -> 0) & Multi-Resource Fan-Out
-AADServicePrincipalSignInLogs
-| where TimeGenerated > ago(24h)
-| summarize
-    SecretFails = countif(ResultType == "7000215"),
-    Successes = countif(ResultType == "0"),
-    DistinctResources = dcount(ResourceDisplayName),
-    Resources = make_set(ResourceDisplayName, 10)
-    by ServicePrincipalName, IPAddress, bin(TimeGenerated, 15m)
-| where (SecretFails >= 2 and Successes >= 1) or DistinctResources >= 5
-| order by DistinctResources desc, SecretFails desc

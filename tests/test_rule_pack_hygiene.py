@@ -83,37 +83,55 @@ def test_zeek_script_decouples_c2_relays_and_bounds_notice_identifiers() -> None
     assert "artex.http_4xx_uris" in text
 
 
+def _tier1_query_code(text: str) -> str:
+    t1_block = text.split("TIER 2 —", 1)[0]
+    return "\n".join(ln for ln in t1_block.splitlines() if not ln.lstrip().startswith("//"))
+
+
 def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     cql = (RULES_ROOT / "queries" / "crowdstrike_logscale_cql.cql").read_text(encoding="utf-8")
+    assert "TIER 1" in cql and "TIER 2" in cql, "CrowdStrike CQL must separate Tier 1 triage from Tier 2 hunts"
     assert "RemotePort IN [" not in cql, "Invalid LogScale CQL `IN [...]` syntax"
     assert "ComputerName!=/" not in cql, "Invalid LogScale CQL `!= /regex/` syntax"
     assert "RemotePort=/^(8787|8788|8790|8890)$/" in cql
     assert "ContextBaseFileName=/^ZSA/i" in cql, "CrowdStrike CQL must exclude Zscaler Client Connector on TCP 8890"
-    assert "metadata\\.google\\.internal" in cql, "CrowdStrike CQL Query 3 must exclude routine GCP metadata checks"
-    assert "sort(hits, order=asc)" in cql, "CrowdStrike CQL Query 3 must use LFO ascending sort to avoid 200-row cap"
+    assert "metadata\\.google\\.internal" in cql, "CrowdStrike CQL Query T2-C must exclude routine GCP metadata checks"
+    assert "sort(hits, order=asc)" in cql, "CrowdStrike CQL hunts must use LFO ascending sort to avoid 200-row cap"
     assert "not ComputerName=/" in cql
+    cql_t1 = _tier1_query_code(cql)
+    assert "webhook" not in cql_t1.lower() and "8890" not in cql_t1, "Tier 1 CQL must not mix noisy ports/webhook.site with C2 domains"
 
     eql = (RULES_ROOT / "queries" / "elastic_ech_eql.eql").read_text(encoding="utf-8")
+    assert "TIER 1" in eql and "TIER 2" in eql, "Elastic EQL must separate Tier 1 triage from Tier 2 hunts"
     assert 'RLIKE "(?i)' not in eql, "ES|QL Lucene Automaton RLIKE does not support (?i) flag"
     assert 'url.path : ("*/Inform/logger/*", "*?artex=*"' not in eql, "ECS url.path excludes query strings"
     assert "BY aws.cloudtrail.user_identity.arn, source.ip, event.action" not in eql, "Grouping by event.action forces COUNT_DISTINCT=1"
     assert "process.name == null or not (destination.port == 8890 and process.name" in eql
+    eql_t1 = _tier1_query_code(eql)
+    assert "webhook.site" not in eql_t1 and "8890" not in eql_t1
 
     kql = (RULES_ROOT / "queries" / "microsoft_mde_kql.kql").read_text(encoding="utf-8")
+    assert "TIER 1" in kql and "TIER 2" in kql, "MDE KQL must separate Tier 1 triage from Tier 2 hunts"
     assert 'ResultType in ("500121", "50074")' not in kql, "Entra 50074 is normal MFA challenge, not failure"
     assert 'ResultType == "500121"' in kql
     assert 'RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"' in kql
     assert 'ProcessCommandLine has "metadata.google.internal"' in kql
     assert '";", "&&"' not in kql, "KQL has_any() only matches alphanumeric terms, never pure punctuation"
     assert r'matches regex @"[;|&`]|\$\("' in kql
+    assert 'DeviceType =~ "Server"' in kql, "MDE KQL server LLM hunt must use DeviceInfo server role"
+    kql_t1 = _tier1_query_code(kql)
+    assert "webhook" not in kql_t1.lower() and "8890" not in kql_t1
 
     s1ql = (RULES_ROOT / "queries" / "sentinelone_s1ql.s1ql").read_text(encoding="utf-8")
+    assert "TIER 1" in s1ql and "TIER 2" in s1ql, "SentinelOne S1QL must separate Tier 1 triage from Tier 2 hunts"
     assert "| bucket 30s" not in s1ql, "Invalid S1QL PowerQuery syntax; use timebucket()"
     assert "timebucket(" in s1ql
     assert "tgt.process.cmdline" in s1ql
     assert "src.process.parent.name" not in s1ql, "Inverted S1QL 2.0 parent/child lineage"
     assert 'dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA"' in s1ql
     assert 'tgt.process.cmdline contains:anycase "metadata.google.internal"' in s1ql
+    s1ql_t1 = _tier1_query_code(s1ql)
+    assert "webhook" not in s1ql_t1.lower() and "8890" not in s1ql_t1
 
 
 def test_passive_intel_hunt_queries_use_current_platform_syntax() -> None:

@@ -2,11 +2,29 @@
 // ARTEX / Autonomous Agentic Offensive Framework — Elastic (EQL & ES|QL) Hunt Pack
 // Surfaces: Cisco ASA/FTD, Citrix NetScaler, PAN-OS, F5 BIG-IP, Zscaler,
 //           Web Portals, Endpoints, and Cloud/Identity
-// Note: Queries 1-5 are Elastic EQL; Queries 6-9 (commented) are Kibana ES|QL.
-//       ES|QL RLIKE uses Lucene Automaton (no `(?i)` flag — always use TO_LOWER()).
+//
+// HOW TO USE THIS PACK:
+//   - Start with TIER 1 (high-confidence triage, near-zero FPs across ALL hosts).
+//   - Move to TIER 2 for behavioral hunts (expect baseline tuning / LFO aggregation).
+//   - Note: EQL queries use 3-valued null logic (guard nullable fields with `== null or not ...`).
+//           ES|QL RLIKE uses Lucene Automaton (no `(?i)` flag — always use TO_LOWER()).
 // ============================================================================
 
-// 1. [EQL] Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s)
+
+// ============================================================================
+// TIER 1 — HIGH-CONFIDENCE TRIAGE (Run First — Near-Zero FPs)
+// ============================================================================
+
+// T1-A. [EQL] Confirmed ARTEX / BLOODALCHEMY C2 Domains, Staging Artifacts, Control-Plane URIs & Post-Exploit Tools
+//       (Generic high ports 8787-8890 and dev-noisy webhook.site are isolated in Tier 2 T2-A below)
+any where
+  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
+  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*", "*lsadump::*", "*sekurlsa::*", "*AdaptixC2*", "*wisp-c2*", "*ligolo-agent*") or
+  url.original : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
+  url.domain : ("xcai.com", "*.xcai.com", "xcai.pro", "*.xcai.pro", "artex.lol", "*.artex.lol", "lanmao666.com", "*.lanmao666.com", "lanmao666.xyz", "*.lanmao666.xyz", "nginxmysql.com", "*.nginxmysql.com", "vietnam852.com", "*.vietnam852.com", "zhzy999.net", "*.zhzy999.net", "sqlserver-sqlite.com", "*.sqlserver-sqlite.com", "artex.noog2infra.site", "artex.ok7777.eu.cc", "artex.tokena2b.top") or
+  user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*hermes-agent/*", "*strix/*")
+
+// T1-B. [EQL] Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s)
 sequence by host.name with maxspan=30s
   [process where event.type == "start" and
    process.command_line : ("*whoami*", "*nltest*", "*ipconfig*", "*net localgroup*", "*aws sts*", "*az account*")]
@@ -14,32 +32,7 @@ sequence by host.name with maxspan=30s
    process.command_line : ("*sc query*", "*Get-Service*", "*tasklist*", "*systemctl status*") and
    process.command_line : ("*CSFalcon*", "*falcon-sensor*", "*SentinelAgent*", "*WinDefend*", "*CbDefense*", "*Sysmon*")]
 
-// 2. [EQL] Web Server / Edge Appliance Parent Process Spawning Interactive Shell
-//    (Separates true web daemons from noisy java/node builds which require recon/download args)
-process where event.type == "start" and
-  process.name : ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") and (
-    process.parent.name : ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat", "tomcat.exe", "sqlservr.exe") or
-    (process.parent.name : ("java", "java.exe", "node", "node.exe") and
-     process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*curl *", "*wget *", "*Invoke-WebRequest*", "*-enc *", "*-encodedcommand*", "*base64*", "*/dev/tcp*"))
-  )
-
-// 3. [EQL] ARTEX / ScopeWeaver / Norma SDK / BLOODALCHEMY Artifacts, Ports (8787-8890, excl. Zscaler 8890), or Webhook/C2 Egress
-any where
-  (destination.port in (8787, 8788, 8790, 8890) and (process.name == null or not (destination.port == 8890 and process.name : ("ZSA*", "zscaler*")))) or
-  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
-  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*") or
-  url.original : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
-  url.domain : ("xcai.com", "*.xcai.com", "xcai.pro", "*.xcai.pro", "artex.lol", "*.artex.lol", "lanmao666.com", "*.lanmao666.com", "lanmao666.xyz", "*.lanmao666.xyz", "nginxmysql.com", "*.nginxmysql.com", "vietnam852.com", "*.vietnam852.com", "zhzy999.net", "*.zhzy999.net", "sqlserver-sqlite.com", "*.sqlserver-sqlite.com", "webhook.site", "*.webhook.site", "oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn") or
-  user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*hermes-agent/*", "*strix/*")
-
-// 4. [EQL] Anomalous Server/DMZ Egress to Commercial LLM APIs (Excludes Approved Gateways & Workstations)
-//    (Confirmed malicious C2 relays are hunted unconditionally in Query 3 above)
-network where
-  (dns.question.name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn") or
-   tls.client.server_name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn")) and
-  (host.name == null or not host.name : ("DEV-AI-GW-*", "WKSTN-*", "LAPTOP-*", "MACBOOK-*", "DESKTOP-*"))
-
-// 5. [EQL] Web Portal / Edge Appliance Error-Correction Pivot (4xx -> 200 OK on High-Confidence Sensitive Path <= 20s)
+// T1-C. [EQL] Web Portal / Edge Appliance Error-Correction Pivot (4xx -> 200 OK on High-Confidence Sensitive Path <= 20s)
 sequence by source.ip with maxspan=20s
   [any where (event.category == "web" or event.category == "network") and
    http.response.status_code >= 400 and http.response.status_code < 500 and
@@ -49,7 +42,42 @@ sequence by source.ip with maxspan=20s
    url.path : ("*/.env", "*/admin/shell.php*", "*/shell.php*", "*/cmd.jsp*", "*/.git/config") and
    not url.path : ("*/.env.example*", "*/.env.sample*", "*/.env.template*")]
 
-// 6. [ES|QL] ArtexProbe / User-Agents / Task Spill Paths (uses TO_LOWER() because ES|QL RLIKE has no `(?i)` flag)
+
+// ============================================================================
+// TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
+// ============================================================================
+
+// T2-A. [EQL] External Console Ports 8787-8890 (Excl. RFC1918 & Zscaler 8890) & Non-Browser Webhook/OAST Exfil
+//       (Guards nullable process.name and splits webhook.site from OAST domains to avoid 3-valued EQL null drops)
+any where
+  (destination.port in (8787, 8788, 8790, 8890)
+   and (destination.ip == null or not cidrMatch(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"))
+   and (process.name == null or not (destination.port == 8890 and process.name : ("ZSA*", "zscaler*"))))
+  or dns.question.name : ("oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn")
+  or url.domain : ("oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn")
+  or ((dns.question.name : ("webhook.site", "*.webhook.site") or url.domain : ("webhook.site", "*.webhook.site"))
+      and (process.name == null or not process.name : ("chrome*", "msedge*", "firefox*", "brave*", "postman*", "code*", "MsSense*", "ZSA*")))
+
+// T2-B. [EQL] Web Server / App Daemon Spawning Interactive Shell (Scopes GCP metadata.google.internal Exemption to Standalone curl/wget)
+process where event.type == "start" and
+  process.name : ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") and (
+    process.parent.name : ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat", "tomcat.exe", "sqlservr.exe") or
+    (process.parent.name : ("java", "java.exe", "node", "node.exe") and (
+      process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*Invoke-WebRequest*", "*-enc *", "*-encodedcommand*", "*base64*", "*/dev/tcp*") or
+      (process.command_line : ("*curl *", "*wget *") and
+       not (process.command_line : "*metadata.google.internal*" and
+            not process.command_line : ("*service-accounts*", "*/token*", "*ssh-keys*", "*kube-env*", "*recursive=true*", "*iam/security-credentials*", "*;*", "*&&*", "*||*", "*|*", "*`*", "*$(*")))
+    ))
+  )
+
+// T2-C. [EQL] Server / DMZ Egress to Commercial LLM APIs & Wildcard-IP DNS (Tune Host-Role / Asset-Tag Filter for Your Fleet)
+//       (Replace the fallback host.name prefix exclusion with your ECS server tag/role, e.g. `labels.tier == "server"`)
+network where
+  (dns.question.name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn", "*.sslip.io", "*.nip.io", "*.xip.io", "*.traefik.me") or
+   tls.client.server_name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn", "*.sslip.io", "*.nip.io", "*.xip.io", "*.traefik.me")) and
+  (host.name == null or not host.name : ("DEV-AI-GW-*", "WKSTN-*", "LAPTOP-*", "MACBOOK-*", "DESKTOP-*"))
+
+// 6. [ES|QL — TIER 1] ArtexProbe / User-Agents / Task Spill Paths (uses TO_LOWER() because ES|QL RLIKE has no `(?i)` flag)
 // FROM logs-endpoint.events.*, logs-nginx.*, logs-proxy.*
 // | WHERE TO_LOWER(process.command_line) LIKE "*artex-probe-*"
 //      OR TO_LOWER(process.command_line) LIKE "*artexprobe*"
@@ -59,7 +87,7 @@ sequence by source.ip with maxspan=20s
 // | KEEP @timestamp, host.name, user.name, process.command_line, file.path, user_agent.original
 // | SORT @timestamp DESC
 //
-// 7. [ES|QL] AWS CloudWatch FilterLogEvents Secret Search & Multi-API DryRun/AccessDenied Bursts
+// 7. [ES|QL — TIER 2] AWS CloudWatch FilterLogEvents Secret Search & Multi-API DryRun/AccessDenied Bursts
 // FROM logs-aws.cloudtrail-*
 // | WHERE (event.action == "FilterLogEvents" AND TO_LOWER(TO_STRING(aws.cloudtrail.request_parameters)) RLIKE ".*(password|akia|asia|secret|token|bearer).*")
 //      OR error.code IN ("Client.DryRunOperation", "AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "Client.UnauthorizedOperation")
@@ -73,7 +101,7 @@ sequence by source.ip with maxspan=20s
 // | WHERE cw_secret_hits >= 1 OR dryrun_hits >= 4 OR distinct_apis >= 5
 // | SORT cw_secret_hits DESC, distinct_apis DESC, calls DESC
 //
-// 8. [ES|QL] Okta 2FA Push Bombing, Rogue Factor Activation/Reset, Probe Registrations, & Workflows Abuse
+// 8. [ES|QL — TIER 1/2] Okta 2FA Push Bombing, Rogue Factor Activation/Reset, Probe Registrations, & Workflows Abuse
 // FROM logs-okta.system-*
 // | WHERE event.action IN ("user.session.start", "user.mfa.okta_verify.deny_push", "user.authentication.auth_via_mfa", "user.mfa.factor.activate", "user.mfa.factor.deactivate", "user.mfa.factor.reset_all", "user.lifecycle.create", "user.risk.detect", "workflows.user.invoke")
 // | STATS
@@ -88,7 +116,7 @@ sequence by source.ip with maxspan=20s
 // | WHERE (failed_users >= 5 AND successes >= 1) OR mfa_fails >= 4 OR probe_signups >= 5 OR risk_hits >= 3 OR suspicious_workflow_invokes >= 1 OR (factor_changes >= 1 AND (failed_users >= 1 OR mfa_fails >= 1))
 // | SORT mfa_fails DESC, probe_signups DESC, failed_users DESC
 //
-// 9. [ES|QL] CyberStrikeAI CloudTrail: EC2 userData / SSM Decryption Burst & Multi-Identity External IP Pivot
+// 9. [ES|QL — TIER 2] CyberStrikeAI CloudTrail: EC2 userData / SSM Decryption Burst & Multi-Identity External IP Pivot
 // FROM logs-aws.cloudtrail-*
 // | WHERE source.ip IS NOT NULL
 //   AND event.action IN ("DescribeInstanceAttribute", "GetParameter", "GetParametersByPath", "SendCommand", "GetSecretValue")
