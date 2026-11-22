@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -192,6 +193,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "distributed_proxy_pool_probe": 75,
     "multi_account_credential_spray": 75,
     "llm_sawtooth_context_flow": 70,
+    "encrypted_tls_agent_turn_loop": 65,
     "web_error_handling_calibration": 70,
     "graphql_or_ai_mcp_discovery_probe": 70,
     "ja4_client_stack_whiplash": 70,
@@ -779,6 +781,8 @@ def _detect_sawtooth_context_flow(events: list[dict[str, Any]]) -> list[str]:
     """
     by_dest: dict[str, list[tuple[float, int, int]]] = {}
     for ev in events:
+        if ev.get("action") == "tls_persistent_turn" or ev.get("appliance") == "pcap_tls_turn":
+            continue
         b_out = ev.get("bytes_out")
         b_in = ev.get("bytes_in")
         dest = ev.get("dest_host") or ""
@@ -831,6 +835,96 @@ def _detect_sawtooth_context_flow(events: list[dict[str, Any]]) -> list[str]:
             hits.append(f"sawtooth_flow:{dest}(turns={best_run},peak={best_peak}B,ratio={best_ratio:.1f}x)")
         elif compacted_climbs >= 2 and compaction_drops >= 1:
             hits.append(f"sawtooth_compacted:{dest}(climbs={compacted_climbs},drops={compaction_drops},peak={best_peak}B)")
+    return hits
+
+
+def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]:
+    """Detect autonomous AI agent loops inside persistent TLS 1.3 (HTTP/2 / Keep-Alive) TCP streams.
+
+    Separates autonomous tool-calling agents (even over custom self-hosted LiteLLM proxies with large
+    30-40KB system prompts) from benign REST/analytics traffic and human chat users via 4 invariants:
+      1. Server LLM inference latency >= 0.35s (eliminates 10-80ms REST/analytics APIs).
+      2. Non-trivial prompt + streamed completion payloads (`bytes_out >= 4000`, `bytes_in >= 800`).
+      3. Sidecar-resilient monotonic outbound context growth (>=4 main turns, >=75% strictly increasing,
+         net growth >= +2000B, peak >= 10000B).
+      4. Autonomous machine turnaround (>=2 fast turnarounds <= 1.5s and median turnaround <= 2.5s,
+         eliminating human chat users who pause 5-60s to read and type).
+    """
+    by_stream: dict[tuple[str, str], list[tuple[float, int, int, float, float | None]]] = {}
+    for ev in events:
+        if ev.get("action") != "tls_persistent_turn" and ev.get("appliance") != "pcap_tls_turn":
+            continue
+        raw = ev.get("raw_json")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        # Support either nested raw_json dict or top-level serialized event dict
+        meta = raw.get("raw_json") if isinstance(raw.get("raw_json"), dict) else raw
+        dest = str(ev.get("dest_host") or "")
+        stream_id = str(meta.get("stream_id") or dest)
+        b_out = ev.get("bytes_out")
+        b_in = ev.get("bytes_in")
+        ts = ev.get("ts_epoch")
+        inf_lat = meta.get("inference_latency_s")
+        turnaround = meta.get("client_turnaround_s")
+        if not dest or b_out is None or b_in is None or ts is None or inf_lat is None:
+            continue
+        by_stream.setdefault((dest, stream_id), []).append(
+            (
+                float(ts),
+                int(b_out),
+                int(b_in),
+                float(inf_lat),
+                float(turnaround) if turnaround is not None else None,
+            )
+        )
+
+    hits: list[str] = []
+    seen_dests: set[str] = set()
+    for (dest, stream_id), pts in by_stream.items():
+        if dest in seen_dests:
+            continue
+        pts.sort(key=lambda x: x[0])
+        # Filter to substantive LLM-like turns (non-trivial prompt/response + real server inference latency)
+        llm_turns = [p for p in pts if p[1] >= 4000 and p[2] >= 800 and p[3] >= 0.35]
+        if len(llm_turns) < 4:
+            continue
+
+        # Sidecar filter: drop small auxiliary calls (<40% of running main-thread context once >=10KB)
+        main_turns: list[tuple[float, int, int, float, float | None]] = []
+        running_peak = 0
+        for p in llm_turns:
+            if running_peak >= 10000 and p[1] < running_peak * 0.40:
+                continue
+            main_turns.append(p)
+            running_peak = max(running_peak, p[1])
+
+        if len(main_turns) < 4:
+            continue
+
+        outs = [p[1] for p in main_turns]
+        inc_transitions = sum(1 for a, b in zip(outs, outs[1:]) if b > a)
+        mono_ratio = inc_transitions / max(len(outs) - 1, 1)
+        net_growth = outs[-1] - outs[0]
+        peak_out = max(outs)
+
+        # Evaluate autonomous client turnaround across turns (use explicit wire turnaround when present)
+        turnarounds = [p[4] for p in main_turns[1:] if p[4] is not None]
+        if not turnarounds:
+            continue
+        sorted_ta = sorted(turnarounds)
+        med_ta = sorted_ta[len(sorted_ta) // 2]
+        fast_ta = sum(1 for t in turnarounds if t <= 1.5)
+
+        if mono_ratio >= 0.75 and net_growth >= 2000 and peak_out >= 10000 and fast_ta >= 2 and med_ta <= 2.5:
+            seen_dests.add(dest)
+            hits.append(
+                f"tls_agent_loop:{dest}(turns={len(main_turns)},growth=+{net_growth}B,peak={peak_out}B,med_turn={med_ta:.2f}s)"
+            )
     return hits
 
 
@@ -1564,11 +1658,15 @@ def _inspect_window_signals(
         reasons.add("endpoint_compressed_recon_burst")
         indicators.add(f"recon_cmd_variety:{len(recon_cmds)}")
 
-    # Zero-IOC Detector 1: Self-hosted LLM proxy sawtooth growing-context flow
+    # Zero-IOC Detector 1: Self-hosted LLM proxy sawtooth growing-context flow (multi-conn + persistent TLS 1.3)
     sawtooth_hits = _detect_sawtooth_context_flow(events)
     if sawtooth_hits:
         reasons.add("llm_sawtooth_context_flow")
         indicators.update(sawtooth_hits)
+    tls_loop_hits = _detect_persistent_tls_agent_loop(events)
+    if tls_loop_hits:
+        reasons.add("encrypted_tls_agent_turn_loop")
+        indicators.update(tls_loop_hits)
 
     # Zero-IOC Detector 2: Multi-worker redundant read-only recon collision
     repeated_recon = {cmd: cnt for cmd, cnt in readonly_recon_counts.items() if cnt >= 2}
@@ -1797,7 +1895,7 @@ def scan_telemetry_file(
             """
             SELECT timestamp, ts_epoch, event_type, surface, appliance, process, parent_process,
                    command_line, dest_host, dest_port, http_method, http_path,
-                   user_agent, ja4, ja4h, bytes_out, bytes_in, status_code, action
+                   user_agent, ja4, ja4h, bytes_out, bytes_in, status_code, action, raw_json
             FROM sessionized_events
             WHERE source_host = ?
               AND actor = ?
@@ -1829,6 +1927,7 @@ def scan_telemetry_file(
                 "bytes_in": r[16],
                 "status_code": r[17],
                 "action": r[18],
+                "raw_json": r[19],
             }
             for r in window_events_rows
         ]
@@ -1869,7 +1968,7 @@ def scan_telemetry_file(
         risk_score, alert_tier = compute_risk_score(reasons)
 
         compact_samples = [
-            {k: v for k, v in ev.items() if k != "ts_epoch" and v not in ("", None)}
+            {k: v for k, v in ev.items() if k not in {"ts_epoch", "raw_json"} and v not in ("", None)}
             for ev in window_events[:max_sample_events]
         ]
 

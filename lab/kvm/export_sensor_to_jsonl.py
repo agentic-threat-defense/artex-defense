@@ -10,9 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import socket
+import struct
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+TLS_LLM_PORTS: frozenset[int] = frozenset({443, 8443, 8788, 11434})
 
 AUDIT_TS_RE = re.compile(r"msg=audit\((\d+\.\d+):(\d+)\):")
 AUDIT_KV_RE = re.compile(r'(\w+)=(?:"([^"]*)"|([0-9A-Fa-f]+|\S+))')
@@ -196,10 +200,174 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
     return events
 
 
-def convert_directory(input_dir: Path, out_file: Path, *, target_host: str = "artex-target-01") -> int:
-    """Convert all Zeek JSON logs and Auditd logs in `input_dir` into a single sorted JSONL file."""
+def extract_pcap_tls_turns(
+    pcap_path: Path,
+    *,
+    ssl_by_tuple: dict[tuple[str, int, str, int], tuple[str, str]] | None = None,
+    burst_gap_sec: float = 1.5,
+) -> list[dict[str, Any]]:
+    """Stream-parse a PCAP (Ethernet DLT=1, Linux SLL DLT=113, or SLL2 DLT=276) into persistent TLS turn events.
+
+    Slices single-socket HTTP/2 or Keep-Alive TLS 1.3 streams into directional `(OUT, IN)` turns so
+    `artex-hunt` can detect autonomous agent loops even when Zeek `conn.log` collapses an entire
+    multi-minute session into a single flow row.
+    """
+    streams: dict[tuple[str, int, str, int], list[tuple[float, str, int]]] = {}
+    tracked_ports = set(TLS_LLM_PORTS)
+    if ssl_by_tuple:
+        for _, _, _, rp in ssl_by_tuple:
+            tracked_ports.add(rp)
+
+    with pcap_path.open("rb") as fh:
+        ghdr = fh.read(24)
+        if len(ghdr) < 24:
+            return []
+        magic_le = struct.unpack("<I", ghdr[:4])[0]
+        if magic_le == 0xA1B2C3D4:
+            endian, ts_div = "<", 1_000_000.0
+        elif magic_le == 0xD4C3B2A1:
+            endian, ts_div = ">", 1_000_000.0
+        elif magic_le == 0xA1B23C4D:
+            endian, ts_div = "<", 1_000_000_000.0
+        elif magic_le == 0x4D3CB2A1:
+            endian, ts_div = ">", 1_000_000_000.0
+        else:
+            return []
+        _, _, _, _, _, _, linktype = struct.unpack(f"{endian}IHHiIII", ghdr)
+
+        while True:
+            phdr = fh.read(16)
+            if len(phdr) < 16:
+                break
+            ts_sec, ts_sub, incl_len, _ = struct.unpack(f"{endian}IIII", phdr)
+            if incl_len > 16 * 1024 * 1024:  # Guard against corrupt/malformed PCAP packet lengths
+                break
+            pkt = fh.read(incl_len)
+            if len(pkt) < incl_len:
+                break
+
+            # Decode L2 header -> IPv4 payload offset
+            if linktype == 1:  # Ethernet (DLT_EN10MB)
+                if len(pkt) < 14:
+                    continue
+                eth_type = struct.unpack("!H", pkt[12:14])[0]
+                l3_off = 14
+                if eth_type == 0x8100 and len(pkt) >= 18:  # 802.1Q VLAN
+                    eth_type = struct.unpack("!H", pkt[16:18])[0]
+                    l3_off = 18
+                if eth_type != 0x0800:
+                    continue
+            elif linktype == 276:  # Linux SLL2 (tcpdump -i any)
+                if len(pkt) < 20 or struct.unpack("!H", pkt[0:2])[0] != 0x0800:
+                    continue
+                l3_off = 20
+            elif linktype == 113:  # Linux SLL v1
+                if len(pkt) < 16 or struct.unpack("!H", pkt[14:16])[0] != 0x0800:
+                    continue
+                l3_off = 16
+            else:
+                continue
+
+            if len(pkt) < l3_off + 20:
+                continue
+            ver_ihl = pkt[l3_off]
+            if (ver_ihl >> 4) != 4 or pkt[l3_off + 9] != 6:  # IPv4 + TCP only
+                continue
+            ihl = (ver_ihl & 0x0F) * 4
+            tot_len = struct.unpack("!H", pkt[l3_off + 2 : l3_off + 4])[0]
+            if tot_len == 0:  # Linux NIC TSO offload leaves IPv4 tot_len=0 on outbound segments
+                tot_len = len(pkt) - l3_off
+            tcp_off = l3_off + ihl
+            if ihl < 20 or len(pkt) < tcp_off + 20:
+                continue
+            sport, dport = struct.unpack("!HH", pkt[tcp_off : tcp_off + 4])
+            tcp_hl = ((pkt[tcp_off + 12] >> 4) & 0x0F) * 4
+            if tcp_hl < 20:
+                continue
+            pay_len = max(0, tot_len - ihl - tcp_hl)
+            if pay_len == 0:
+                continue
+
+            ts = ts_sec + ts_sub / ts_div
+            src = socket.inet_ntoa(pkt[l3_off + 12 : l3_off + 16])
+            dst = socket.inet_ntoa(pkt[l3_off + 16 : l3_off + 20])
+            if dport in tracked_ports and sport not in tracked_ports:
+                streams.setdefault((src, sport, dst, dport), []).append((ts, "OUT", pay_len))
+            elif sport in tracked_ports and dport not in tracked_ports:
+                streams.setdefault((dst, dport, src, sport), []).append((ts, "IN", pay_len))
+
+    out_events: list[dict[str, Any]] = []
+    for key, pkts in streams.items():
+        pkts.sort(key=lambda x: x[0])
+        bursts: list[list[Any]] = []
+        for ts, direction, nbytes in pkts:
+            if bursts and bursts[-1][1] == direction and (ts - bursts[-1][2]) < burst_gap_sec:
+                bursts[-1][2] = ts
+                bursts[-1][3] += nbytes
+            else:
+                bursts.append([ts, direction, ts, nbytes])
+
+        turns: list[tuple[float, float, int, float, float, int]] = []
+        i = 0
+        while i + 1 < len(bursts):
+            if bursts[i][1] == "OUT" and bursts[i + 1][1] == "IN":
+                o_s, _, o_e, o_b = bursts[i]
+                i_s, _, i_e, i_b = bursts[i + 1]
+                if o_b >= 2000 and i_b >= 400:
+                    turns.append((o_s, o_e, o_b, i_s, i_e, i_b))
+                i += 2
+            else:
+                i += 1
+
+        # Emit only streams showing real multi-turn server inference latency (>=2 turns with lat >= 0.25s)
+        if len(turns) < 3 or sum(1 for t in turns if (t[3] - t[1]) >= 0.25) < 2:
+            continue
+
+        src, sport, dst, dport = key
+        sni, ja4 = ssl_by_tuple.get(key, ("", "")) if ssl_by_tuple else ("", "")
+        dest_host = sni or dst
+        stream_id = f"{src}:{sport}->{dst}:{dport}"
+
+        for idx, (o_s, o_e, o_b, i_s, i_e, i_b) in enumerate(turns):
+            inf_lat = max(0.0, i_s - o_e)
+            turnaround = max(0.0, o_s - turns[idx - 1][4]) if idx > 0 else None
+            out_events.append(
+                {
+                    "timestamp": _iso_from_epoch(o_s),
+                    "source_host": src,
+                    "actor": src,
+                    "event_type": "network",
+                    "surface": "network",
+                    "appliance": "pcap_tls_turn",
+                    "dest_host": dest_host,
+                    "dest_port": dport,
+                    "ja4": ja4,
+                    "bytes_out": o_b,
+                    "bytes_in": i_b,
+                    "action": "tls_persistent_turn",
+                    "raw_json": {
+                        "stream_id": stream_id,
+                        "inference_latency_s": round(inf_lat, 3),
+                        "client_turnaround_s": round(turnaround, 3) if turnaround is not None else None,
+                        "out_duration_s": round(max(0.0, o_e - o_s), 3),
+                        "in_duration_s": round(max(0.0, i_e - i_s), 3),
+                    },
+                }
+            )
+    return out_events
+
+
+def convert_directory(
+    input_dir: Path,
+    out_file: Path,
+    *,
+    target_host: str = "artex-target-01",
+    pcap_path: Path | None = None,
+) -> int:
+    """Convert all Zeek JSON logs, Auditd logs, and optional PCAP TLS turns into a single sorted JSONL file."""
     all_events: list[dict[str, Any]] = []
     ssl_by_uid: dict[str, tuple[str, str]] = {}
+    ssl_by_tuple: dict[tuple[str, int, str, int], tuple[str, str]] = {}
     http_uids: set[str] = set()
     conn_uids: set[str] = set()
 
@@ -216,11 +384,17 @@ def convert_directory(input_dir: Path, out_file: Path, *, target_host: str = "ar
             if not isinstance(rec, dict):
                 continue
             uid = str(rec.get("uid") or "")
+            new_sni = str(rec.get("server_name") or "")
+            new_ja4 = str(rec.get("ja4") or "")
             if uid:
                 prev_sni, prev_ja4 = ssl_by_uid.get(uid, ("", ""))
-                new_sni = str(rec.get("server_name") or "") or prev_sni
-                new_ja4 = str(rec.get("ja4") or "") or prev_ja4
-                ssl_by_uid[uid] = (new_sni, new_ja4)
+                ssl_by_uid[uid] = (new_sni or prev_sni, new_ja4 or prev_ja4)
+            orig_h, orig_p = rec.get("id.orig_h"), rec.get("id.orig_p")
+            resp_h, resp_p = rec.get("id.resp_h"), rec.get("id.resp_p")
+            if orig_h and orig_p is not None and resp_h and resp_p is not None:
+                tkey = (str(orig_h), int(orig_p), str(resp_h), int(resp_p))
+                prev_tsni, prev_tja4 = ssl_by_tuple.get(tkey, ("", ""))
+                ssl_by_tuple[tkey] = (new_sni or prev_tsni, new_ja4 or prev_tja4)
 
     http_path = input_dir / "http.log"
     if http_path.is_file():
@@ -272,6 +446,14 @@ def convert_directory(input_dir: Path, out_file: Path, *, target_host: str = "ar
                 hostname=target_host,
             )
         )
+    if pcap_path is not None:
+        if not pcap_path.is_file():
+            raise FileNotFoundError(f"PCAP file not found: {pcap_path}")
+        pcaps_to_scan = [pcap_path]
+    else:
+        pcaps_to_scan = sorted(input_dir.glob("*.pcap"))
+    for pfile in pcaps_to_scan:
+        all_events.extend(extract_pcap_tls_turns(pfile, ssl_by_tuple=ssl_by_tuple or None))
     all_events.sort(key=lambda e: e["timestamp"])
     out_file.parent.mkdir(parents=True, exist_ok=True)
     out_file.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in all_events) + ("\n" if all_events else ""), encoding="utf-8")
@@ -279,12 +461,13 @@ def convert_directory(input_dir: Path, out_file: Path, *, target_host: str = "ar
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert raw Zeek JSON & Linux Auditd logs to artex-hunt JSONL.")
+    parser = argparse.ArgumentParser(description="Convert raw Zeek JSON, PCAP TLS turns & Linux Auditd logs to artex-hunt JSONL.")
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--pcap", type=Path, default=None, help="Optional PCAP file for intra-stream persistent TLS 1.3 turn extraction")
     parser.add_argument("--target-host", default="artex-target-01")
     args = parser.parse_args()
-    count = convert_directory(args.input_dir, args.out, target_host=args.target_host)
+    count = convert_directory(args.input_dir, args.out, target_host=args.target_host, pcap_path=args.pcap)
     print(f"Converted {count} sensor events -> {args.out}")
 
 

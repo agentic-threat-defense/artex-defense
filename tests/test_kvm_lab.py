@@ -205,3 +205,104 @@ def test_auditd_exporter_skips_failed_path_probes_resolves_ppid_and_decodes_hex(
     assert events[1]["process"] == "/usr/bin/pgrep"
     assert events[1]["parent_process"] == "/usr/bin/bash"
     assert events[1]["command_line"] == "pgrep -a csfalcon"
+
+
+def _write_synthetic_pcap(path: Path, packets: list[tuple[float, str, int, str, int, int]], *, linktype: int = 1) -> None:
+    """Build a minimal valid PCAP (Ethernet DLT=1 or Linux SLL2 DLT=276) with IPv4/TCP payload packets."""
+    import socket
+    import struct
+
+    chunks = [struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, linktype)]
+    for ts, src_ip, sport, dst_ip, dport, pay_len in packets:
+        remaining = pay_len
+        while remaining > 0:
+            seg = min(remaining, 1400)
+            remaining -= seg
+            tcp_hdr = struct.pack("!HHIIBBHHH", sport, dport, 1, 1, 0x50, 0x18, 65535, 0, 0)
+            ip_tot = 20 + 20 + seg
+            ip_hdr = struct.pack(
+                "!BBHHHBBH4s4s",
+                0x45,
+                0,
+                ip_tot,
+                1,
+                0,
+                64,
+                6,
+                0,
+                socket.inet_aton(src_ip),
+                socket.inet_aton(dst_ip),
+            )
+            if linktype == 276:
+                l2 = struct.pack("!HHI", 0x0800, 0, 1) + b"\x00" * 12
+            else:
+                l2 = b"\x00" * 12 + struct.pack("!H", 0x0800)
+            frame = l2 + ip_hdr + tcp_hdr + (b"X" * seg)
+            sec = int(ts)
+            usec = int((ts - sec) * 1_000_000)
+            chunks.append(struct.pack("<IIII", sec, usec, len(frame), len(frame)) + frame)
+    path.write_bytes(b"".join(chunks))
+
+
+def test_persistent_tls_agent_turn_loop_detects_single_socket_agent_and_rejects_rest_and_human_chat(tmp_path: Path) -> None:
+    """Zero-IOC persistent TLS 1.3 detector: catches single-socket autonomous agent loops, rejects fast REST & human chat."""
+    exporter = _load_exporter()
+
+    # 1. TP: Single persistent TLS 1.3 socket (custom VPS IP) with 5 growing turns (35KB->40KB),
+    # 1.2s LLM inference latency, 0.05s autonomous client turnaround, plus an interleaved 2.4KB sidecar!
+    tp_pkts: list[tuple[float, str, int, str, int, int]] = []
+    t = 1795374100.0
+    for idx, (o_b, i_b) in enumerate([(35156, 117491), (2400, 18000), (35967, 128042), (36943, 119618), (37734, 124499), (39708, 132454)]):
+        tp_pkts.append((t, "192.0.2.10", 41850, "198.51.100.77", 443, o_b))
+        t += 1.4  # server LLM inference latency
+        tp_pkts.append((t, "198.51.100.77", 443, "192.0.2.10", 41850, i_b))
+        t += 0.05  # sub-second autonomous tool-loop turnaround
+    tp_pcap = tmp_path / "agent_single_socket.pcap"
+    _write_synthetic_pcap(tp_pcap, tp_pkts, linktype=276)  # Also tests Linux SLL2 (tcpdump -i any)!
+
+    raw_tp = tmp_path / "tp_raw"
+    raw_tp.mkdir()
+    (raw_tp / "ssl.log").write_text(
+        '{"ts":1795374099.0,"uid":"Ctp1","id.orig_h":"192.0.2.10","id.orig_p":41850,"id.resp_h":"198.51.100.77","id.resp_p":443,"server_name":"proxy-relay.example.test"}\n',
+        encoding="utf-8",
+    )
+    tp_jsonl = tmp_path / "tp.jsonl"
+    exporter.convert_directory(raw_tp, tp_jsonl, pcap_path=tp_pcap)
+    cands = scan_telemetry_file(tp_jsonl)
+    assert len(cands) == 1
+    assert cands[0].reasons == ["encrypted_tls_agent_turn_loop"]
+    assert cands[0].risk_score == 65
+    assert cands[0].alert_tier == "hunt"
+    assert any("tls_agent_loop:proxy-relay.example.test(" in ind for ind in cands[0].matched_indicators)
+
+    # 2. FP Guard A: Benign fast REST/analytics stream (0.03s latency, chaotic sizes, 10s periodic flush) -> 0 hits
+    rest_pkts: list[tuple[float, str, int, str, int, int]] = []
+    t = 1795375000.0
+    for o_b, i_b in [(53000, 485), (17900, 1216), (206000, 478), (566000, 401), (26400, 1136)]:
+        rest_pkts.append((t, "192.0.2.20", 37840, "198.51.100.90", 443, o_b))
+        t += 0.03  # fast REST ACK
+        rest_pkts.append((t, "198.51.100.90", 443, "192.0.2.20", 37840, i_b))
+        t += 10.0
+    rest_pcap = tmp_path / "benign_rest.pcap"
+    _write_synthetic_pcap(rest_pcap, rest_pkts, linktype=1)
+    assert exporter.extract_pcap_tls_turns(rest_pcap) == []
+
+    # 3. FP Guard B: Benign fresh human ChatGPT/Claude session (4KB->22KB, 1.6s latency, 18s human reading/typing pause) -> 0 candidates!
+    human_pkts: list[tuple[float, str, int, str, int, int]] = []
+    t = 1795376000.0
+    for o_b, i_b in [(4000, 8000), (7200, 11000), (11000, 13000), (16000, 15000), (22000, 17000)]:
+        human_pkts.append((t, "192.0.2.30", 51000, "198.51.100.91", 443, o_b))
+        t += 1.6  # real LLM latency
+        human_pkts.append((t, "198.51.100.91", 443, "192.0.2.30", 51000, i_b))
+        t += 18.0  # human pauses 18s to read response and type next prompt
+    human_pcap = tmp_path / "benign_human_chat.pcap"
+    _write_synthetic_pcap(human_pcap, human_pkts, linktype=1)
+    raw_h = tmp_path / "human_raw"
+    raw_h.mkdir()
+    human_jsonl = tmp_path / "human.jsonl"
+    exporter.convert_directory(raw_h, human_jsonl, pcap_path=human_pcap)
+    assert scan_telemetry_file(human_jsonl) == []
+
+    # 4. Guard: explicit nonexistent --pcap path raises FileNotFoundError instead of silently falling back
+    with pytest.raises(FileNotFoundError):
+        exporter.convert_directory(raw_h, tmp_path / "missing.jsonl", pcap_path=tmp_path / "does_not_exist.pcap")
