@@ -28,31 +28,46 @@ from .detectors import REASON_RISK_WEIGHTS
 from .sanitizer import fence_untrusted_text, sanitize_text
 from .worker import GemmaWorker, GemmaWorkerError
 
-MAX_FEED_XML_BYTES = 5 * 1024 * 1024
+MAX_FEED_XML_BYTES = 15 * 1024 * 1024
 XML_FORBIDDEN_DECL_RE = re.compile(r"<!(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 
 ALLOWED_FEED_HOSTS: frozenset[str] = frozenset(
     {
+        # Repositories & Independent Researchers
         "github.com",
         "api.github.com",
+        "andpalmier.com",
+        # Vendor, Cloud & Identity Threat Intelligence
         "unit42.paloaltonetworks.com",
         "blog.talosintelligence.com",
         "blog.cloudflare.com",
-        "www.cisa.gov",
         "aws.amazon.com",
         "www.microsoft.com",
-        "risky.biz",
-        "hunt.io",
-        "arcticwolf.com",
+        "cloudblog.withgoogle.com",
+        "www.elastic.co",
+        "securitylabs.datadoghq.com",
+        "www.rapid7.com",
+        "www.crowdstrike.com",
+        "wiz.io",
+        "www.wiz.io",
         "www.okta.com",
         "sec.okta.com",
-        "www.crowdstrike.com",
-        "www.elastic.co",
+        "arcticwolf.com",
+        "greynoise.io",
+        "www.greynoise.io",
         "threatdefence.com",
+        "hunt.io",
+        # National / International CERTs, Agencies & Diaries
+        "www.cisa.gov",
         "www.ic3.gov",
-        "www.rapid7.com",
-        "cloudblog.withgoogle.com",
-        "securitylabs.datadoghq.com",
+        "www.ncsc.gov.uk",
+        "cert.europa.eu",
+        "www.jpcert.or.jp",
+        "blogs.jpcert.or.jp",
+        "www.cyber.gov.au",
+        "www.boho.or.kr",
+        "isc.sans.edu",
+        "risky.biz",
     }
 )
 
@@ -65,21 +80,41 @@ class FeedSpec:
 
 
 DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
+    # High-signal ARTEX & Offensive-AI Detection Repos (always_relevant=True)
     FeedSpec("ThreatDefence/agentic-attack-detections", "https://github.com/ThreatDefence/agentic-attack-detections/commits/main.atom", True),
     FeedSpec("theori-io/aipt-detections", "https://github.com/theori-io/aipt-detections/commits/main.atom", True),
     FeedSpec("jiwoochris/artex-global", "https://github.com/jiwoochris/artex-global/commits/main.atom", True),
+    FeedSpec("ja1sh/artex-defense", "https://github.com/ja1sh/artex-defense/commits/main.atom", True),
+    FeedSpec("logsexe/artex-detection-as-code", "https://github.com/logsexe/artex-detection-as-code/commits/main.atom", True),
+    # Filtered Upstream Detection & Independent Researcher Feeds
+    FeedSpec("SigmaHQ/sigma (master)", "https://github.com/SigmaHQ/sigma/commits/master.atom", False),
+    FeedSpec("Andrea Palmieri (andpalmier.com)", "https://andpalmier.com/index.xml", False),
+    # Vendor, Cloud, Identity & Offensive-AI Research
     FeedSpec("Unit 42", "https://unit42.paloaltonetworks.com/feed/"),
     FeedSpec("Cisco Talos", "https://blog.talosintelligence.com/rss/"),
     FeedSpec("Cloudflare Security", "https://blog.cloudflare.com/tag/security/rss/"),
-    FeedSpec("CISA Advisories", "https://www.cisa.gov/cybersecurity-advisories/all.xml"),
-    FeedSpec("FBI IC3 CSA / FLASH", "https://www.ic3.gov/CSA/RSS"),
     FeedSpec("AWS Security Blog", "https://aws.amazon.com/blogs/security/feed/"),
     FeedSpec("Microsoft Security Blog", "https://www.microsoft.com/en-us/security/blog/feed/"),
     FeedSpec("Google Cloud TI / Mandiant", "https://cloudblog.withgoogle.com/topics/threat-intelligence/rss/"),
     FeedSpec("Elastic Security Labs", "https://www.elastic.co/security-labs/rss/feed.xml"),
     FeedSpec("Datadog Security Labs", "https://securitylabs.datadoghq.com/rss/feed.xml"),
     FeedSpec("Rapid7 Blog", "https://www.rapid7.com/blog/rss/"),
+    FeedSpec("Wiz Research Blog", "https://www.wiz.io/feed/rss.xml"),
+    FeedSpec("Okta Security (sec.okta.com)", "https://sec.okta.com/rss.xml"),
+    FeedSpec("Arctic Wolf Security Bulletins", "https://arcticwolf.com/resources/tag/security-bulletins/feed/"),
+    FeedSpec("GreyNoise Blog", "https://www.greynoise.io/blog/rss.xml"),
+    FeedSpec("SANS ISC Handler Diaries", "https://isc.sans.edu/rssfeed.xml"),
     FeedSpec("Risky Business", "https://risky.biz/feeds/risky-business/"),
+    # National & International CERTs / Advisories (US, UK, EU, JP, AU, KR)
+    FeedSpec("CISA Advisories", "https://www.cisa.gov/cybersecurity-advisories/all.xml"),
+    FeedSpec("FBI IC3 CSA / FLASH", "https://www.ic3.gov/CSA/RSS"),
+    FeedSpec("UK NCSC Threat Reports", "https://www.ncsc.gov.uk/api/1/services/v1/report-rss-feed.xml"),
+    FeedSpec("CERT-EU Threat Intelligence", "https://cert.europa.eu/publications/threat-intelligence-rss"),
+    FeedSpec("CERT-EU Security Advisories", "https://cert.europa.eu/publications/security-advisories-rss"),
+    FeedSpec("JPCERT/CC Blog (EN)", "https://blogs.jpcert.or.jp/en/atom.xml"),
+    FeedSpec("JPCERT/CC Advisories (EN)", "https://www.jpcert.or.jp/english/rss/jpcert-en.rdf"),
+    FeedSpec("ACSC Australia Alerts", "https://www.cyber.gov.au/rss/alerts"),
+    FeedSpec("KrCERT / KISA Security Notices (KR)", "https://www.boho.or.kr/kr/rss.do?bbsId=B0000133"),
 )
 
 WATCHTOWER_RELEVANCE_RE = re.compile(
@@ -90,7 +125,8 @@ WATCHTOWER_RELEVANCE_RE = re.compile(
     r"storm-3358|vapor\s*panda|madpot|openbullet|sub2api|xcai\.pro|lanmao666|"
     r"agentic\s+(?:attack|pentest|offensive|exploit|framework|intrusion)|"
     r"autonomous\s+(?:pentest|penetration|exploit|red\s*team|offensive)|"
-    r"okta.*(?:mfa|2fa|fatigue|agent|workflow|brute)|entra.*(?:service\s+principal|mfa\s+fatigue))",
+    r"okta.*(?:mfa|2fa|fatigue|agent|workflow|brute)|entra.*(?:service\s+principal|mfa\s+fatigue)|"
+    r"인공지능.*(?:공격|침해|해킹|에이전트)|AI\s*에이전트|자율\s*침투|아텍스)",
     re.IGNORECASE,
 )
 
@@ -264,7 +300,7 @@ def run_watchtower(
     model: str | None = None,
     timeout_sec: float = 15.0,
     max_items_per_feed: int = 15,
-    max_llm_items: int = 8,
+    max_llm_items: int = 15,
 ) -> dict[str, Any]:
     """Poll allowlisted defensive feeds (or offline XML files), dedup via SQLite, and emit a defanged digest."""
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -324,6 +360,9 @@ def run_watchtower(
             new_relevant.append(item)
         else:
             new_ignored += 1
+
+    # Prioritize keyword-matched vendor/CERT advisories ahead of raw upstream GitHub commit streams
+    new_relevant.sort(key=lambda it: (1 if it.always_relevant else 0))
 
     llm_gap_analysis: str | None = None
     if with_gemma4 and new_relevant:
