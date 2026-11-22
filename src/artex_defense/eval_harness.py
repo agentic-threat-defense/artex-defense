@@ -125,7 +125,7 @@ def _match_field_condition(
     actual_strs = [str(a).lower() for a in actuals]
 
     def single_match(v: Any) -> bool:
-        v_str = str(v).lower()
+        v_str = str(v).replace("\\?", "?").replace("\\*", "*").lower()
         for actual_str in actual_strs:
             if "contains" in modifiers:
                 if v_str in actual_str:

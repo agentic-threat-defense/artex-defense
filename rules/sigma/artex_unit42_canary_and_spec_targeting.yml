@@ -30,7 +30,7 @@ detection:
       - 'ARTEX_WRITE_PROBE'
       - 'ARTEX_PERSIST_OK'
       - 'artex_control_marker'
-      - '?artex='
+      - '\?artex='
       - '&artex='
       - 'eyJhbGciOiJub25lIn0'
       - 'illegal_redirect_uri_enhanced'

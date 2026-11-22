@@ -42,8 +42,10 @@ def test_suricata_rules_have_valid_classtypes_buffers_sids_and_no_fp_traps() -> 
     assert "classtype:exfiltration;" not in text
     # Avoid matching "normal" in User-Agents
     assert "|norma)" not in text
-    # Avoid deprecated `threshold:` keyword in favor of `detection_filter:`
-    assert "threshold:" not in text
+    # Avoid deprecated `threshold:type threshold` (use `detection_filter:`) and never use `detection_filter: count 1`
+    # (which silently drops Match #1; single-event rate limiting must use `threshold:type limit`)
+    assert "threshold:type threshold" not in text
+    assert "detection_filter:track by_src, count 1," not in text
 
     seen_sids: set[str] = set()
     for ln in rule_lines:
@@ -150,3 +152,21 @@ def test_sigma_rules_avoid_known_critical_fp_and_drift_regressions() -> None:
     )
     assert "filter_legit_builds" in linux_pivot
     assert "'/pip'" in linux_pivot and "'/dpkg'" in linux_pivot
+
+    # Verify compiled packs preserve literal `?artex=` (not unescaped `?` wildcard) and CrowdStrike Linux basenames
+    compiled_kql = (RULES_ROOT / "queries" / "compiled_sigma" / "compiled_kusto_generic.kql").read_text(encoding="utf-8")
+    assert 'UrlOriginal contains "artex="' not in compiled_kql
+    assert 'UrlOriginal contains "?artex="' in compiled_kql
+
+    compiled_spl = (RULES_ROOT / "queries" / "compiled_sigma" / "compiled_splunk_spl.spl").read_text(encoding="utf-8")
+    assert '"**artex=*"' not in compiled_spl
+
+    compiled_cql = (RULES_ROOT / "queries" / "compiled_sigma" / "compiled_crowdstrike_logscale.cql").read_text(
+        encoding="utf-8"
+    )
+    assert "/.artex=/i" not in compiled_cql
+    assert r"/\?artex=/i" in compiled_cql
+    assert r"ParentBaseFileName=/\/dpkg$/i" not in compiled_cql
+    assert r"ParentBaseFileName=/\/pip$/i" not in compiled_cql
+    assert "ParentBaseFileName=/^dpkg$/i" in compiled_cql
+    assert "ParentBaseFileName=/^pip$/i" in compiled_cql

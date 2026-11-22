@@ -24,9 +24,9 @@ from sigma.conditions import ConditionAND, ConditionFieldEqualsValueExpression, 
 from sigma.conversion.deferred import DeferredQueryExpression
 from sigma.conversion.state import ConversionState
 from sigma.plugins import InstalledSigmaPlugins
-from sigma.processing.conditions import LogsourceCondition
+from sigma.processing.conditions import IncludeFieldCondition, LogsourceCondition
 from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
-from sigma.processing.transformations import FieldMappingTransformation
+from sigma.processing.transformations import FieldMappingTransformation, ReplaceStringTransformation
 from sigma.types import SigmaBool, SigmaNumber, SigmaString, SpecialChars
 from sigma.validation import SigmaValidator
 from sigma.validators.core import validators as core_validators
@@ -337,6 +337,21 @@ def _build_splunk_cim_web_pipeline() -> ProcessingPipeline:
     )
 
 
+def _build_crowdstrike_linux_basename_pipeline() -> ProcessingPipeline:
+    """Strip leading Linux `/` path prefixes on Falcon basename-only fields (ParentBaseFileName, FileName)."""
+    return ProcessingPipeline(
+        name="artex_crowdstrike_linux_basenames",
+        priority=50,
+        items=[
+            ProcessingItem(
+                identifier="artex_cql_linux_basename_only",
+                transformation=ReplaceStringTransformation(regex=r"^\*/([^/]+)$", replacement=r"\1"),
+                field_name_conditions=[IncludeFieldCondition(fields=["ParentBaseFileName", "FileName"])],
+            ),
+        ],
+    )
+
+
 _BACKEND_OVERRIDES: dict[str, type[Any]] = {
     "kusto": HardenedKustoBackend,
     "esql": HardenedESQLBackend,
@@ -347,6 +362,7 @@ _EXTRA_PIPELINES: dict[str, Any] = {
     "esql_ecs": _build_ecs_real_wire_pipeline,
     "lucene_ecs": _build_ecs_real_wire_pipeline,
     "kusto_generic": _build_kusto_generic_pipeline,
+    "crowdstrike_logscale": _build_crowdstrike_linux_basename_pipeline,
     "splunk_spl": _build_splunk_cim_web_pipeline,
 }
 
@@ -411,7 +427,12 @@ def validate_sigma_schema_offline(rules_dir: str | Path) -> list[str]:
     """Run pySigma's built-in core schema validators offline (skipping remote MITRE/D3FEND fetches)."""
     rule_paths = sorted(Path(rules_dir).glob("*.yml"))
     collection = SigmaCollection.load_ruleset([str(p) for p in rule_paths])
-    active = [v for name, v in core_validators.items() if "tag" not in name.lower()]
+    # Skip remote tag lookups and low-severity escaped-wildcard reminders (intentional literal `\?` in URL query strings)
+    active = [
+        v
+        for name, v in core_validators.items()
+        if "tag" not in name.lower() and "escaped_wildcard" not in name.lower()
+    ]
     validator = SigmaValidator(active)
     issues = validator.validate_rules(list(collection.rules))
     return [str(iss) for iss in issues]
