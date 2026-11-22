@@ -1,37 +1,39 @@
-title: Autonomous Agentic AD Pivot Toolkit (Chisel/Proxychains, NTLM Relay, Relocated DLL Sideloading, Staging C Compiler)
+title: Autonomous Agentic AD Pivot & Tunneling Toolkit (Windows)
 id: 3f7a9d12-8b54-4e61-a29f-6c4d81e5b204
 status: experimental
 description: >
-  Detects generalized post-exploitation tradecraft used by autonomous offensive agents during
-  internal Active Directory pivoting: Chisel/Ligolo/Proxychains SOCKS tunnel meshes, NTLM relay
-  and anonymous LDAP/SAMR enumeration, relocated browser binary DLL sideloading with adjacent
-  config.bin outside Program Files, and on-box C compilation inside /tmp or /dev/shm on servers.
+  Detects generalized post-exploitation pivoting, tunneling, Active Directory abuse, and
+  relocated binary DLL sideloading used by autonomous offensive agents on Windows:
+  Chisel/Ligolo/SoftEther SOCKS tunnels, Impacket/NetExec/Evil-WinRM relay and coercion utilities,
+  relocated browser binaries loading config.bin, and svchost.exe executing outside system paths.
 references:
   - https://www.ic3.gov
   - https://threatdefence.com/article/artex-agentic-attack-framework-detection-hunting
 author: ARTEX Defensive Research Workbench
 date: 2026-11-21
+modified: 2026-11-22
 tags:
   - attack.command_and_control
   - attack.credential_access
   - attack.defense_evasion
+  - attack.lateral_movement
   - attack.t1090.001
   - attack.t1574.002
   - attack.t1557.001
-  - attack.t1027.004
 logsource:
   category: process_creation
   product: windows
 detection:
-  selection_pivot_tunnel:
+  selection_chisel:
+    CommandLine|contains|all:
+      - 'chisel'
+      - 'client'
+  selection_tunnel_tools:
     CommandLine|contains:
-      - 'chisel client'
-      - 'chisel.exe client'
       - 'R:socks'
-      - 'proxychains -f'
-      - 'proxychains4 -f'
       - 'ligolo-agent'
-  selection_ntlm_relay:
+      - 'vpncmd'
+  selection_ad_abuse:
     CommandLine|contains:
       - 'ntlmrelayx'
       - 'smbserver.py'
@@ -39,18 +41,27 @@ detection:
       - 'coercer'
       - 'certipy'
       - 'ldapdomaindump'
-  selection_relocated_sideload:
+      - 'evil-winrm'
+      - 'netexec'
+  selection_relocated_edge_config:
     Image|endswith:
       - '\edge.exe'
       - '\msedge.exe'
     CommandLine|contains:
       - 'config.bin'
-  filter_legit_program_files:
+  selection_relocated_svchost:
+    Image|endswith:
+      - '\svchost.exe'
+  filter_legit_paths:
     Image|contains:
       - '\Program Files\'
       - '\Program Files (x86)\'
       - '\Windows\System32\'
-  condition: selection_pivot_tunnel or selection_ntlm_relay or (selection_relocated_sideload and not filter_legit_program_files)
+      - '\Windows\SysWOW64\'
+      - '\Windows\WinSxS\'
+      - '\AppData\Local\Microsoft\Edge\Application\'
+      - '\AppData\Local\Microsoft\EdgeUpdate\'
+  condition: selection_chisel or selection_tunnel_tools or selection_ad_abuse or ((selection_relocated_edge_config or selection_relocated_svchost) and not filter_legit_paths)
 falsepositives:
-  - Authorized internal red-team or purple-team exercises using Chisel or Impacket.
+  - Authorized internal red-team or purple-team exercises using Chisel, Ligolo, NetExec, or Impacket.
 level: high

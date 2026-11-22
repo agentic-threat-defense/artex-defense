@@ -1,0 +1,44 @@
+title: Autonomous Agentic Linux Staging C Compilation or Proxychains/Chisel Pivot
+id: 9f4e2a17-6b3c-4d8e-9a51-2c7b80e4d312
+status: experimental
+description: >
+  Detects Linux post-exploitation staging and pivoting behaviors observed in autonomous
+  offensive agent intrusions (such as ARTEX): on-box C/C++ compilation (gcc, clang, cc)
+  targeting volatile staging directories (/tmp, /dev/shm, /var/tmp), or proxychains/chisel
+  SOCKS tunnel execution on Linux servers and pivot hosts.
+references:
+  - https://www.ic3.gov
+  - https://threatdefence.com/article/artex-agentic-attack-framework-detection-hunting
+author: ARTEX Defensive Research Workbench
+date: 2026-11-22
+tags:
+  - attack.defense_evasion
+  - attack.command_and_control
+  - attack.t1027.004
+  - attack.t1090.001
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection_compiler:
+    Image|endswith:
+      - 'gcc'
+      - 'clang'
+      - '/cc'
+  selection_staging_path:
+    CommandLine|contains:
+      - '/tmp/'
+      - '/dev/shm/'
+      - '/var/tmp/'
+  selection_proxychains:
+    CommandLine|contains|all:
+      - 'proxychains'
+      - '-f'
+  selection_chisel_linux:
+    CommandLine|contains|all:
+      - 'chisel'
+      - 'client'
+  condition: (selection_compiler and selection_staging_path) or selection_proxychains or selection_chisel_linux
+falsepositives:
+  - Software build servers, CI/CD runners, or package managers (pip/dkms/autoconf) compiling temporary probes in /tmp (exclude known CI/build hosts).
+level: high

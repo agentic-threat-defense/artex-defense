@@ -1,8 +1,8 @@
 # Auto-compiled by artex-hunt sigma-compile (Elastic Lucene (ECS))
-# Source: rules/sigma (19 rules)
+# Source: rules/sigma (20 rules)
 
-# === Autonomous Agentic AD Pivot Toolkit (Chisel/Proxychains, NTLM Relay, Relocated DLL Sideloading, Staging C Compiler) (artex_ad_ntlm_relay_chisel_sideload_pivots.yml | id=3f7a9d12-8b54-4e61-a29f-6c4d81e5b204 | level=high) ===
-(process.command_line:(*chisel\ client* OR *chisel.exe\ client* OR *R\:socks* OR *proxychains\ \-f* OR *proxychains4\ \-f* OR *ligolo\-agent*)) OR (process.command_line:(*ntlmrelayx* OR *smbserver.py* OR *petitpotam* OR *coercer* OR *certipy* OR *ldapdomaindump*)) OR (((process.executable.caseless:(*\\edge.exe OR *\\msedge.exe)) AND process.command_line:*config.bin*) AND (NOT (process.executable.caseless:(*\\Program\ Files\\* OR *\\Program\ Files\ \(x86\)\\* OR *\\Windows\\System32\\*))))
+# === Autonomous Agentic AD Pivot & Tunneling Toolkit (Windows) (artex_ad_ntlm_relay_chisel_sideload_pivots.yml | id=3f7a9d12-8b54-4e61-a29f-6c4d81e5b204 | level=high) ===
+(process.command_line:*chisel* AND process.command_line:*client*) OR (process.command_line:(*R\:socks* OR *ligolo\-agent* OR *vpncmd*)) OR (process.command_line:(*ntlmrelayx* OR *smbserver.py* OR *petitpotam* OR *coercer* OR *certipy* OR *ldapdomaindump* OR *evil\-winrm* OR *netexec*)) OR ((((process.executable.caseless:(*\\edge.exe OR *\\msedge.exe)) AND process.command_line:*config.bin*) OR process.executable.caseless:*\\svchost.exe) AND (NOT (process.executable.caseless:(*\\Program\ Files\\* OR *\\Program\ Files\ \(x86\)\\* OR *\\Windows\\System32\\* OR *\\Windows\\SysWOW64\\* OR *\\Windows\\WinSxS\\* OR *\\AppData\\Local\\Microsoft\\Edge\\Application\\* OR *\\AppData\\Local\\Microsoft\\EdgeUpdate\\*))))
 
 # === ARTEX Cloud Reconnaissance — AWS CloudWatch Secret Search or DryRun Permission Sweep (artex_aws_cloudwatch_and_dryrun_sweep.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a019 | level=high) ===
 (event.action:FilterLogEvents AND (aws.cloudtrail.request_parameters.filterPattern:(*password* OR *AKIA* OR *secret* OR *token*))) OR error.code:*DryRunOperation*
@@ -33,6 +33,9 @@
 
 # === Duo Security, PingFederate, and Google Workspace 2FA Fatigue & Factor Tampering (artex_idp_duo_ping_gws_2fa_abuse.yml | id=9b4e1a27-3c8f-4f92-b7c1-8d2e60f4a139 | level=high) ===
 (Action:(*duo_fraud_reported* OR *fraud_reported* OR *user_marked_fraud* OR *duo_admin\:bypass_create* OR *duo_admin\:phone_create* OR *duo_admin\:2fa_device_enroll*)) OR (Action:(*pingid_device_paired* OR *mfa_device_enrolled* OR *mfa_rejected*)) OR (Action:(*2sv_disable* OR *2sv_enroll* OR *recovery_phone_edit* OR *recovery_email_edit* OR *second_factor_failure*))
+
+# === Autonomous Agentic Linux Staging C Compilation or Proxychains/Chisel Pivot (artex_linux_staging_compiler_and_proxychains_pivot.yml | id=9f4e2a17-6b3c-4d8e-9a51-2c7b80e4d312 | level=high) ===
+((process.executable:(*gcc OR *clang OR *\/cc)) AND (process.command_line:(*\/tmp\/* OR *\/dev\/shm\/* OR *\/var\/tmp\/*))) OR (process.command_line:*proxychains* AND process.command_line:*\-f*) OR (process.command_line:*chisel* AND process.command_line:*client*)
 
 # === Anomalous Server or Endpoint Egress to External LLM APIs (artex_llm_api_egress.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a002 | level=medium) ===
 (dns.question.name:(*api.anthropic.com OR *api.openai.com OR *api.deepseek.com OR *open.bigmodel.cn OR *api.x.ai OR *api.moonshot.cn OR *api.moonshot.ai OR *dashscope.aliyuncs.com OR *openrouter.ai OR *api.siliconflow.cn OR *xcai.com OR *xcai.pro OR *artex.lol OR *lanmao666.com OR *lanmao666.xyz OR *nginxmysql.com OR *vietnam852.com OR *zhzy999.net)) AND (NOT (winlog.computer_name:(DEV\-AI\-GW\-* OR WKSTN\-* OR LAPTOP\-*)))

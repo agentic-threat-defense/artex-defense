@@ -233,6 +233,17 @@ def _build_ecs_real_wire_pipeline() -> ProcessingPipeline:
         priority=50,
         items=[
             ProcessingItem(
+                identifier="artex_ecs_linux_proc",
+                transformation=FieldMappingTransformation(
+                    {
+                        "Image": "process.executable",
+                        "ParentImage": "process.parent.executable",
+                        "CommandLine": "process.command_line",
+                    }
+                ),
+                rule_conditions=[LogsourceCondition(product="linux", category="process_creation")],
+            ),
+            ProcessingItem(
                 identifier="artex_ecs_dns_host",
                 transformation=FieldMappingTransformation({"ComputerName": "host.name"}),
                 rule_conditions=[LogsourceCondition(product="windows", category="dns_query")],

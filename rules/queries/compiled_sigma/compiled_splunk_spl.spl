@@ -1,8 +1,8 @@
 # Auto-compiled by artex-hunt sigma-compile (Splunk SPL (Windows))
-# Source: rules/sigma (19 rules)
+# Source: rules/sigma (20 rules)
 
-# === Autonomous Agentic AD Pivot Toolkit (Chisel/Proxychains, NTLM Relay, Relocated DLL Sideloading, Staging C Compiler) (artex_ad_ntlm_relay_chisel_sideload_pivots.yml | id=3f7a9d12-8b54-4e61-a29f-6c4d81e5b204 | level=high) ===
-CommandLine IN ("*chisel client*", "*chisel.exe client*", "*R:socks*", "*proxychains -f*", "*proxychains4 -f*", "*ligolo-agent*") OR CommandLine IN ("*ntlmrelayx*", "*smbserver.py*", "*petitpotam*", "*coercer*", "*certipy*", "*ldapdomaindump*") OR (Image IN ("*\\edge.exe", "*\\msedge.exe") CommandLine="*config.bin*" NOT (Image IN ("*\\Program Files\\*", "*\\Program Files (x86)\\*", "*\\Windows\\System32\\*")))
+# === Autonomous Agentic AD Pivot & Tunneling Toolkit (Windows) (artex_ad_ntlm_relay_chisel_sideload_pivots.yml | id=3f7a9d12-8b54-4e61-a29f-6c4d81e5b204 | level=high) ===
+(CommandLine="*chisel*" CommandLine="*client*") OR CommandLine IN ("*R:socks*", "*ligolo-agent*", "*vpncmd*") OR CommandLine IN ("*ntlmrelayx*", "*smbserver.py*", "*petitpotam*", "*coercer*", "*certipy*", "*ldapdomaindump*", "*evil-winrm*", "*netexec*") OR ((Image IN ("*\\edge.exe", "*\\msedge.exe") CommandLine="*config.bin*") OR Image="*\\svchost.exe" NOT (Image IN ("*\\Program Files\\*", "*\\Program Files (x86)\\*", "*\\Windows\\System32\\*", "*\\Windows\\SysWOW64\\*", "*\\Windows\\WinSxS\\*", "*\\AppData\\Local\\Microsoft\\Edge\\Application\\*", "*\\AppData\\Local\\Microsoft\\EdgeUpdate\\*")))
 
 # === ARTEX Cloud Reconnaissance — AWS CloudWatch Secret Search or DryRun Permission Sweep (artex_aws_cloudwatch_and_dryrun_sweep.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a019 | level=high) ===
 (eventName="FilterLogEvents" requestParameters.filterPattern IN ("*password*", "*AKIA*", "*secret*", "*token*")) OR errorCode="*DryRunOperation*"
@@ -33,6 +33,9 @@ status.errorCode IN (7000215, 7000222, 500121) OR operationName IN ("*Register s
 
 # === Duo Security, PingFederate, and Google Workspace 2FA Fatigue & Factor Tampering (artex_idp_duo_ping_gws_2fa_abuse.yml | id=9b4e1a27-3c8f-4f92-b7c1-8d2e60f4a139 | level=high) ===
 Action IN ("*duo_fraud_reported*", "*fraud_reported*", "*user_marked_fraud*", "*duo_admin:bypass_create*", "*duo_admin:phone_create*", "*duo_admin:2fa_device_enroll*") OR Action IN ("*pingid_device_paired*", "*mfa_device_enrolled*", "*mfa_rejected*") OR Action IN ("*2sv_disable*", "*2sv_enroll*", "*recovery_phone_edit*", "*recovery_email_edit*", "*second_factor_failure*")
+
+# === Autonomous Agentic Linux Staging C Compilation or Proxychains/Chisel Pivot (artex_linux_staging_compiler_and_proxychains_pivot.yml | id=9f4e2a17-6b3c-4d8e-9a51-2c7b80e4d312 | level=high) ===
+(Image IN ("*gcc", "*clang", "*/cc") CommandLine IN ("*/tmp/*", "*/dev/shm/*", "*/var/tmp/*")) OR (CommandLine="*proxychains*" CommandLine="*-f*") OR (CommandLine="*chisel*" CommandLine="*client*")
 
 # === Anomalous Server or Endpoint Egress to External LLM APIs (artex_llm_api_egress.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a002 | level=medium) ===
 QueryName IN ("*api.anthropic.com", "*api.openai.com", "*api.deepseek.com", "*open.bigmodel.cn", "*api.x.ai", "*api.moonshot.cn", "*api.moonshot.ai", "*dashscope.aliyuncs.com", "*openrouter.ai", "*api.siliconflow.cn", "*xcai.com", "*xcai.pro", "*artex.lol", "*lanmao666.com", "*lanmao666.xyz", "*nginxmysql.com", "*vietnam852.com", "*zhzy999.net") NOT (ComputerName IN ("DEV-AI-GW-*", "WKSTN-*", "LAPTOP-*"))
