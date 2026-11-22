@@ -17,7 +17,7 @@ Static strings from early advisories (`ArtexProbe`, realm headers, canary paths)
 
 - **Detection Engineers:** 19 validated Sigma rules in [rules/sigma/](rules/sigma/), pre-compiled SIEM/XDR packs in [rules/queries/compiled_sigma/](rules/queries/compiled_sigma/) (Elastic ES|QL & Lucene, Microsoft KQL/MDE/Sentinel ASIM, CrowdStrike LogScale CQL, Splunk SPL, SentinelOne S1QL), plus Zeek/Suricata in [rules/network/](rules/network/) and YARA in [rules/yara/](rules/yara/).
 - **Incident Responders:** Read-only Linux/offline-image operator host triage (`artex-hunt host-triage`) and `--network=none --read-only` Docker log/transcript wrappers ([scripts/sandbox-scan.sh](scripts/sandbox-scan.sh), [scripts/sandbox-analyze-tasks.sh](scripts/sandbox-analyze-tasks.sh)).
-- **Tabletop & Purple Teams:** `artex-hunt simulate` generates 34 self-contained synthetic datasets (18 multi-surface agentic attack scenarios + 16 benign enterprise baselines) with zero real victim data; `artex-hunt eval` scores precision and recall across the full suite.
+- **Tabletop & Purple Teams:** Follow the [Live-Lab & Purple-Team Evaluation Guide](docs/LAB_EVALUATION_GUIDE.md) to test against an isolated lab range, or run `artex-hunt simulate` / `artex-hunt eval` for 34 self-contained synthetic datasets (18 multi-surface agentic scenarios + 16 benign baselines).
 - **Threat Hunters & Researchers:** Blind out-of-distribution stress-test logs ([docs/blind_stress_test_log.md](docs/blind_stress_test_log.md)), threat model ([docs/artex_threat_model.md](docs/artex_threat_model.md)), and primary-source references ([docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md)).
 
 ---
@@ -91,6 +91,7 @@ python3 -m venv .venv
 <details>
 <summary><strong>Documentation Index</strong></summary>
 
+- [docs/LAB_EVALUATION_GUIDE.md](docs/LAB_EVALUATION_GUIDE.md) — Quick clone, drop-in SIEM/NSM packs, and highest-value telemetry for live-lab / purple-team evaluation
 - [docs/FIRST_DRAFT_DELIVERY.md](docs/FIRST_DRAFT_DELIVERY.md) — Full component overview and verification matrix
 - [docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md) — Upstream researchers, repositories, and advisories
 - [docs/soc_siem_validation_playbook.md](docs/soc_siem_validation_playbook.md) — Positive-control schema checks and 7-day shadow-mode tuning
