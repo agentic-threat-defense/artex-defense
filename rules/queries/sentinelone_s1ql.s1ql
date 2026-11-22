@@ -4,31 +4,34 @@
 //       and `tgt.process.*` is the newly CREATED CHILD process.
 // ============================================================================
 
-// 1. ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Ports (8787-8890), & Host Forensics
+// 1. ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Ports (8787-8890, excl. Zscaler 8890), & Host Forensics
 (tgt.file.path contains:anycase ("ProgramData\\artx5v", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "mitmproxy-ca-cert.pem") OR
  (tgt.file.path contains:anycase "/tasks/" AND tgt.file.path contains:anycase "/cmd-output/") OR
  tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe") OR
  url.address contains:anycase ("/Inform/logger/", "/api/exploration/", "/api/sync/scopesentry", "?artex=", "&artex=") OR
  url.address matches "(?i)(?:^|\\.|//)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|dnslog\\.cn)(?:[:/]|$)" OR
- dst.port.number in (8787, 8788, 8790, 8890))
+ (dst.port.number in (8787, 8788, 8790, 8890) AND NOT (dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA")))
 
 // 2. Automated EDR Sensor Discovery Probes (Including SentinelAgent / CrowdStrike)
 event.type == "Process Creation" AND
 tgt.process.cmdline contains:anycase ("sc query", "Get-Service", "tasklist", "systemctl status", "pgrep") AND
 tgt.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon", "falcon-sensor", "CrowdStrike", "WinDefend", "Sysmon")
 
-// 3. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — java/node require recon/download args)
+// 3. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — scopes GCP metadata.google.internal exemption to standalone curl/wget only)
 event.type == "Process Creation" AND
 tgt.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") AND (
   src.process.name in:anycase ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe") OR
-  (src.process.name in:anycase ("java", "java.exe", "node", "node.exe") AND
-   tgt.process.cmdline contains:anycase ("whoami", "nltest", "sc query", "curl ", "wget ", "Invoke-WebRequest", "-enc ", "-encodedcommand", "base64"))
+  (src.process.name in:anycase ("java", "java.exe", "node", "node.exe") AND (
+    tgt.process.cmdline contains:anycase ("whoami", "nltest", "sc query", "Invoke-WebRequest", "-enc ", "-encodedcommand", "base64", "/dev/tcp") OR
+    (tgt.process.cmdline contains:anycase ("curl ", "wget ") AND
+     NOT (tgt.process.cmdline contains:anycase "metadata.google.internal" AND NOT tgt.process.cmdline contains:anycase ("service-accounts", "/token", "ssh-keys", "kube-env", "recursive=true", "iam/security-credentials", ";", "&&", "||", "|", "`", "$(")))
+  ))
 )
 
-// 4A. High-Confidence C2 Relays, Webhook/OAST Exfil, or Console Ports 8787-8890 (ALL Endpoints)
+// 4A. High-Confidence C2 Relays, Webhook/OAST Exfil, or Console Ports 8787-8890 (ALL Endpoints, excl. Zscaler 8890)
 event.type in ("DNS Resolved", "IP Connect") AND (
   event.dns.request matches "(?i)(?:^|\\.)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|artex\\.noog2infra\\.site|artex\\.ok7777\\.eu\\.cc|artex\\.tokena2b\\.top|webhook\\.site|oast\\.(?:live|fun|me)|interact\\.sh|dnslog\\.cn)$" OR
-  dst.port.number in (8787, 8788, 8790, 8890)
+  (dst.port.number in (8787, 8788, 8790, 8890) AND NOT (dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA"))
 )
 
 // 4B. Anomalous Server/DMZ Egress to Commercial LLM APIs (Excludes Workstations)

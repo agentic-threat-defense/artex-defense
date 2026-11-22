@@ -23,9 +23,9 @@ process where event.type == "start" and
      process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*curl *", "*wget *", "*Invoke-WebRequest*", "*-enc *", "*-encodedcommand*", "*base64*", "*/dev/tcp*"))
   )
 
-// 3. [EQL] ARTEX / ScopeWeaver / Norma SDK / BLOODALCHEMY Artifacts, Ports (8787-8890), or Webhook/C2 Egress
+// 3. [EQL] ARTEX / ScopeWeaver / Norma SDK / BLOODALCHEMY Artifacts, Ports (8787-8890, excl. Zscaler 8890), or Webhook/C2 Egress
 any where
-  destination.port in (8787, 8788, 8790, 8890) or
+  (destination.port in (8787, 8788, 8790, 8890) and (process.name == null or not (destination.port == 8890 and process.name : ("ZSA*", "zscaler*")))) or
   file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
   process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*") or
   url.original : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or

@@ -34,7 +34,15 @@ detection:
       - 'artex-server'
       - 'artex-worker'
       - 'norma-agent'
-  condition: selection_port or selection_path
+  filter_zscaler_8890:
+    DestinationPort: 8890
+    Image|endswith:
+      - '\ZSATunnel.exe'
+      - '\ZSAService.exe'
+      - '\ZSAUpm.exe'
+      - '\ZSATray.exe'
+  condition: (selection_port and not filter_zscaler_8890) or selection_path
 falsepositives:
-  - Legitimate internal developer services or RStudio Server instances listening on TCP 8787.
+  - Legitimate internal developer services, RStudio Server, or Cloudflare Wrangler listening on TCP 8787.
+  - Zscaler Client Connector (ZSATunnel.exe / ZSA*) tunnel traffic on TCP 8890 (excluded above; extend for custom Zscaler paths or Linux ZscalerTunnel).
 level: high

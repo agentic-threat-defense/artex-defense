@@ -431,9 +431,15 @@ WEB_PARENT_PROCESSES: tuple[str, ...] = (
 # Noisy runtime parents (java/node spawn shells legitimately in CI/builds; require suspicious shell args)
 RUNTIME_WEB_PARENTS: tuple[str, ...] = ("java", "java.exe", "node", "node.exe")
 SUSPICIOUS_RUNTIME_SHELL_ARG_RE = re.compile(
-    r"(whoami|\bid\b|nltest|sc\s+query|curl\s|wget\s|invoke-webrequest|-enc\s|base64|/dev/tcp|\bnc\s)",
+    r"(whoami|\bid\b|nltest|sc\s+query|curl\s|wget\s|invoke-webrequest|-enc(?:odedcommand)?\s|base64|/dev/tcp|\bnc\s)",
     re.IGNORECASE,
 )
+SUSPICIOUS_RUNTIME_NON_FETCH_ARG_RE = re.compile(
+    r"(whoami|\bid\b|nltest|sc\s+query|invoke-webrequest|-enc(?:odedcommand)?\s|base64|/dev/tcp|\bnc\s)",
+    re.IGNORECASE,
+)
+SHELL_CHAIN_OR_PIPE_RE = re.compile(r"(?:;|&&|\|\||\||`|\$\()")
+HTTP_URL_TOKEN_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
 
 SHELL_CHILD_BASES: frozenset[str] = frozenset(
     {
@@ -705,6 +711,45 @@ WEB_SSRF_METADATA_RE = re.compile(
     r"(169\.254\.169\.254|169\.254\.170\.2|metadata\.google\.internal|100\.100\.100\.200/latest)",
     re.IGNORECASE,
 )
+# Endpoint command-line IMDS checks: AWS/Alibaba IMDS always alerts, while routine GCP metadata.google.internal
+# health/zone probes from Java/Node/GCE SDKs only alert when targeting tokens/service-accounts/ssh-keys/piping.
+CMD_IMDS_ALWAYS_RE = re.compile(
+    r"(169\.254\.169\.254|169\.254\.170\.2|100\.100\.100\.200/latest)",
+    re.IGNORECASE,
+)
+GCP_SENSITIVE_METADATA_RE = re.compile(
+    r"(service-accounts|/token\b|ssh-keys|kube-env|recursive=true|iam/security-credentials|\|\s*(?:curl|wget|nc|bash|sh|base64)|>\s*/tmp)",
+    re.IGNORECASE,
+)
+# Zscaler Client Connector processes that legitimately communicate over TCP 8890
+ZSCALER_CLIENT_PROC_RE = re.compile(
+    r"(?:^|[/\\])(?:zsatunnel|zsaservice|zsaupm|zsatray|zscalertunnel)(?:\.exe)?$",
+    re.IGNORECASE,
+)
+
+
+def _is_benign_gcp_metadata_probe_cmd(cmd_raw: str) -> bool:
+    """Return True ONLY for standalone, non-chained curl/wget probes to benign GCP metadata.google.internal paths."""
+    if "metadata.google.internal" not in cmd_raw.lower():
+        return False
+    if GCP_SENSITIVE_METADATA_RE.search(cmd_raw):
+        return False
+    if SUSPICIOUS_RUNTIME_NON_FETCH_ARG_RE.search(cmd_raw):
+        return False
+    if SHELL_CHAIN_OR_PIPE_RE.search(cmd_raw):
+        return False
+    url_hosts: list[str] = []
+    for m in HTTP_URL_TOKEN_RE.finditer(cmd_raw):
+        try:
+            parsed = urlsplit(m.group(0))
+            if parsed.username or parsed.password or not parsed.hostname:
+                return False
+            url_hosts.append(parsed.hostname.lower())
+        except ValueError:
+            return False
+    if not url_hosts or any(h != "metadata.google.internal" for h in url_hosts):
+        return False
+    return True
 # Wildcard IP-reflecting DNS services (sslip.io, nip.io, xip.io, traefik.me, localtest.me, lvh.me)
 # used for IP-blocklist evasion, blind SSRF/DNS rebinding, and throwaway Let's Encrypt C2 relays.
 WILDCARD_DNS_HOST_RE = re.compile(
@@ -792,14 +837,17 @@ def _find_wildcard_dns_ssrf_evasion_in_http_path(ev_path: str, *, surface: str =
     low = ev_path.lstrip().lower()
     imds_only_for_path = surface == "cloud_iam"
     if low.startswith(("http://", "https://")):
-        parsed = urlsplit(ev_path.strip())
-        netloc_hit = _find_wildcard_dns_ssrf_evasion(parsed.netloc, imds_only=True)
-        if netloc_hit:
-            return netloc_hit
-        tail = "?".join(part for part in (parsed.path, parsed.query) if part)
-        if parsed.fragment:
-            tail = f"{tail}#{parsed.fragment}"
-        return _find_wildcard_dns_ssrf_evasion(tail, imds_only=imds_only_for_path)
+        try:
+            parsed = urlsplit(ev_path.strip())
+            netloc_hit = _find_wildcard_dns_ssrf_evasion(parsed.netloc, imds_only=True)
+            if netloc_hit:
+                return netloc_hit
+            tail = "?".join(part for part in (parsed.path, parsed.query) if part)
+            if parsed.fragment:
+                tail = f"{tail}#{parsed.fragment}"
+            return _find_wildcard_dns_ssrf_evasion(tail, imds_only=imds_only_for_path)
+        except ValueError:
+            return _find_wildcard_dns_ssrf_evasion(ev_path, imds_only=True)
     return _find_wildcard_dns_ssrf_evasion(ev_path, imds_only=imds_only_for_path)
 UPLOAD_WEBSHELL_PATH_RE = re.compile(
     r"/(?:uploads?|media|attachments|files|static/uploads|sites/default/files|wp-content/uploads)/"
@@ -1329,9 +1377,12 @@ def _inspect_window_signals(
                 indicators.add(f"mutated_canary_4xx:{m_can.group(0)}")
 
         # Web SSRF (cloud metadata & wildcard-DNS IP evasion), JWT alg:none SSO spray, & upload-directory scripts
-        if WEB_SSRF_METADATA_RE.search(f"{ev_path} {ev.get('command_line', '')}"):
+        cmd_for_imds = ev.get("command_line", "")
+        if WEB_SSRF_METADATA_RE.search(ev_path) or CMD_IMDS_ALWAYS_RE.search(cmd_for_imds) or (
+            "metadata.google.internal" in cmd_for_imds.lower() and GCP_SENSITIVE_METADATA_RE.search(cmd_for_imds)
+        ):
             reasons.add("web_ssrf_or_upload_webshell")
-            indicators.add(f"web_ssrf_metadata:{ev_path[:80]}")
+            indicators.add(f"web_ssrf_metadata:{(ev_path or cmd_for_imds)[:80]}")
         wildcard_ssrf = (
             _find_wildcard_dns_ssrf_evasion_in_http_path(ev_path, surface=str(ev.get("surface") or ""))
             or _find_wildcard_dns_ssrf_evasion(ev.get("command_line", ""), imds_only=True)
@@ -1388,8 +1439,9 @@ def _inspect_window_signals(
             indicators.add(f"post_exploit_or_c2:{m_c2.group(0)}")
 
         if ev.get("dest_port") in KNOWN_AGENTIC_PORTS:
-            reasons.add("agentic_default_port")
-            indicators.add(f"dest_port:{ev['dest_port']}")
+            if not (ev.get("dest_port") == 8890 and ZSCALER_CLIENT_PROC_RE.search(ev.get("process", ""))):
+                reasons.add("agentic_default_port")
+                indicators.add(f"dest_port:{ev['dest_port']}")
 
         dest_lower = ev.get("dest_host", "").lower()
         cmd_lower = ev.get("command_line", "").lower()
@@ -1566,6 +1618,7 @@ def _inspect_window_signals(
                 parent_base in RUNTIME_WEB_PARENTS
                 and proc_base in SHELL_CHILD_BASES
                 and SUSPICIOUS_RUNTIME_SHELL_ARG_RE.search(cmd_raw)
+                and not _is_benign_gcp_metadata_probe_cmd(cmd_raw)
             ):
                 reasons.add("web_parent_shell_spawn")
                 indicators.add(f"runtime_parent_susp_shell:{ev['parent_process']}->{ev['process']}")

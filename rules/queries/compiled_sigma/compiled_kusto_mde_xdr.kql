@@ -23,7 +23,7 @@ DeviceProcessEvents
 
 // === Potential ARTEX or ScopeWeaver Framework Artifact or Default Listener (artex_network_listener.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a001 | level=high) ===
 DeviceNetworkEvents
-| where (RemotePort in (8787, 8788, 8790, 8890)) or (InitiatingProcessFolderPath contains "ScopeWeaver" or InitiatingProcessFolderPath contains "AntiFox" or InitiatingProcessFolderPath contains "Pojun" or InitiatingProcessFolderPath contains "FORANG" or InitiatingProcessFolderPath contains "sco-fix2" or InitiatingProcessFolderPath contains "artx5v" or InitiatingProcessFolderPath contains "artex-server" or InitiatingProcessFolderPath contains "artex-worker" or InitiatingProcessFolderPath contains "norma-agent")
+| where ((RemotePort in (8787, 8788, 8790, 8890)) and (not((RemotePort == 8890 and (InitiatingProcessFolderPath endswith "\\ZSATunnel.exe" or InitiatingProcessFolderPath endswith "\\ZSAService.exe" or InitiatingProcessFolderPath endswith "\\ZSAUpm.exe" or InitiatingProcessFolderPath endswith "\\ZSATray.exe"))))) or (InitiatingProcessFolderPath contains "ScopeWeaver" or InitiatingProcessFolderPath contains "AntiFox" or InitiatingProcessFolderPath contains "Pojun" or InitiatingProcessFolderPath contains "FORANG" or InitiatingProcessFolderPath contains "sco-fix2" or InitiatingProcessFolderPath contains "artx5v" or InitiatingProcessFolderPath contains "artex-server" or InitiatingProcessFolderPath contains "artex-worker" or InitiatingProcessFolderPath contains "norma-agent")
 
 // === ARTEX Post-Exploitation AD Credential Dumping (Kerberoast/DCSync) or Follow-On C2 (vshell/AdaptixC2/WISP) (artex_post_exploit_ad_and_followon_c2.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a020 | level=critical) ===
 DeviceProcessEvents

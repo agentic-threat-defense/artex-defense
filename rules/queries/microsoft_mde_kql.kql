@@ -27,8 +27,12 @@ DeviceProcessEvents
         and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh"))
     or (InitiatingProcessFileName in~ ("java.exe", "java", "node.exe", "node")
         and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh")
-        and (ProcessCommandLine has_any ("whoami", "nltest", "sc query", "Invoke-WebRequest", "base64", "encodedcommand")
-             or ProcessCommandLine matches regex @"(?i)(?:curl|wget)\s|(?:\s|^)-enc\s"))
+        and (ProcessCommandLine has_any ("whoami", "nltest", "sc query", "Invoke-WebRequest", "base64", "encodedcommand", "/dev/tcp")
+             or ProcessCommandLine matches regex @"(?i)(?:\s|^)-enc\s"
+             or (ProcessCommandLine matches regex @"(?i)(?:curl|wget)\s"
+                 and not(ProcessCommandLine has "metadata.google.internal"
+                         and not(ProcessCommandLine has_any ("service-accounts", "/token", "ssh-keys", "kube-env", "recursive=true", "iam/security-credentials")
+                                 or ProcessCommandLine matches regex @"[;|&`]|\$\(")))))
     or FolderPath has_any (@"\ProgramData\artx5v\", "ScopeWeaver", "artex-server", "artex-worker")
     or (FileName in~ ("edge.exe", "msedge.exe")
         and not(FolderPath has_any (@"\Program Files\", @"\Program Files (x86)\", @"\Windows\System32\", @"\Windows\SysWOW64\", @"\Windows\WinSxS\", @"\AppData\Local\Microsoft\Edge\Application\", @"\AppData\Local\Microsoft\EdgeUpdate\"))
@@ -42,10 +46,11 @@ DeviceProcessEvents
 | project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, ProcessCommandLine
 
 // 3A. MDE: High-Confidence C2 Relays, Webhook/OAST Exfil, or Console Ports 8787/8788/8790/8890 (ALL Hosts — NEVER Suppress Workstations)
-//     (Note: DeviceNetworkEvents.RemoteUrl holds SNI/hostname on TLS; hunt deep HTTPS paths like /Inform/logger/ in proxy/WAF logs)
+//     (Note: Excludes Zscaler Client Connector ZSA* on TCP 8890; DeviceNetworkEvents.RemoteUrl holds SNI/hostname on TLS)
 DeviceNetworkEvents
 | where Timestamp > ago(24h)
-| where RemotePort in (8787, 8788, 8790, 8890)
+| where (RemotePort in (8787, 8788, 8790, 8890)
+         and not(RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"))
     or RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:xcai\.(?:com|pro)|lanmao666\.(?:com|xyz)|artex\.lol|nginxmysql\.com|vietnam852\.com|zhzy999\.net|sqlserver-sqlite\.com|artex\.noog2infra\.site|artex\.ok7777\.eu\.cc|artex\.tokena2b\.top|webhook\.site|oast\.(?:live|fun|me)|interact\.sh|dnslog\.cn)(?:[:/]|$)"
 | summarize Connections = count(), Destinations = make_set(RemoteUrl, 10), RemoteIPs = make_set(RemoteIP, 10), Ports = make_set(RemotePort, 5)
     by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName, bin(Timestamp, 5m)

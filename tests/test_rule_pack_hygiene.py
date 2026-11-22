@@ -87,23 +87,33 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     cql = (RULES_ROOT / "queries" / "crowdstrike_logscale_cql.cql").read_text(encoding="utf-8")
     assert "RemotePort IN [" not in cql, "Invalid LogScale CQL `IN [...]` syntax"
     assert "ComputerName!=/" not in cql, "Invalid LogScale CQL `!= /regex/` syntax"
-    assert "in(RemotePort, values=" in cql
+    assert "RemotePort=/^(8787|8788|8790|8890)$/" in cql
+    assert "ContextBaseFileName=/^ZSA/i" in cql, "CrowdStrike CQL must exclude Zscaler Client Connector on TCP 8890"
+    assert "metadata\\.google\\.internal" in cql, "CrowdStrike CQL Query 3 must exclude routine GCP metadata checks"
+    assert "sort(hits, order=asc)" in cql, "CrowdStrike CQL Query 3 must use LFO ascending sort to avoid 200-row cap"
     assert "not ComputerName=/" in cql
 
     eql = (RULES_ROOT / "queries" / "elastic_ech_eql.eql").read_text(encoding="utf-8")
     assert 'RLIKE "(?i)' not in eql, "ES|QL Lucene Automaton RLIKE does not support (?i) flag"
     assert 'url.path : ("*/Inform/logger/*", "*?artex=*"' not in eql, "ECS url.path excludes query strings"
     assert "BY aws.cloudtrail.user_identity.arn, source.ip, event.action" not in eql, "Grouping by event.action forces COUNT_DISTINCT=1"
+    assert "process.name == null or not (destination.port == 8890 and process.name" in eql
 
     kql = (RULES_ROOT / "queries" / "microsoft_mde_kql.kql").read_text(encoding="utf-8")
     assert 'ResultType in ("500121", "50074")' not in kql, "Entra 50074 is normal MFA challenge, not failure"
     assert 'ResultType == "500121"' in kql
+    assert 'RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"' in kql
+    assert 'ProcessCommandLine has "metadata.google.internal"' in kql
+    assert '";", "&&"' not in kql, "KQL has_any() only matches alphanumeric terms, never pure punctuation"
+    assert r'matches regex @"[;|&`]|\$\("' in kql
 
     s1ql = (RULES_ROOT / "queries" / "sentinelone_s1ql.s1ql").read_text(encoding="utf-8")
     assert "| bucket 30s" not in s1ql, "Invalid S1QL PowerQuery syntax; use timebucket()"
     assert "timebucket(" in s1ql
     assert "tgt.process.cmdline" in s1ql
     assert "src.process.parent.name" not in s1ql, "Inverted S1QL 2.0 parent/child lineage"
+    assert 'dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA"' in s1ql
+    assert 'tgt.process.cmdline contains:anycase "metadata.google.internal"' in s1ql
 
 
 def test_passive_intel_hunt_queries_use_current_platform_syntax() -> None:
