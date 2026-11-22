@@ -2,10 +2,12 @@
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
 import yaml
 
 from artex_defense.detectors import scan_telemetry_file
@@ -52,6 +54,9 @@ def test_lab_ctl_syntax_and_offline_seed_iso_build(tmp_path: Path) -> None:
     ctl = LAB_DIR / "lab-ctl.sh"
     res_syn = subprocess.run(["bash", "-n", str(ctl)], capture_output=True, text=True, check=False)
     assert res_syn.returncode == 0, f"lab-ctl.sh syntax error: {res_syn.stderr}"
+
+    if shutil.which("xorriso") is None:
+        pytest.skip("xorriso not installed; skipping offline cloud-init seed ISO build")
 
     env = dict(os.environ, ARTEX_LAB_STATE_DIR=str(tmp_path / "state"))
     seeds_dir = tmp_path / "seeds"

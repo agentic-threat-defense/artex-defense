@@ -12,7 +12,10 @@ import os
 import re
 from pathlib import Path
 
-from mcp.server.mcpserver import MCPServer
+try:
+    from mcp.server.mcpserver import MCPServer
+except ImportError:  # mcp 1.x compatibility
+    from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[no-redef]
 
 from .detectors import correlate_kill_chains, scan_telemetry_file
 from .sanitizer import sanitize_payload, sanitize_text
