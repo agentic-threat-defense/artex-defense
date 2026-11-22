@@ -40,6 +40,8 @@ detection:
       - 'artex-enrich/'
       - 'artex-readonly/'
       - 'ARTEX-worker/'
+      - 'artex-agent'
+      - 'artex-judge-'
       - 'ArtexProbe'
       - 'artex-probe'
   condition: selection_webhook_apex or selection_webhook_sub or selection_norma

@@ -54,9 +54,9 @@ KNOWN_ARTIFACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         "artex_family_keyword",
         re.compile(
             r"\b(artex|artex-enrich|artex-readonly|artex-worker|artex-audit|artex-pentest|"
-            r"artex-verify|artex-spawn|artex-i\d+-canary|artexprobe|artex-probe|"
-            r"scopeweaver|antifox|pojun|forang|sco-fix2|guanlan\s*sec|bloodalchemy|"
-            r"artex\s*mx|agent\s+security\s+workbench|tomicdd/artex|congdonglinux/artex|"
+            r"artex-verify|artex-spawn|artex-agent|artex-judge-[a-z0-9_-]+|artex-i\d+-canary|"
+            r"artexprobe|artex-probe|scopeweaver|antifox|pojun|forang|sco-fix2|guanlan\s*sec|"
+            r"bloodalchemy|artex\s*mx|agent\s+security\s+workbench|tomicdd/artex|congdonglinux/artex|"
             r"cyberstrikeai|pentagi|hexstrike|cairn|reaper-agent|strix-agent|shannon-agent|"
             r"hermes-agent|agent-zero|carbonato|exploit_agent|openbullet)\b",
             re.IGNORECASE,
@@ -203,6 +203,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "llm_api_egress": 65,
     "llm_cli_context_idioms": 60,
     "write_then_readback_verification": 60,
+    "ai_agent_spawns_offensive_tool": 55,
     "automated_error_retry_loop": 25,
     "machine_speed_burst": 20,
     "low_jitter_programmatic_cadence": 20,
@@ -250,6 +251,8 @@ AGENTIC_USER_AGENTS: tuple[str, ...] = (
     "artex-pentest/",
     "artex-verify/",
     "artex-spawn/",
+    "artex-agent",
+    "artex-judge-",
     "artex-selfupdate",
     "artex-i",
     "artex/1.0",
@@ -300,6 +303,8 @@ EXPLICIT_FRAMEWORK_UAS: tuple[str, ...] = (
     "artex-pentest/",
     "artex-verify/",
     "artex-spawn/",
+    "artex-agent",
+    "artex-judge-",
     "artex-selfupdate",
     "artex/1.0",
     "artexverify/",
@@ -567,7 +572,19 @@ EC2_USERDATA_ACTION_RE = re.compile(r"(describeinstanceattribute.*userdata|userd
 SSM_SENSITIVE_ACTION_RE = re.compile(r"(sendcommand|getparametersbypath|getparameter.*withdecryption)", re.IGNORECASE)
 GRAPHQL_INTROSPECTION_RE = re.compile(r"(__schema|__type\b|introspectionquery)", re.IGNORECASE)
 AI_MCP_DISCOVERY_PATH_RE = re.compile(
-    r"(^|/)(?:mcp(?:/|$)|sse(?:/|$)|\.well-known/agent\.json|v1/models|api/tags|api/ps|gradio_api|v1/assistants)",
+    r"(^|/)(?:mcp(?:/|$)|mcp-rest/test/tools/list|mcp-rest/|sse(?:/|$)|\.well-known/agent\.json|v1/models|api/tags|api/ps|gradio_api|v1/assistants)",
+    re.IGNORECASE,
+)
+# Behavioral process-tree signal (ThreatDefence v2.7.0): AI agent / coding harness shell spawning
+# explicit offensive pentest/exploitation tools (benign dev tools like git/pytest/npm/curl are never flagged)
+AI_AGENT_PARENT_RE = re.compile(
+    r"(?:^|[/\\])(?:claude(?:\.exe)?|codex(?:\.exe)?|opencode(?:\.exe)?|qwen-code(?:\.exe)?|"
+    r"kimi-cli(?:\.exe)?|hermes-agent(?:\.exe)?)$|shell-snapshots|claude_code_shell_launcher_script",
+    re.IGNORECASE,
+)
+OFFENSIVE_TOOL_CHILD_RE = re.compile(
+    r"(?:^|[/\\\s\"'])(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
+    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump)(?:\.exe)?(?=$|[\s\"'])",
     re.IGNORECASE,
 )
 SENSITIVE_CONFIG_FILE_RE = re.compile(
@@ -1186,6 +1203,15 @@ def _inspect_window_signals(
         if not is_workstation and cmd_raw and LLM_API_KEY_HARVEST_RE.search(cmd_raw):
             llm_key_harvest_hits += 1
             indicators.add(f"llm_api_key_harvest:{cmd_raw[:80]}")
+        parent_raw = str(ev.get("parent_process") or "")
+        proc_raw = str(ev.get("process") or "")
+        if (
+            ev.get("surface") == "endpoint"
+            and (AI_AGENT_PARENT_RE.search(parent_raw) or AI_AGENT_PARENT_RE.search(cmd_raw))
+            and (OFFENSIVE_TOOL_CHILD_RE.search(proc_raw) or OFFENSIVE_TOOL_CHILD_RE.search(cmd_raw))
+        ):
+            reasons.add("ai_agent_spawns_offensive_tool")
+            indicators.add(f"ai_agent_tool:{parent_raw or 'shell'}->{proc_raw or cmd_raw[:50]}")
         if ev.get("surface") == "endpoint" and cmd_raw:
             for fm in SENSITIVE_CONFIG_FILE_RE.finditer(cmd_raw):
                 tok = fm.group(1).strip(" '\"\t;|/\\").lower()

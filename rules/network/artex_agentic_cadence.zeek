@@ -44,7 +44,7 @@ export {
 
     # Tightened to avoid FP hits on benign strings ("normal", "smartex") or standalone QA HeadlessChrome
     const agentic_ua_pattern: pattern =
-        /(norma\/[0-9]|norma-agent|artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|artex-selfupdate|ArtExVerify\/|ArtEx\/1\.0|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|ScopeWeaver|hermes-agent\/|strix\/|Nuclei)/i &redef;
+        /(norma\/[0-9]|norma-agent|artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|artex-agent|artex-judge-[a-z0-9_-]+|artex-selfupdate|ArtExVerify\/|ArtEx\/1\.0|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|ScopeWeaver|hermes-agent\/|strix\/|Nuclei)/i &redef;
 
     const static_asset_uri_pattern: pattern =
         /(\/favicon\.ico|\.(png|jpe?g|gif|svg|ico|css|js|map|woff2?|ttf)(\?|$))/i &redef;

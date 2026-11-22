@@ -46,6 +46,8 @@ detection:
       - 'Fuzz Faster U Fool'
       - 'ArtExVerify/1.0'
       - 'Mozilla/5.0 (ARTEX)'
+      - 'artex-agent'
+      - 'artex-judge-'
   condition: selection_canary_uri or selection_ua
 falsepositives:
   - Authorized red-team exercises explicitly using recon-audit or security-testing user agents.
