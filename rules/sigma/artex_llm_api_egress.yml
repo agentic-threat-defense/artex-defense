@@ -17,7 +17,7 @@ logsource:
   category: dns_query
   product: windows
 detection:
-  selection_llm_domains:
+  selection_commercial_llm:
     QueryName|endswith:
       - 'api.anthropic.com'
       - 'api.openai.com'
@@ -29,6 +29,9 @@ detection:
       - 'dashscope.aliyuncs.com'
       - 'openrouter.ai'
       - 'api.siliconflow.cn'
+  selection_malicious_relay:
+    # High-confidence ARTEX/BLOODALCHEMY relay & C2 domains — NEVER suppress on workstations
+    QueryName|endswith:
       - 'xcai.com'
       - 'xcai.pro'
       - 'artex.lol'
@@ -37,13 +40,19 @@ detection:
       - 'nginxmysql.com'
       - 'vietnam852.com'
       - 'zhzy999.net'
+      - 'sqlserver-sqlite.com'
+      - 'artex.noog2infra.site'
+      - 'artex.ok7777.eu.cc'
+      - 'artex.tokena2b.top'
   filter_authorized_hosts:
-    # Scope to Servers / DMZ / DCs; suppress approved AI gateways and standard user workstations
+    # Scope commercial LLM API alerts to Servers / DMZ / DCs; suppress approved AI gateways and standard workstations
     ComputerName|startswith:
       - 'DEV-AI-GW-'
       - 'WKSTN-'
       - 'LAPTOP-'
-  condition: selection_llm_domains and not filter_authorized_hosts
+      - 'MACBOOK-'
+      - 'DESKTOP-'
+  condition: (selection_commercial_llm and not filter_authorized_hosts) or selection_malicious_relay
 falsepositives:
   - Authorized developer IDE assistants, browser-based AI tools, or approved internal AI gateways.
 level: medium

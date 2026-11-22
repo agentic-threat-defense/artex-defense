@@ -1,49 +1,71 @@
 # Enterprise Threat-Intel & Infrastructure Hunting Query Templates (Offline Reference)
 
-> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** These are **offline query templates** for passive intelligence platforms (e.g., **Censys**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, and **FoxIO JA4+**, or equivalent passive TI services). Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Inspect any retrieved artifacts or `TaskID` transcripts exclusively inside an isolated, snapshotted Tier 3 air-gapped VM (`artex-lab-isolated`) and sanitize/redact them via `scripts/sandbox-analyze-tasks.sh` before offline analysis.
+> **WARNING — Operational Safety (Zero Bare-Metal Exposure):** These are **offline query templates** for passive intelligence platforms (e.g., **Censys Platform**, **Shodan**, **Hunt.io**, **Google Threat Intelligence (GTI)**, **GreyNoise**, **Team Cymru**, **FOFA**, **Validin**, **Silent Push**, **URLScan.io**, and **FoxIO JA4+**, or equivalent passive TI services). Never browse, curl, download, or inspect raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal host or corporate workstation. Inspect any retrieved artifacts or `TaskID` transcripts exclusively inside an isolated, snapshotted Tier 3 air-gapped VM (`artex-lab-isolated`) and sanitize/redact them via `scripts/sandbox-analyze-tasks.sh` before offline analysis.
 
 ---
 
 ## 1. Google Threat Intelligence (GTI / VirusTotal Enterprise)
 
-### A. Go Binaries & Fork Artifacts (ARTEX / AntiFox / ScopeWeaver / Pojun / FORANG / LUCK / Guanlan SEC / `norma` SDK / BLOODALCHEMY)
+*(Note: VTGrep `content:` is case-sensitive. Always pair with `type:` filters to avoid HTML/document noise.)*
+
+### A. Go Binaries & Fork Artifacts (ARTEX / AntiFox / ScopeWeaver / Pojun / FORANG / Guanlan SEC / `norma` SDK / BLOODALCHEMY)
 ```text
-(content:"artx5v" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"Pojun" OR content:"FORANG" OR content:"sco-fix2" OR content:"artex-enrich/1.0" OR content:"artex-readonly/1.0" OR content:"ARTEX-worker/1.0" OR content:"norma/0.4" OR content:"ArtexProbe" OR content:"BLOODALCHEMY" OR content:"Guanlan SEC" OR (content:"artex" AND content:":8787")) AND (type:peexe OR type:elf)
+(content:"github.com/Autumn-27/artex" OR content:"artx5v" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"Pojun" OR content:"FORANG" OR content:"sco-fix2" OR content:"artex-enrich/1.0" OR content:"artex-readonly/1.0" OR content:"ARTEX-worker/1.0" OR content:"artex-selfupdate" OR content:"norma/0." OR content:"ArtexProbe" OR content:"graphics-hook-filter64.dll" OR content:"/Inform/logger/" OR content:"xcai.pro" OR content:"lanmao666" OR content:"artex.lol" OR content:"sqlserver-sqlite.com" OR content:"Guanlan SEC") AND (type:peexe OR type:pedll OR type:elf OR type:macho)
 ```
 
 ### B. Exposed Console Title / Embedded Next.js Web UI Strings
 ```text
-content:"自主渗透测试控制台" OR content:"Agent Security Workbench" OR content:"ARTEX MX" OR (content:"next/static" AND (content:"artex" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"ARTEX PRO" OR content:"Pojun" OR content:"FORANG") AND (content:"8787" OR content:"8790"))
+(content:"自主渗透测试控制台" OR content:"ARTEX MX" OR (content:"_next/static" AND (content:"ARTEX" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"ARTEX PRO" OR content:"Agent Security Workbench") AND (content:":8787" OR content:":8790" OR content:":8890"))) AND (type:html OR type:javascript OR type:peexe OR type:elf)
 ```
 
 ### C. Community OSINT Detection Feeds & Threat-Actor Collections
 - Monitor GTI curated collections tracking **ARTEX**, **Storm-0940** (zero-interactive-signin OAuth/Graph abuse), **VAPOR PANDA** (`BLOODALCHEMY` backdoor + EDR-skipping logic), and **Onyx Sleet**.
-- Cross-check structured community IOC CSVs & Sigma packs such as `ThreatDefence/artex-detections` and `jiwoochris/artex-global` (`artex_host_triage.py`).
+- Cross-check structured community IOC CSVs & Sigma packs such as `ThreatDefence/agentic-attack-detections`, `jiwoochris/artex-global`, `kh20134/artex-defense-kit`, and `Kshot3000/artex-defense-kit`.
 - Export sanitized GTI IOC JSON bundles to `quarantine/` and run `artex-hunt intel` (local `gemma4-hunter`, $0 cloud tokens) to extract new behavioral signatures and Sigma updates.
 
 ---
 
-## 2. Censys & Hunt.io — Exposed Consoles & Open Python Staging Directories
+## 2. Censys Platform (CenQL) & Hunt.io (HuntSQL) — Exposed Consoles & Staging Directories
 
-### A. Exposed ARTEX / Rebranded Fork Consoles (Ports 8787 / 8790 / `Basic realm="ARTEX"` / Co-Located `Sub2API`)
-**Censys Search:**
+### A. Exposed ARTEX / Rebranded Fork Consoles (Ports 8787 / 8788 / 8790 / 8890 / `Basic realm="ARTEX"` / Co-Located `Sub2API`)
+
+**Censys Platform (CenQL — RE2 regex via `=~ "(?i)..."`):**
 ```text
-(services.http.response.headers.www_authenticate: /Basic realm="ARTEX"/i) or (services.port: {8787, 8790} and (services.http.response.html_title: /自主渗透测试控制台|Agent Security Workbench|ARTEX MX|AntiFox|Guanlan SEC|ScopeWeaver/i or services.http.response.body: /artex|ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|Autonomous Penetration/i))
+host.services.endpoints.http.headers:(key="WWW-Authenticate" and value=~'(?i)Basic realm="ARTEX"')
+or (host.services.port in [8787, 8788, 8790, 8890] and (
+  host.services.endpoints.http.html_title=~"(?i)(自主渗透测试控制台|Agent Security Workbench|ARTEX MX|AntiFox|Guanlan SEC|ScopeWeaver)"
+  or host.services.endpoints.http.body=~"(?i)(ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|Autonomous Penetration|artex_token=)"
+))
 ```
-**Censys Search — Co-Located `Sub2API` Subscription-to-API Gateways (Unit 42 Overlap Pivot):**
+
+**Censys Platform (CenQL) — Co-Located `Sub2API` Subscription-to-API Gateways (Unit 42 Overlap Pivot):**
 ```text
-services.port: 8080 and services.http.response.body: /Sub2API|Subscription to API Conversion/i
+host.services.port=8080 and host.services.endpoints.http.body=~"(?i)(Sub2API|Subscription to API Conversion)"
 ```
-**Censys / Hunt.io — Exact ARTEX Console Routes, Cookie & UI Asset MD5s (Theori AIPT):**
+
+**Censys / Hunt.io — Exact ARTEX Console Routes, Cookie, Cert & UI Asset MD5s (Theori AIPT / Hunt.io):**
 - Unique ARTEX routes (`HTTP 200`): `/api/exploration/`, `/api/intercept/`, `/api/sync/scopesentry`, `/api/llm/profiles`, `/api/llm/records`, `/function/tasks`, `/function/findings`, `/system/intercept`
 - Session cookie: `artex_token=`
-- Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) -> pivot directly on `tls.issuer.organization == "ARTEX"` + `JA4X_a == JA4X_b` + `JA4X_c`!
+- Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) — in CenQL pivot via `host.services.cert.parsed.issuer.organization="ARTEX"`; in HuntSQL pivot via `tls.issuer.organization = 'ARTEX' AND SPLIT(ja4x, '_')[1] = SPLIT(ja4x, '_')[2]`.
 - Next.js UI asset MD5s: `cd3ebd16437d6d3963592f7365dd3980`, `16bf6c5653291854e8c56c8eff7ca20d`
 - Observed operator ports: `8787` (default console), `8788` (recording proxy), `8790` / `8890` / `8090` (alternate consoles/APIs), `8000` / `8001` / `8907` (open staging & UnboundID JNDI/LDAP dirs)
 - Exact worker output spill directory layout (for open Python `SimpleHTTP` hunting): `<data>/tasks/<task-id>/i<intent-id>/cmd-output/` + `traffic/_ca/mitmproxy-ca-cert.pem` + `traffic/_index/index.sqlite`
-**Hunt.io SQL / HTTP Search:**
-```text
-(http.headers.www_authenticate CONTAINS 'realm="ARTEX"') OR (port IN (8787, 8790) AND (http.title CONTAINS "自主渗透测试" OR http.title CONTAINS "Agent Security Workbench" OR http.title CONTAINS "ARTEX MX" OR http.body CONTAINS "ScopeWeaver" OR http.body CONTAINS "AntiFox" OR http.body CONTAINS "Pojun" OR http.body CONTAINS "FORANG" OR http.body CONTAINS "artex"))
+
+**Hunt.io (HuntSQL — `httpv2` table):**
+```sql
+SELECT ip, port, html.head.title
+FROM httpv2
+WHERE http.headers.raw ILIKE '%WWW-Authenticate%realm="ARTEX"%'
+   OR (port IN (8787, 8788, 8790, 8890) AND (
+        html.head.title ILIKE '%自主渗透测试%'
+     OR html.head.title ILIKE '%Agent Security Workbench%'
+     OR html.head.title ILIKE '%ARTEX MX%'
+     OR http.body ILIKE '%ScopeWeaver%'
+     OR http.body ILIKE '%AntiFox%'
+     OR http.body ILIKE '%Pojun%'
+     OR http.body ILIKE '%FORANG%'
+     OR http.body ILIKE '%artex_token=%'
+   ));
 ```
 *(Tips: Unit 42 linked separate ARTEX intrusions via co-located `Sub2API` gateways on TCP `8080` and `lanmao666[.]com` / `lanmao666[.]xyz` multi-tenant LLM gateway infrastructure. Pivot AntiFox console hits against Alibaba Cloud ASNs — Arctic Wolf observed Alibaba Cloud-hosted AntiFox operators targeting AWS IAM credentials and production secrets.)*
 
@@ -53,15 +75,29 @@ services.port: 8080 and services.http.response.body: /Sub2API|Subscription to AP
 
 Early and active ARTEX operators frequently spin up temporary Python HTTP servers (`python3 -m http.server`) exposing staging folders, agent `TaskID` logs, command outputs, and failed/retried task traces:
 
-**Censys Search:**
+**Censys Platform (CenQL):**
 ```text
-services.http.response.html_title: "Directory listing for /" and services.http.response.headers.server: /SimpleHTTP/i and (services.http.response.body: /task[_-]?id|intent|\bi[0-9]{2,6}\b|\.jsonl|claude|artex|artx5v|scopeweaver|norma|planner|worker/i)
+host.services.endpoints.http.html_title="Directory listing for /"
+and host.services.endpoints.http.headers:(key="Server" and value=~"(?i)SimpleHTTP")
+and host.services.endpoints.http.body=~"(?i)(cmd-output|mitmproxy-ca-cert\.pem|index\.sqlite|artx5v|scopeweaver|artex_config\.json|artex\.yaml|exploration_nodes|intent_id)"
 ```
-**Hunt.io Search:**
-```text
-http.title == "Directory listing for /" AND http.headers.server CONTAINS "SimpleHTTP" AND (http.body CONTAINS ".jsonl" OR http.body CONTAINS "task" OR http.body CONTAINS "intent" OR http.body CONTAINS "artex" OR http.body CONTAINS "norma" OR http.body CONTAINS "worker")
+
+**Hunt.io (HuntSQL — `httpv2` table):**
+```sql
+SELECT ip, port, html.head.title
+FROM httpv2
+WHERE html.head.title = 'Directory listing for /'
+  AND http.headers.raw ILIKE '%Server: SimpleHTTP%'
+  AND (
+       http.body ILIKE '%cmd-output%'
+    OR http.body ILIKE '%mitmproxy-ca-cert.pem%'
+    OR http.body ILIKE '%artx5v%'
+    OR http.body ILIKE '%scopeweaver%'
+    OR http.body ILIKE '%artex_config.json%'
+    OR http.body ILIKE '%exploration_nodes%'
+  );
 ```
-*(Note: ARTEX's Exploration Graph labels individual planner intents sequentially as `i1`, `i2`, `i12345`, etc. Pivot on ASN, SSL/TLS cert issuer, and co-hosted ports `8787`/`8790` to separate threat-actor staging servers from benign lab/CTF boxes. Any sanitized `TaskID` / `i<digits>` / `.jsonl` transcripts exported from an air-gapped Tier 3 VM can be digested locally via `artex-hunt analyze-tasks <path>`.)*
+*(Note: ARTEX's Exploration Graph labels individual planner intents sequentially as `i1`, `i2`, `i12345`, etc. Pivot on ASN, SSL/TLS cert issuer, and co-hosted ports `8787`/`8788`/`8790`/`8890` to separate threat-actor staging servers from benign lab/CTF boxes. Any sanitized `TaskID` / `i<digits>` / `.jsonl` transcripts exported from an air-gapped Tier 3 VM can be digested locally via `artex-hunt analyze-tasks <path>`.)*
 
 ---
 
@@ -71,7 +107,7 @@ When edge appliances (Cisco ASA/FTD, Citrix NetScaler, PAN-OS, F5 BIG-IP) show l
 1. Extract distinct source IPs from Stage 1 candidates (`artex-hunt scan`).
 2. Enrich via Team Cymru IP-to-ASN / Pure Signal Recon to cluster:
    - Rapidly rotating **bulletproof / commercial VPS ASNs** vs. **residential proxy exit pools**.
-   - Co-occurring outbound flows to ports `8787`/`8790` or commercial LLM API endpoints from the same threat-actor control IP.
+   - Co-occurring outbound flows to ports `8787`/`8788`/`8790`/`8890` or commercial LLM API endpoints from the same threat-actor control IP.
    - Shared passive DNS / TLS certificates linking edge scanners to exposed ARTEX consoles or open Python staging directories.
 
 ---
@@ -85,7 +121,7 @@ ARTEX worker agents rely heavily on **Go `net/http`**, **Python `httpx`/`request
 | **Go `net/http` / `nuclei` / ARTEX Go worker** | Distinct Go TLS cipher/extension ordering (`JA4`), minimal HTTP headers with missing `Accept-Language` / `Sec-Fetch-*` (`JA4H` suffix `0000`) | High-signal anomaly when hitting interactive VPN portals (`/+CSCOE+/`, `/vpn/`, `/global-protect/`, `/my.policy`) |
 | **Python `httpx` / `requests` / `urllib`** | OpenSSL-backed `JA4` + minimal `JA4H` header profile paired with `<= 2s` inter-arrival jitter | Strong indicator of scripted error-correction loops or credential spraying |
 | **Headless Chromium (`Playwright` / `Puppeteer`)** | Browser-like `JA4`, **but** combined with machine-speed navigation cadence, missing human mouse/scroll think-time, and anomalous `JA4T` (Linux VPS TCP window/options hitting corporate VPNs) | Correlate `JA4T` (Linux cloud VPS TCP stack) + `JA4H` + low-jitter URI sequence |
-| **Exposed ARTEX Server (`JA4S`)** | Go `net/http` or Next.js/Node TLS server response fingerprint on ports `8787` / `8790` | Pivot across Censys/FoxIO JA4+ database to cluster related operator consoles |
+| **Exposed ARTEX Server (`JA4S`)** | Go `net/http` or Next.js/Node TLS server response fingerprint on ports `8787` / `8788` / `8790` / `8890` | Pivot across Censys/FoxIO JA4+ database to cluster related operator consoles |
 
 ### Recommended Analyst Workflow
 1. Capture `JA4` + `JA4H` on Zeek / F5 / Zscaler / proxy edge telemetry for 7 days to build a **known-good corporate VPN client baseline** (AnyConnect, Citrix Workspace, GlobalProtect, corporate Edge/Chrome).
@@ -99,15 +135,15 @@ GreyNoise actively tracks opportunistic and framework-specific ARTEX reconnaissa
 - **`ARTEX-Enrichment User-Agent (Possible ARTEX)`** — IPs scanning web assets using `artex-enrich/1.0`, `norma/0.4`, or related ARTEX enrichment UAs.
 - **`ARTEX Parameter Attempt (Possible ARTEX)`** — IPs sending HTTP requests containing `artex=` query parameters probing for ARTEX-related injection points or functionality.
 
-**GNQL Hunting Queries:**
+**GNQL Hunting Queries (quote special characters `/` and `=` for Lucene parsing):**
 ```text
 tags:"ARTEX-Enrichment User-Agent (Possible ARTEX)" OR tags:"ARTEX Parameter Attempt (Possible ARTEX)"
 ```
 ```text
-raw_data.web.useragents:*artex* OR raw_data.web.useragents:*norma/0.* OR raw_data.web.useragents:*LLMLeak-RedTeam* OR raw_data.web.useragents:*authorized-exposure-audit* OR raw_data.web.useragents:*authorized-security-research*
+raw_data.web.useragents:"*artex-enrich/*" OR raw_data.web.useragents:"*norma/0.*" OR raw_data.web.useragents:"*LLMLeak-RedTeam*" OR raw_data.web.useragents:"*authorized-exposure-audit*" OR raw_data.web.useragents:"*authorized-security-research*" OR raw_data.web.useragents:"*ArtexProbe*"
 ```
 ```text
-raw_data.web.paths:*artex=* OR raw_data.web.paths:*zz_no_such_user* OR raw_data.web.paths:*zzzrandom*
+raw_data.web.paths:"*artex=*" OR raw_data.web.paths:"*zz_no_such_user*" OR raw_data.web.paths:"*zzzrandom*"
 ```
 *(Cross-reference GreyNoise-tagged scanner IPs with your edge firewall/WAF/VPN logs, Team Cymru ASN enrichment, and FoxIO JA4+ to separate mass-scanning background noise from targeted intrusions.)*
 
@@ -122,12 +158,13 @@ Because YAF (2.20+ with DPI) exports **bidirectional IPFIX records** pairing for
 | :--- | :--- | :--- | :--- |
 | `octetTotalCount` / `reverseOctetTotalCount` | IANA 85 / PEN 29305 | `bytes_out` / `bytes_in` | **Sawtooth LLM context growth** over TCP 443 to opaque VPS relays (monotonic `octetTotalCount` climbs + steady `1–5KB` `reverseOctetTotalCount`) |
 | `ja4` (split on `_` → `ja4_a`, `ja4_b`, `ja4_c`) | CERT 6871 / IE 480 | `ja4` | **Raw-IP TLS (`ja4` starting with `t13i`/`t12i`, empty `sslServerName`)** + **JA4 stack whiplash** (`>=3` distinct `ja4` from one source IP against one `sslServerName`) |
-| `silkAppLabel` + `destinationTransportPort` | CERT 6871 / IE 33 + IANA 11 | `action` + `dest_port` | **Port-independent DPI:** `silkAppLabel IN (80, 443)` on `destinationTransportPort IN (8787, 8788, 8790)` catches ARTEX consoles/proxies even without HTTP payload |
-| `sslServerName` | CERT 6871 / IE 294 | `dest_host` | Commercial LLM APIs from server/DMZ VLANs + campaign relays (`xcai[.]com`, `xcai[.]pro`, `lanmao666[.]com`, `sqlserver-sqlite[.]com`) |
+| `silkAppLabel` + `destinationTransportPort` | CERT 6871 / IE 33 + IANA 11 | `action` + `dest_port` | **Port-independent DPI:** `silkAppLabel IN (80, 443)` on `destinationTransportPort IN (8787, 8788, 8790, 8890)` catches ARTEX consoles/proxies even without HTTP payload |
+| `sslServerName` | CERT 6871 / IE 294 | `dest_host` | Commercial LLM APIs from server/DMZ VLANs + campaign relays (`xcai[.]com`, `xcai[.]pro`, `lanmao666[.]com`, `artex[.]lol`, `sqlserver-sqlite[.]com`) |
 
 ### Starter Spark SQL / Data-Lake Pattern (YAF Bidirectional IPFIX + `ja4` Sub-Component Split)
+*(Note: `split(ja4, '_')[0]` is 0-indexed Spark SQL; use 1-indexed `split_part(ja4, '_', 1)` in DuckDB/PostgreSQL.)*
 ```sql
--- 1. Raw-IP TLS (no SNI: ja4_a has 'i' at pos 4) or Non-Standard Port HTTP/TLS (8787/8788/8790)
+-- 1. Raw-IP TLS (no SNI: ja4_a has 'i' at pos 4) or Non-Standard Port HTTP/TLS (8787/8788/8790/8890)
 SELECT
   flowStartMicroseconds,
   sourceIPv4Address,
@@ -141,7 +178,7 @@ SELECT
   octetTotalCount AS bytes_out,
   reverseOctetTotalCount AS bytes_in
 FROM default_ipfix_flows
-WHERE (silkAppLabel IN (80, 443) AND destinationTransportPort IN (8787, 8788, 8790))
+WHERE (silkAppLabel IN (80, 443) AND destinationTransportPort IN (8787, 8788, 8790, 8890))
    OR (substring(ja4, 4, 1) = 'i' AND destinationTransportPort = 443 AND octetTotalCount >= 12000)
 ORDER BY flowStartMicroseconds DESC;
 ```

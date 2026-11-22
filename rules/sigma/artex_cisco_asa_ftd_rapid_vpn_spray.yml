@@ -25,8 +25,12 @@ detection:
       - 113015
       - 716039
   selection_webvpn_uri:
+    # Scope to recon/traversal/SAML probe endpoints rather than normal /+CSCOE+/logon.html user logins
     c-uri|contains:
-      - '/+CSCOE+/'
+      - '/+CSCOE+/winvista.html'
+      - '/+CSCOE+/translation.js'
+      - '/+CSCOE+/saml/sp/acs'
+      - '/+CSCOE+/session_password.html'
       - '/+webvpn+/'
   condition: selection_asa_lockout_or_webvpn_fail or selection_webvpn_uri
 falsepositives:

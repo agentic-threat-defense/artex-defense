@@ -1,14 +1,16 @@
-title: Web or Appliance Process Spawning Shell or Compressed Cloud/AD Recon Commands
+title: Windows Web/Service Parent Spawning Shell or Cloud/AD Recon Commands
 id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a014
 status: experimental
 description: >
-  Detects web servers or appliance daemons spawning command shells, or rapid endpoint
+  Detects Windows web servers or service daemons spawning command shells, or endpoint
   execution of cloud identity / domain trust enumeration commands characteristic of
-  post-compromise ARTEX worker agents.
+  post-compromise ARTEX worker agents (correlate >= 5 distinct recon commands in 30s
+  for high-confidence burst alerting in SIEM deployments).
 references:
   - https://www.crowdstrike.com
 author: ARTEX Defensive Research Workbench
 date: 2026-11-20
+modified: 2026-11-22
 tags:
   - attack.execution
   - attack.discovery
@@ -19,25 +21,32 @@ logsource:
   product: windows
 detection:
   selection_web_parent:
-    ParentImage|contains:
-      - 'w3wp.exe'
-      - 'nginx'
-      - 'httpd'
-      - 'php-fpm'
-      - 'restjavad'
+    ParentImage|endswith:
+      - '\w3wp.exe'
+      - '\nginx.exe'
+      - '\httpd.exe'
+      - '\tomcat.exe'
+      - '\sqlservr.exe'
   selection_shell_child:
-    Image|contains:
-      - 'cmd.exe'
-      - 'powershell.exe'
-      - 'pwsh'
-      - '/bin/sh'
-      - '/bin/bash'
-  selection_cloud_ad_recon:
-    CommandLine|contains:
-      - 'nltest /domain_trusts'
-      - 'aws sts get-caller-identity'
-      - 'az account show'
-  condition: (selection_web_parent and selection_shell_child) or selection_cloud_ad_recon
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  selection_nltest:
+    CommandLine|contains|all:
+      - 'nltest'
+      - '/domain_trusts'
+  selection_aws_sts:
+    CommandLine|contains|all:
+      - 'aws'
+      - 'sts'
+      - 'get-caller-identity'
+  selection_az_acct:
+    CommandLine|contains|all:
+      - 'az'
+      - 'account'
+      - 'show'
+  condition: (selection_web_parent and selection_shell_child) or selection_nltest or selection_aws_sts or selection_az_acct
 falsepositives:
-  - Authorized DevOps automation runners executing cloud CLI diagnostics.
-level: high
+  - Authorized DevOps automation runners or admin workstations executing cloud CLI diagnostics (correlate >= 5 recon commands in 30s).
+level: medium

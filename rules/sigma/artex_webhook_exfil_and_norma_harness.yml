@@ -17,12 +17,22 @@ tags:
 logsource:
   category: proxy
 detection:
-  selection_webhook:
-    cs-host|contains:
+  selection_webhook_apex:
+    cs-host:
       - 'webhook.site'
       - 'oast.live'
       - 'oast.fun'
+      - 'oast.me'
       - 'interact.sh'
+      - 'dnslog.cn'
+  selection_webhook_sub:
+    cs-host|endswith:
+      - '.webhook.site'
+      - '.oast.live'
+      - '.oast.fun'
+      - '.oast.me'
+      - '.interact.sh'
+      - '.dnslog.cn'
   selection_norma:
     cs-user-agent|contains:
       - 'norma/'
@@ -32,7 +42,7 @@ detection:
       - 'ARTEX-worker/'
       - 'ArtexProbe'
       - 'artex-probe'
-  condition: selection_webhook or selection_norma
+  condition: selection_webhook_apex or selection_webhook_sub or selection_norma
 falsepositives:
   - Developers debugging webhook integrations using webhook.site from dev workstations.
 level: high

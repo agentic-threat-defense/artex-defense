@@ -1,21 +1,20 @@
-title: ARTEX Control-Plane Routes, Recording Proxy (8788 / mitmproxy CA), or Task Cmd-Output Spill
+title: ARTEX Control-Plane Routes, BLOODALCHEMY C2 URI (/Inform/logger/), or Self-Update User-Agent
 id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a018
 status: experimental
 description: >
-  Detects ARTEX operator-host and control-plane forensic artifacts grounded in Theori AIPT
-  and artex-global defense guides: console API/UI routes (/api/exploration/, /api/intercept/,
-  /api/sync/scopesentry, /function/tasks), artex-selfupdate User-Agent, recording proxy
-  port 8788 / mitmproxy-ca-cert.pem, and worker spill paths (/tasks/<id>/i<id>/cmd-output/).
+  Detects ARTEX control-plane HTTP API/UI routes (/api/exploration/, /api/intercept/,
+  /api/sync/scopesentry, /function/tasks), BLOODALCHEMY C2 URI (/Inform/logger/),
+  and the artex-selfupdate User-Agent grounded in Theori AIPT and artex-global research.
 references:
   - https://github.com/theori-io/aipt-detections
   - https://github.com/jiwoochris/artex-global/blob/main/docs/defense-en.md
 author: ARTEX Defensive Research Workbench
 date: 2026-11-20
+modified: 2026-11-22
 tags:
   - attack.command_and_control
   - attack.collection
   - attack.t1071.001
-  - attack.t1074.001
 logsource:
   category: webserver
 detection:
@@ -28,16 +27,11 @@ detection:
       - '/api/llm/records'
       - '/function/tasks'
       - '/function/findings'
-  selection_host_artifacts:
-    CommandLine|contains:
-      - '/cmd-output/'
-      - 'mitmproxy-ca-cert.pem'
-      - 'traffic/_index/index.sqlite'
-      - 'artex_token='
+      - '/Inform/logger/'
   selection_selfupdate_ua:
     cs-user-agent|contains:
       - 'artex-selfupdate'
-  condition: 1 of selection*
+  condition: selection_console_routes or selection_selfupdate_ua
 falsepositives:
-  - Authorized red-team infrastructure or local mitmproxy developer debugging.
+  - Authorized red-team infrastructure validation.
 level: high

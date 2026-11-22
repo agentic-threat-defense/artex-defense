@@ -27,12 +27,13 @@ detection:
       - 'zzzrandom'
       - 'zz-no-such-key'
       - 'zz-notexist-'
-      - 'nonexistent-i'
       - 'ARTEX_WRITE_PROBE'
       - 'ARTEX_PERSIST_OK'
       - 'artex_control_marker'
-      - 'artex='
-      - 'eyJhbGciOiJub25l'
+      - '?artex='
+      - '&artex='
+      - 'eyJhbGciOiJub25lIn0'
+      - 'illegal_redirect_uri_enhanced'
   selection_ua:
     cs-user-agent|contains:
       - 'security-testing; authorized'
@@ -45,10 +46,7 @@ detection:
       - 'Fuzz Faster U Fool'
       - 'ArtExVerify/1.0'
       - 'Mozilla/5.0 (ARTEX)'
-  selection_oauth_err:
-    Action|contains:
-      - 'illegal_redirect_uri_enhanced'
-  condition: 1 of selection*
+  condition: selection_canary_uri or selection_ua
 falsepositives:
   - Authorized red-team exercises explicitly using recon-audit or security-testing user agents.
 level: high

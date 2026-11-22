@@ -1,25 +1,48 @@
 # ============================================================================
-# ARTEX / ScopeWeaver / Norma Agent Harness — Starter Suricata/Snort Rules
-# Note: Cross-reference Cisco Talos official Snort 2 (1:67494-67496) and
-#       Snort 3 (7:76-78) coverage for production IPS deployments.
+# ARTEX / ScopeWeaver / Norma Agent Harness — Starter Suricata 6/7 Rules
+# Note: Uses Suricata sticky buffers (http.uri, http.user_agent, http.header,
+#       http.response_body, tls.sni, tls.cert_issuer). For Snort 2/3 IPS,
+#       cross-reference Cisco Talos official Snort 2 (1:67494-67496) & Snort 3 (7:76-78).
 # ============================================================================
 
-alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Norma SDK WebFetch, Self-Proclaimed Authorized Scanner, or Agentic CLI User-Agent"; http.user_agent; pcre:"/(norma\/[0-9]|artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|ArtExVerify\/|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(?:scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|qwen-code\/|kimi-cli\/|opencode\/|hermes-agent\/|strix\/)/i"; threshold:type limit, track by_src, count 1, seconds 60; classtype:attempted-recon; sid:9100001; rev:7;)
+# 1. Explicit ARTEX / Norma Harness User-Agents (prefiltered via content fast-patterns)
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Norma SDK or ARTEX Worker User-Agent"; flow:to_server,established; http.user_agent; content:"norma/"; nocase; pcre:"/norma\/[0-9]/i"; detection_filter:track by_src, count 1, seconds 60; classtype:attempted-recon; sid:9100001; rev:8;)
 
-alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Unit 42 / GreyNoise / ThreatDefence Canary, artex= Param, JWT alg:none, or X-ARTX-KEY Probe"; flow:to_server,established; pcre:"/(zz_no_such_user|zzq\.nonexistent|precheck\.not-a-user|zzzrandom\d+|zz-no-such-key|zz-notexist-|nonexistent-i\d+|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK|X-ARTX-KEY|[?&]artex=|eyJhbGciOiJub25l)/i"; classtype:attempted-recon; sid:9100009; rev:3;)
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE ARTEX Framework or Self-Proclaimed Authorized Scanner User-Agent"; flow:to_server,established; http.user_agent; pcre:"/(artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|artex-selfupdate|ArtExVerify\/|ArtEx\/1\.0|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(?:scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|ScopeWeaver|hermes-agent\/|strix\/)/i"; detection_filter:track by_src, count 1, seconds 60; classtype:attempted-recon; sid:9100014; rev:1;)
 
-alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed ARTEX Infrastructure WWW-Authenticate Basic Realm"; flow:from_server,established; http.header; content:"WWW-Authenticate|3a| Basic realm=|22|ARTEX|22|"; nocase; classtype:policy-violation; sid:9100010; rev:1;)
+# 2. Unit 42 / GreyNoise / ThreatDefence Canary Probes (properly buffered on http.uri)
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Agentic Control-404 Canary or Write/Persist Probe in URI"; flow:to_server,established; http.uri; pcre:"/(zz_no_such_user|zzq\.nonexistent|precheck\.not-a-user|zzzrandom\d+|zz-no-such-key|zz-notexist-|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK|[?&]artex=)/i"; classtype:attempted-recon; sid:9100009; rev:4;)
 
+# 3. X-ARTX-KEY Header or Case-Sensitive JWT alg:none Probe (properly buffered on http.header)
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE X-ARTX-KEY Custom Probe Header"; flow:to_server,established; http.header; content:"X-ARTX-KEY"; nocase; classtype:attempted-recon; sid:9100012; rev:1;)
+
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE JWT alg:none Unsigned Token Probe in HTTP Header"; flow:to_server,established; http.header; content:"eyJhbGciOiJub25lIn0"; classtype:attempted-recon; sid:9100015; rev:1;)
+
+# 4. Exposed ARTEX Infrastructure WWW-Authenticate Basic Realm (flexible whitespace/charset)
+alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed ARTEX Infrastructure WWW-Authenticate Basic Realm"; flow:from_server,established; http.header; content:"WWW-Authenticate"; nocase; content:"realm=|22|ARTEX|22|"; nocase; distance:0; classtype:policy-violation; sid:9100010; rev:2;)
+
+# 5. VAPOR PANDA BLOODALCHEMY C2 URI (/Inform/logger/)
 alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"ARTEX-DEFENSE VAPOR PANDA BLOODALCHEMY C2 URI (/Inform/logger/)"; flow:to_server,established; http.uri; content:"/Inform/logger/"; classtype:trojan-activity; sid:9100006; rev:1;)
 
-alert tls $HOME_NET any -> $EXTERNAL_NET 443 (msg:"ARTEX-DEFENSE Outbound TLS to ARTEX LLM Relay Proxy"; flow:to_server,established; tls.sni; pcre:"/(?:^|\.)(?:xcai\.(?:com|pro)|artex\.lol|lanmao666\.(?:com|xyz)|nginxmysql\.com|vietnam852\.com|zhzy999\.net)$/i"; classtype:trojan-activity; sid:9100007; rev:3;)
+# 6. Outbound TLS to Confirmed ARTEX / BLOODALCHEMY LLM Relay & C2 Domains (port-agnostic)
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"ARTEX-DEFENSE Outbound TLS to ARTEX/BLOODALCHEMY Relay or C2 Domain"; flow:to_server,established; tls.sni; pcre:"/(?:^|\.)(?:xcai\.(?:com|pro)|artex\.lol|lanmao666\.(?:com|xyz)|nginxmysql\.com|vietnam852\.com|zhzy999\.net|sqlserver-sqlite\.com|artex\.noog2infra\.site|artex\.ok7777\.eu\.cc|artex\.tokena2b\.top)$/i"; classtype:trojan-activity; sid:9100007; rev:4;)
 
-alert http $HOME_NET any -> any [8787,8788,8790,8890] (msg:"ARTEX-DEFENSE Outbound HTTP Traffic to Default ARTEX/ScopeWeaver Console Port (8787/8788/8790/8890)"; flow:to_server,established; classtype:trojan-activity; sid:9100002; rev:2;)
+# 7. Self-Signed ARTEX X.509 Certificate Issuer (O=ARTEX)
+alert tls any any -> any any (msg:"ARTEX-DEFENSE Self-Signed ARTEX X.509 Certificate Issuer"; flow:from_server,established; tls.cert_issuer; content:"O=ARTEX"; classtype:policy-violation; sid:9100013; rev:1;)
 
-alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Exposed ARTEX Autonomous Pentest Console HTML Title"; flow:from_server,established; http.response_body; content:"|E8 87 AA E4 B8 BB E6 B8 97 E9 80 8F E6 B5 8B E8 AF 95 E6 8E A7 E5 88 B6 E5 8F B0|"; classtype:policy-violation; sid:9100003; rev:1;)
+# 8. Outbound External HTTP Traffic to Default ARTEX/ScopeWeaver Console Ports (excludes internal dev ports)
+alert http $HOME_NET any -> $EXTERNAL_NET [8787,8788,8790,8890] (msg:"ARTEX-DEFENSE Outbound External HTTP to Default ARTEX/ScopeWeaver Console Port (8787/8788/8790/8890)"; flow:to_server,established; classtype:policy-violation; sid:9100002; rev:3;)
 
-alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Rebranded ARTEX Fork Console Title (ARTEX MX / Agent Security Workbench / AntiFox)"; flow:from_server,established; http.response_body; pcre:"/(Agent Security Workbench|ARTEX MX|AntiFox|ScopeWeaver)/i"; classtype:policy-violation; sid:9100008; rev:1;)
+# 9. Exposed ARTEX Autonomous Pentest Console HTML Title (both inbound & outbound browsing)
+alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed ARTEX Autonomous Pentest Console HTML Title"; flow:from_server,established; http.response_body; content:"|E8 87 AA E4 B8 BB E6 B8 97 E9 80 8F E6 B5 8B E8 AF 95 E6 8E A7 E5 88 B6 E5 8F B0|"; classtype:policy-violation; sid:9100003; rev:2;)
 
-alert tls $HOME_NET any -> $EXTERNAL_NET 443 (msg:"ARTEX-DEFENSE Outbound TLS to Webhook/OAST Exfiltration Domain"; tls.sni; content:"webhook.site"; nocase; classtype:exfiltration; sid:9100004; rev:1;)
+# 10. Rebranded ARTEX Fork Console <title> (prefiltered on <title> to avoid body-scan FPs & PCRE perf hit)
+alert http any any -> any any (msg:"ARTEX-DEFENSE Rebranded ARTEX Fork Console HTML Title (ARTEX MX / AntiFox / ScopeWeaver)"; flow:from_server,established; http.response_body; content:"<title"; nocase; pcre:"/<title[^>]*>[^<]{0,120}(?:Agent Security Workbench|ARTEX MX|AntiFox|ScopeWeaver)[^<]{0,120}<\/title>/i"; classtype:policy-violation; sid:9100008; rev:2;)
 
-alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Rapid Automated Nuclei/HeadlessChrome Probing Against Edge VPN/Gateway URI"; flow:to_server,established; http.uri; pcre:"/^\/(\+CSCOE\+|vpn|nf\/auth|global-protect|tmui|mgmt\/tm)/i"; http.user_agent; pcre:"/(Nuclei|HeadlessChrome|norma)/i"; threshold:type threshold, track by_src, count 5, seconds 30; classtype:web-application-attack; sid:9100005; rev:1;)
+# 11. Outbound TLS to Webhook / OAST Exfiltration Domains (valid stock classtype + anchored SNI + port-agnostic)
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"ARTEX-DEFENSE Outbound TLS to webhook.site Exfiltration Domain"; flow:to_server,established; tls.sni; dotprefix; content:".webhook.site"; endswith; nocase; classtype:policy-violation; sid:9100004; rev:2;)
+
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"ARTEX-DEFENSE Outbound TLS to OAST/Interactsh/DNSLog Exfiltration Domain"; flow:to_server,established; tls.sni; pcre:"/(?:^|\.)(?:oast\.(?:live|fun|me)|interact\.sh|dnslog\.cn)$/i"; classtype:policy-violation; sid:9100011; rev:1;)
+
+# 12. Rapid Automated Nuclei / HeadlessChrome / Norma Probing Against Edge VPN/Gateway URIs
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Rapid Automated Nuclei/HeadlessChrome/Norma Probing Against Edge VPN/Gateway URI"; flow:to_server,established; http.uri; content:"/"; pcre:"/^\/(?:\+CSCOE\+\/|\+webvpn\+\/|vpn\/|nf\/auth\/|logon\/LogonPoint\/|p\/u\/|nitro\/v1|global-protect\/|ssl-vpn\/|my\.policy|tmui\/|mgmt\/tm\/)/i"; http.user_agent; pcre:"/(?:Nuclei|HeadlessChrome|norma\/[0-9]|norma-agent)/i"; detection_filter:track by_src, count 5, seconds 30; classtype:web-application-attack; sid:9100005; rev:2;)

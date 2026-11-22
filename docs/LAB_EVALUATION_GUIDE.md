@@ -47,10 +47,10 @@ If your lab already routes telemetry to a SIEM, XDR, or NSM sensor, you can depl
 
 | Layer | Repository Path | Notes |
 | :--- | :--- | :--- |
-| **SIEM / XDR Query Packs** | [`rules/queries/compiled_sigma/`](../rules/queries/compiled_sigma/) | Precompiled from 19 Sigma YAML rules for **Elastic ES\|QL & Lucene (ECS)**, **Microsoft KQL / Defender XDR / Sentinel ASIM**, **CrowdStrike LogScale (CQL)**, **Splunk SPL**, and **SentinelOne S1QL**. |
+| **SIEM / XDR Query Packs** | [`rules/queries/compiled_sigma/`](../rules/queries/compiled_sigma/) | Precompiled from 20 Sigma YAML rules for **Elastic ES\|QL & Lucene (ECS)**, **Microsoft KQL / Defender XDR / Sentinel ASIM**, **CrowdStrike LogScale (CQL)**, **Splunk SPL**, and **SentinelOne S1QL**. |
 | **Raw Sigma Source Rules** | [`rules/sigma/`](../rules/sigma/) | Vendor-native field schemas (`eventName`, `requestParameters.*`, `eventType`, `status.errorCode`, `ComputerName`, `cs-host`, `event.code`). Recompile anytime via `artex-hunt sigma-compile`. |
 | **Suricata / Snort Rules** | [`rules/network/artex_edge_and_harness.rules`](../rules/network/artex_edge_and_harness.rules) | Covers Norma/agentic UAs, Unit 42/GreyNoise canary probes, exposed console headers/titles, default ports (`8787`/`8788`/`8790`/`8890`), LLM relay TLS SNI, and webhook OAST domains. |
-| **Zeek Behavioral Script** | [`rules/zeek/artex_agentic_cadence.zeek`](../rules/zeek/artex_agentic_cadence.zeek) | Tracks automated HTTP 4xx bursts, agentic UAs, canary URIs, and client stack changes on live wire traffic or offline PCAPs (`zeek -r capture.pcap rules/zeek/artex_agentic_cadence.zeek`). |
+| **Zeek Behavioral Script** | [`rules/network/artex_agentic_cadence.zeek`](../rules/network/artex_agentic_cadence.zeek) | Tracks automated HTTP 4xx bursts across distinct non-asset URIs, agentic UAs, confirmed C2 relay SNI/DNS, commercial LLM egress, OAST/webhook domains, and external console port connections on live wire traffic or offline PCAPs (`zeek -r capture.pcap rules/network/artex_agentic_cadence.zeek`). |
 | **YARA Rules** | [`rules/yara/`](../rules/yara/) | Static host/artifact triage signatures for ARTEX / ScopeWeaver / BLOODALCHEMY staging artifacts. |
 
 ---
@@ -69,7 +69,7 @@ To get clean signal across both static retrohunt indicators and **Zero-IOC behav
   - Bimodal LLM Think-Act inference pauses (`think_act_bimodal_cadence`)
 
 ### B. Network Biflows + TLS / HTTP Fingerprints (Zero-IOC Core)
-- **Accepted natively:** CERT NetSA **YAF IPFIX JSON** (RFC 5103 biflows with `bytes_out`/`bytes_in`) or JSONL enriched with `ja4`, `ja4h`, `bytes_out`, `bytes_in`; PCAPs can also be replayed directly through Zeek + `rules/zeek/artex_agentic_cadence.zeek` and Suricata.
+- **Accepted natively:** CERT NetSA **YAF IPFIX JSON** (RFC 5103 biflows with `bytes_out`/`bytes_in`) or JSONL enriched with `ja4`, `ja4h`, `bytes_out`, `bytes_in`; PCAPs can also be replayed directly through Zeek + `rules/network/artex_agentic_cadence.zeek` and Suricata.
 - **What it exercises:**
   - Compaction-resilient TLS 1.3 growing-context flows to external or **self-hosted/local** LLM endpoints (`llm_sawtooth_context_flow`)
   - Multi-tool TLS/HTTP client stack whiplash under a spoofed browser UA (`ja4_client_stack_whiplash`)

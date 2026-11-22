@@ -1,91 +1,104 @@
 // ============================================================================
-// ARTEX / Autonomous Agentic Offensive Framework — Elastic (ECH / EQL) Hunt Pack
+// ARTEX / Autonomous Agentic Offensive Framework — Elastic (EQL & ES|QL) Hunt Pack
 // Surfaces: Cisco ASA/FTD, Citrix NetScaler, PAN-OS, F5 BIG-IP, Zscaler,
 //           Web Portals, Endpoints, and Cloud/Identity
+// Note: Queries 1-5 are Elastic EQL; Queries 6-9 (commented) are Kibana ES|QL.
+//       ES|QL RLIKE uses Lucene Automaton (no `(?i)` flag — always use TO_LOWER()).
 // ============================================================================
 
-// 1. Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s)
+// 1. [EQL] Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s)
 sequence by host.name with maxspan=30s
   [process where event.type == "start" and
    process.command_line : ("*whoami*", "*nltest*", "*ipconfig*", "*net localgroup*", "*aws sts*", "*az account*")]
   [process where event.type == "start" and
    process.command_line : ("*sc query*", "*Get-Service*", "*tasklist*", "*systemctl status*") and
-   process.command_line : ("*CSFalcon*", "*SentinelAgent*", "*WinDefend*", "*CbDefense*", "*Sysmon*")]
+   process.command_line : ("*CSFalcon*", "*falcon-sensor*", "*SentinelAgent*", "*WinDefend*", "*CbDefense*", "*Sysmon*")]
 
-// 2. Web Server / Edge Appliance Parent Process Spawning Interactive Shell
+// 2. [EQL] Web Server / Edge Appliance Parent Process Spawning Interactive Shell
 //    (Separates true web daemons from noisy java/node builds which require recon/download args)
 process where event.type == "start" and
-  process.name : ("cmd.exe", "powershell.exe", "pwsh.exe", "sh", "bash") and (
-    process.parent.name : ("w3wp.exe", "nginx", "httpd", "apache2", "php-fpm", "restjavad") or
-    (process.parent.name : ("java", "node") and
-     process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*curl *", "*wget *", "*Invoke-WebRequest*", "*-enc*", "*base64*", "*/dev/tcp*"))
+  process.name : ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") and (
+    process.parent.name : ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat", "tomcat.exe", "sqlservr.exe") or
+    (process.parent.name : ("java", "java.exe", "node", "node.exe") and
+     process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*curl *", "*wget *", "*Invoke-WebRequest*", "*-enc *", "*-encodedcommand*", "*base64*", "*/dev/tcp*"))
   )
 
-// 3. ARTEX / ScopeWeaver / Norma SDK / BLOODALCHEMY Artifacts, Ports (8787/8788/8790), or Webhook Exfil
+// 3. [EQL] ARTEX / ScopeWeaver / Norma SDK / BLOODALCHEMY Artifacts, Ports (8787-8890), or Webhook/C2 Egress
 any where
-  destination.port in (8787, 8788, 8790) or
-  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*BLOODALCHEMY*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/cmd-output/*") or
-  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel client*", "*R:socks*", "*proxychains -f*", "*proxychains4 -f*", "*ntlmrelayx*", "*smbserver.py*") or
-  url.path : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
-  url.domain : ("*xcai.com", "*xcai.pro", "*webhook.site", "*oast.live", "*oast.fun", "*interact.sh", "*dnslog.cn") or
-  user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*qwen-code/*", "*kimi-cli/*", "*opencode/*", "*hermes-agent/*", "*strix/*")
+  destination.port in (8787, 8788, 8790, 8890) or
+  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
+  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*") or
+  url.original : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
+  url.domain : ("xcai.com", "*.xcai.com", "xcai.pro", "*.xcai.pro", "artex.lol", "*.artex.lol", "lanmao666.com", "*.lanmao666.com", "lanmao666.xyz", "*.lanmao666.xyz", "nginxmysql.com", "*.nginxmysql.com", "vietnam852.com", "*.vietnam852.com", "zhzy999.net", "*.zhzy999.net", "sqlserver-sqlite.com", "*.sqlserver-sqlite.com", "webhook.site", "*.webhook.site", "oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn") or
+  user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*hermes-agent/*", "*strix/*")
 
-// 6. Elastic ES|QL — ArtexProbe / User-Agents / AWS CloudWatch Secret Search / DryRun Sweeps
-// (Run in Kibana Discover -> ES|QL; adapted from ThreatDefence & Theori AIPT)
-// FROM logs-*
-// | WHERE process.command_line LIKE "*artex-probe-*"
-//      OR process.command_line LIKE "*ArtexProbe*"
+// 4. [EQL] Anomalous Server/DMZ Egress to Commercial LLM APIs (Excludes Approved Gateways & Workstations)
+//    (Confirmed malicious C2 relays are hunted unconditionally in Query 3 above)
+network where
+  (dns.question.name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn") or
+   tls.client.server_name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn")) and
+  (host.name == null or not host.name : ("DEV-AI-GW-*", "WKSTN-*", "LAPTOP-*", "MACBOOK-*", "DESKTOP-*"))
+
+// 5. [EQL] Web Portal / Edge Appliance Error-Correction Pivot (4xx -> 200 OK on High-Confidence Sensitive Path <= 20s)
+sequence by source.ip with maxspan=20s
+  [any where (event.category == "web" or event.category == "network") and
+   http.response.status_code >= 400 and http.response.status_code < 500 and
+   url.path : ("*/+CSCOE+/*", "*/+webvpn+/*", "*/vpn/*", "*/nf/auth/*", "*/global-protect/*", "*/tmui/*", "*/mgmt/tm/*")]
+  [any where (event.category == "web" or event.category == "network") and
+   http.response.status_code == 200 and
+   url.path : ("*/.env", "*/admin/shell.php*", "*/shell.php*", "*/cmd.jsp*", "*/.git/config") and
+   not url.path : ("*/.env.example*", "*/.env.sample*", "*/.env.template*")]
+
+// 6. [ES|QL] ArtexProbe / User-Agents / Task Spill Paths (uses TO_LOWER() because ES|QL RLIKE has no `(?i)` flag)
+// FROM logs-endpoint.events.*, logs-nginx.*, logs-proxy.*
+// | WHERE TO_LOWER(process.command_line) LIKE "*artex-probe-*"
+//      OR TO_LOWER(process.command_line) LIKE "*artexprobe*"
 //      OR file.path RLIKE ".*/tasks/[0-9]+/i[0-9]+/cmd-output/.*"
 //      OR file.name IN ("mitmproxy-ca-cert.pem", "artex_config.json", "artex.yaml", "graphics-hook-filter64.dll")
-//      OR user_agent.original RLIKE "(?i)(norma/[0-9]|artex-(enrich|readonly|worker|audit|pentest|verify|spawn|selfupdate)|ArtEx/1\\.0|spa-api-recon|ReconProbe|HexStrike-|CyberStrikeAI-|ArtexProbe)"
+//      OR TO_LOWER(user_agent.original) RLIKE ".*(norma/[0-9]|artex-(enrich|readonly|worker|audit|pentest|verify|spawn|selfupdate)|artex/1\\.0|spa-api-recon|reconprobe|hexstrike-|cyberstrikeai-|artexprobe).*"
 // | KEEP @timestamp, host.name, user.name, process.command_line, file.path, user_agent.original
 // | SORT @timestamp DESC
 //
-// 7. Elastic ES|QL — AWS CloudWatch FilterLogEvents Secret Search & DryRun Sweeps
+// 7. [ES|QL] AWS CloudWatch FilterLogEvents Secret Search & Multi-API DryRun/AccessDenied Bursts
 // FROM logs-aws.cloudtrail-*
-// | WHERE (event.action == "FilterLogEvents" AND aws.cloudtrail.request_parameters RLIKE "(?i).*(password|AKIA|secret|token|limit=1000).*")
-//      OR aws.cloudtrail.error_code IN ("Client.DryRunOperation", "AccessDenied", "UnauthorizedOperation")
-// | STATS calls = COUNT(*), apis = COUNT_DISTINCT(event.action) BY aws.cloudtrail.user_identity.arn, source.ip, event.action
-// | WHERE calls >= 5 OR event.action == "FilterLogEvents"
-// | SORT calls DESC
-
-// 4. Anomalous Server/Endpoint Egress to Commercial LLM APIs (Exclude Approved AI Gateways)
-network where
-  (dns.question.name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn") or
-   tls.client.server_name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn")) and
-  not host.name : ("DEV-AI-GW-*")
-
-// 5. Web Portal / Edge Appliance Error-Correction Pivot (4xx/5xx -> 200 OK on Sensitive Path <= 20s)
-sequence by source.ip with maxspan=20s
-  [network where http.response.status_code >= 400 and
-   url.path : ("*/+CSCOE+/*", "*/+webvpn+/*", "*/vpn/*", "*/nf/auth/*", "*/global-protect/*", "*/tmui/*", "*/mgmt/tm/*", "*/api/*")]
-  [network where http.response.status_code == 200 and
-   url.path : ("*/.env*", "*/admin/*", "*shell.php*", "*cmd.jsp*", "*/config*")]
-
-// 8. Elastic ES|QL — Okta 2FA Push Bombing, Rogue Factor Activation, Probe Registrations, Workflows & /api/v1/authn Spray
+// | WHERE (event.action == "FilterLogEvents" AND TO_LOWER(TO_STRING(aws.cloudtrail.request_parameters)) RLIKE ".*(password|akia|asia|secret|token|bearer).*")
+//      OR error.code IN ("Client.DryRunOperation", "AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "Client.UnauthorizedOperation")
+// | WHERE NOT TO_LOWER(aws.cloudtrail.user_identity.arn) RLIKE ".*(terraform|atlantis|spacelift|github-actions|gitlab-ci|aws-config).*"
+// | STATS
+//     calls = COUNT(*),
+//     distinct_apis = COUNT_DISTINCT(event.action),
+//     cw_secret_hits = COUNT(*) WHERE event.action == "FilterLogEvents",
+//     dryrun_hits = COUNT(*) WHERE error.code == "Client.DryRunOperation"
+//   BY aws.cloudtrail.user_identity.arn, source.ip, bucket = DATE_TRUNC(15 minutes, @timestamp)
+// | WHERE cw_secret_hits >= 1 OR dryrun_hits >= 4 OR distinct_apis >= 5
+// | SORT cw_secret_hits DESC, distinct_apis DESC, calls DESC
+//
+// 8. [ES|QL] Okta 2FA Push Bombing, Rogue Factor Activation/Reset, Probe Registrations, & Workflows Abuse
 // FROM logs-okta.system-*
-// | WHERE event.action IN ("user.session.start", "user.mfa.okta_verify.deny_push", "user.authentication.auth_via_mfa", "user.mfa.factor.activate", "user.mfa.factor.deactivate", "user.lifecycle.create", "user.risk.detect", "workflows.user.invoke")
+// | WHERE event.action IN ("user.session.start", "user.mfa.okta_verify.deny_push", "user.authentication.auth_via_mfa", "user.mfa.factor.activate", "user.mfa.factor.deactivate", "user.mfa.factor.reset_all", "user.lifecycle.create", "user.risk.detect", "workflows.user.invoke")
 // | STATS
 //     failed_users = COUNT_DISTINCT(user.name) WHERE event.outcome == "failure",
 //     mfa_fails = COUNT(*) WHERE event.action IN ("user.mfa.okta_verify.deny_push", "user.authentication.auth_via_mfa") AND event.outcome == "failure",
-//     factor_changes = COUNT(*) WHERE event.action IN ("user.mfa.factor.activate", "user.mfa.factor.deactivate"),
+//     factor_changes = COUNT(*) WHERE event.action IN ("user.mfa.factor.activate", "user.mfa.factor.deactivate", "user.mfa.factor.reset_all"),
 //     probe_signups = COUNT(*) WHERE event.action == "user.lifecycle.create",
 //     risk_hits = COUNT(*) WHERE event.action == "user.risk.detect",
-//     workflow_invokes = COUNT(*) WHERE event.action == "workflows.user.invoke",
+//     suspicious_workflow_invokes = COUNT(*) WHERE event.action == "workflows.user.invoke" AND (okta.debug_context.debug_data.request_uri LIKE "*/api/flo/*" OR okta.debug_context.debug_data.request_uri LIKE "*clientToken=*"),
 //     successes = COUNT(*) WHERE event.outcome == "success"
 //   BY source.ip, bucket = DATE_TRUNC(15 minutes, @timestamp)
-// | WHERE (failed_users >= 5 AND successes >= 1) OR mfa_fails >= 4 OR probe_signups >= 5 OR risk_hits >= 3 OR workflow_invokes >= 1 OR (factor_changes >= 1 AND (failed_users >= 1 OR mfa_fails >= 1))
+// | WHERE (failed_users >= 5 AND successes >= 1) OR mfa_fails >= 4 OR probe_signups >= 5 OR risk_hits >= 3 OR suspicious_workflow_invokes >= 1 OR (factor_changes >= 1 AND (failed_users >= 1 OR mfa_fails >= 1))
 // | SORT mfa_fails DESC, probe_signups DESC, failed_users DESC
 //
-// 9. Elastic ES|QL — CyberStrikeAI CloudTrail: Sub-Second EC2 userData / SSM Burst & Multi-Identity External IP Pivot
+// 9. [ES|QL] CyberStrikeAI CloudTrail: EC2 userData / SSM Decryption Burst & Multi-Identity External IP Pivot
 // FROM logs-aws.cloudtrail-*
-// | WHERE event.action IN ("DescribeInstanceAttribute", "GetParameter", "GetParametersByPath", "SendCommand", "GetSecretValue")
+// | WHERE source.ip IS NOT NULL
+//   AND event.action IN ("DescribeInstanceAttribute", "GetParameter", "GetParametersByPath", "SendCommand", "GetSecretValue")
 // | STATS
 //     calls = COUNT(*),
 //     distinct_identities = COUNT_DISTINCT(aws.cloudtrail.user_identity.arn),
-//     ec2_roles = COUNT_DISTINCT(aws.cloudtrail.user_identity.arn) WHERE aws.cloudtrail.user_identity.arn RLIKE ".*/i-[0-9a-f]{8,17}$",
-//     send_cmds = COUNT(*) WHERE event.action == "SendCommand",
-//     userdata_calls = COUNT(*) WHERE event.action == "DescribeInstanceAttribute" AND aws.cloudtrail.request_parameters LIKE "*userData*"
+//     ec2_role_userdata = COUNT(*) WHERE aws.cloudtrail.user_identity.arn RLIKE ".*/i-[0-9a-f]{8,17}$" AND event.action == "DescribeInstanceAttribute",
+//     shell_send_cmds = COUNT(*) WHERE event.action == "SendCommand" AND TO_STRING(aws.cloudtrail.request_parameters) LIKE "*AWS-Run*Script*",
+//     userdata_calls = COUNT(*) WHERE event.action == "DescribeInstanceAttribute" AND TO_STRING(aws.cloudtrail.request_parameters) LIKE "*userData*",
+//     ssm_decrypts = COUNT(*) WHERE event.action IN ("GetParameter", "GetParametersByPath") AND TO_STRING(aws.cloudtrail.request_parameters) LIKE "*withDecryption*true*"
 //   BY source.ip, bucket = DATE_TRUNC(15 minutes, @timestamp)
-// | WHERE distinct_identities >= 3 OR ec2_roles >= 1 OR send_cmds >= 1 OR userdata_calls >= 5
+// | WHERE distinct_identities >= 3 OR userdata_calls >= 4 OR (ec2_role_userdata >= 2 AND ssm_decrypts >= 1) OR (shell_send_cmds >= 1 AND (userdata_calls >= 1 OR ssm_decrypts >= 1))
 // | SORT distinct_identities DESC, calls DESC

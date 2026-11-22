@@ -1,40 +1,45 @@
 // ============================================================================
-// ARTEX / Autonomous Agentic Offensive Framework — SentinelOne (S1QL / PowerQuery)
+// ARTEX / Autonomous Agentic Offensive Framework — SentinelOne (S1QL 2.0 / PowerQuery)
+// Note: In S1QL 2.0 Process Creation events, `src.process.*` is the PARENT process
+//       and `tgt.process.*` is the newly CREATED CHILD process.
 // ============================================================================
 
-// 1. ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Ports (8787/8788/8790), & Host Forensics
-//    (Tightened: no bare "artex" substring collision)
-(tgt.file.path contains:anycase ("ProgramData\\artx5v", "BLOODALCHEMY", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "mitmproxy-ca-cert.pem", "/cmd-output/") OR
- src.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich", "artex-readonly", "ARTEX-worker", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "BLOODALCHEMY") OR
- url.address contains:anycase ("/Inform/logger/", "xcai.com", "xcai.pro", "dnslog.cn", "lanmao666.", "/api/exploration/", "/api/sync/scopesentry", "artex=") OR
- dst.port.number in (8787, 8788, 8790))
+// 1. ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Ports (8787-8890), & Host Forensics
+(tgt.file.path contains:anycase ("ProgramData\\artx5v", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "mitmproxy-ca-cert.pem") OR
+ (tgt.file.path contains:anycase "/tasks/" AND tgt.file.path contains:anycase "/cmd-output/") OR
+ tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe") OR
+ url.address contains:anycase ("/Inform/logger/", "/api/exploration/", "/api/sync/scopesentry", "?artex=", "&artex=") OR
+ url.address matches "(?i)(?:^|\\.|//)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|dnslog\\.cn)(?:[:/]|$)" OR
+ dst.port.number in (8787, 8788, 8790, 8890))
 
 // 2. Automated EDR Sensor Discovery Probes (Including SentinelAgent / CrowdStrike)
 event.type == "Process Creation" AND
-src.process.cmdline contains:anycase ("sc query", "Get-Service", "tasklist", "systemctl status", "pgrep") AND
-src.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon", "CrowdStrike", "WinDefend", "Sysmon")
+tgt.process.cmdline contains:anycase ("sc query", "Get-Service", "tasklist", "systemctl status", "pgrep") AND
+tgt.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon", "falcon-sensor", "CrowdStrike", "WinDefend", "Sysmon")
 
 // 3. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — java/node require recon/download args)
 event.type == "Process Creation" AND
-src.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "sh", "bash") AND (
-  src.process.parent.name in:anycase ("w3wp.exe", "nginx", "httpd", "php-fpm", "restjavad") OR
-  (src.process.parent.name in:anycase ("java", "java.exe", "node", "node.exe") AND
-   src.process.cmdline contains:anycase ("whoami", "nltest", "sc query", "curl ", "wget ", "Invoke-WebRequest", "-enc", "base64"))
+tgt.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") AND (
+  src.process.name in:anycase ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe") OR
+  (src.process.name in:anycase ("java", "java.exe", "node", "node.exe") AND
+   tgt.process.cmdline contains:anycase ("whoami", "nltest", "sc query", "curl ", "wget ", "Invoke-WebRequest", "-enc ", "-encodedcommand", "base64"))
 )
 
-// 4. Anomalous Server/DMZ Egress to LLM APIs or Webhook Exfiltration Domains (Exclude Workstations)
-event.type in ("DNS Resolved", "IP Connect") AND
-endpoint.type == "server" AND
-(event.dns.request contains:anycase (
-    "api.anthropic.com", "api.openai.com", "api.deepseek.com",
-    "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn",
-    "webhook.site", "oast.live", "interact.sh", "dnslog.cn"
-) OR dst.port.number in (8787, 8788, 8790))
+// 4A. High-Confidence C2 Relays, Webhook/OAST Exfil, or Console Ports 8787-8890 (ALL Endpoints)
+event.type in ("DNS Resolved", "IP Connect") AND (
+  event.dns.request matches "(?i)(?:^|\\.)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|artex\\.noog2infra\\.site|artex\\.ok7777\\.eu\\.cc|artex\\.tokena2b\\.top|webhook\\.site|oast\\.(?:live|fun|me)|interact\\.sh|dnslog\\.cn)$" OR
+  dst.port.number in (8787, 8788, 8790, 8890)
+)
 
-// 5. PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s)
+// 4B. Anomalous Server/DMZ Egress to Commercial LLM APIs (Excludes Workstations)
+event.type == "DNS Resolved" AND
+endpoint.type == "server" AND
+event.dns.request matches "(?i)(?:^|\\.)(?:api\\.anthropic\\.com|api\\.openai\\.com|api\\.deepseek\\.com|open\\.bigmodel\\.cn|api\\.x\\.ai|api\\.moonshot\\.(?:cn|ai)|dashscope\\.aliyuncs\\.com|openrouter\\.ai|api\\.siliconflow\\.cn)$"
+
+// 5. Singularity Data Lake PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s)
 event.type == "Process Creation"
-| filter src.process.cmdline matches "(?i)(whoami|ipconfig|nltest|net localgroup|aws sts|az account|kubectl get|sc query|tasklist)"
-| bucket 30s
-| group cmd_count = count(), unique_cmds = estimate_distinct(src.process.cmdline) by endpoint.name, src.process.user, _timebucket
+| filter tgt.process.cmdline matches "(?i)\\b(whoami|ipconfig|ifconfig|nltest|net\\s+localgroup|aws\\s+sts|az\\s+account|kubectl\\s+get|sc\\s+query|get-service|tasklist)\\b"
+| let tb = timebucket(event.time, "30s")
+| group cmd_count = count(), unique_cmds = estimate_distinct(tgt.process.cmdline) by endpoint.name, tgt.process.user, tb
 | filter unique_cmds >= 5
 | sort -unique_cmds

@@ -32,8 +32,14 @@ detection:
     requestParameters.withDecryption: true
   selection_ssm_exec:
     eventName: 'SendCommand'
+    requestParameters.documentName:
+      - 'AWS-RunShellScript'
+      - 'AWS-RunPowerShellScript'
   selection_ec2_role_sensitive:
-    userIdentity.arn|contains: 'assumed-role/'
+    # Scope specifically to EC2 instance-profile sessions (assumed-role/<Role>/i-<instance-id>)
+    userIdentity.arn|contains|all:
+      - 'assumed-role/'
+      - '/i-'
     eventName:
       - 'DescribeInstanceAttribute'
       - 'GetSecretValue'

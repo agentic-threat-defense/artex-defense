@@ -21,11 +21,18 @@ detection:
     c-uri|contains:
       - '/.env'
       - '/admin/shell.php'
+      - '/shell.php'
       - '/cmd.jsp'
       - '/.git/config'
   selection_success:
     sc-status: 200
-  condition: selection_sensitive_path and selection_success
+  filter_env_templates:
+    c-uri|contains:
+      - '/.env.example'
+      - '/.env.sample'
+      - '/.env.template'
+      - '/.env.dist'
+  condition: selection_sensitive_path and selection_success and not filter_env_templates
 falsepositives:
   - Rare developer staging servers exposing non-production configuration files.
 level: critical

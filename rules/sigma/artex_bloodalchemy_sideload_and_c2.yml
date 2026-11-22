@@ -28,6 +28,9 @@ detection:
       - '/Inform/logger/'
       - 'xcai.com'
       - 'xcai.pro'
+  selection_ba_img:
+    Image|contains:
+      - '\ProgramData\artx5v\'
   selection_trojan_docker:
     CommandLine|contains:
       - 'tomicdd/artex'

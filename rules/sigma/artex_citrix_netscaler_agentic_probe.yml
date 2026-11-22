@@ -31,7 +31,12 @@ detection:
       - 'norma/'
       - 'norma-agent'
       - 'artex/'
-      - 'artex-'
+      - 'artex-enrich/'
+      - 'artex-readonly/'
+      - 'artex-worker/'
+      - 'artex-probe'
+      - 'artex-selfupdate'
+      - 'ArtexProbe'
       - 'ScopeWeaver'
   condition: selection_citrix_paths and selection_agentic_ua
 falsepositives:

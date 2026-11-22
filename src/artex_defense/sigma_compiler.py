@@ -244,11 +244,6 @@ def _build_ecs_real_wire_pipeline() -> ProcessingPipeline:
                 rule_conditions=[LogsourceCondition(product="linux", category="process_creation")],
             ),
             ProcessingItem(
-                identifier="artex_ecs_dns_host",
-                transformation=FieldMappingTransformation({"ComputerName": "host.name"}),
-                rule_conditions=[LogsourceCondition(product="windows", category="dns_query")],
-            ),
-            ProcessingItem(
                 identifier="artex_ecs_web_proxy_fw",
                 transformation=FieldMappingTransformation(
                     {
@@ -372,6 +367,7 @@ WINDOWS_ENDPOINT_CATS: frozenset[tuple[str | None, str | None]] = frozenset(
     {
         ("windows", "process_creation"),
         ("windows", "network_connection"),
+        ("linux", "process_creation"),
     }
 )
 

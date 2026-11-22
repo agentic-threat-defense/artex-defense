@@ -19,27 +19,29 @@ logsource:
   category: authentication
   product: idp
 detection:
-  selection_duo:
-    Action|contains:
-      - 'duo_fraud_reported'
+  selection_duo_fraud:
+    result: 'fraud'
+  selection_duo_reason:
+    reason:
       - 'fraud_reported'
       - 'user_marked_fraud'
-      - 'duo_admin:bypass_create'
-      - 'duo_admin:phone_create'
-      - 'duo_admin:2fa_device_enroll'
-  selection_ping:
-    Action|contains:
+  selection_duo_admin:
+    action:
+      - 'bypass_create'
+      - 'phone_create'
+      - '2fa_device_enroll'
+  selection_ping_mfa:
+    description|contains:
       - 'pingid_device_paired'
       - 'mfa_device_enrolled'
       - 'mfa_rejected'
-  selection_gws:
-    Action|contains:
+  selection_gws_2sv:
+    events.name:
       - '2sv_disable'
       - '2sv_enroll'
       - 'recovery_phone_edit'
       - 'recovery_email_edit'
-      - 'second_factor_failure'
-  condition: selection_duo or selection_ping or selection_gws
+  condition: selection_duo_fraud or selection_duo_reason or selection_duo_admin or selection_ping_mfa or selection_gws_2sv
 falsepositives:
   - Planned user device migrations or helpdesk-assisted Duo bypass creation (correlate with ticket/IT admin IP).
 level: high

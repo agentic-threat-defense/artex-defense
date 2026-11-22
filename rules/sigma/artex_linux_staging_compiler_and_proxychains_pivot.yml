@@ -1,19 +1,21 @@
-title: Autonomous Agentic Linux Staging C Compilation or Proxychains/Chisel Pivot
+title: Autonomous Agentic Linux Staging C Compilation, Proxychains/AD Pivot, or ARTEX Host Artifacts
 id: 9f4e2a17-6b3c-4d8e-9a51-2c7b80e4d312
 status: experimental
 description: >
-  Detects Linux post-exploitation staging and pivoting behaviors observed in autonomous
-  offensive agent intrusions (such as ARTEX): on-box C/C++ compilation (gcc, clang, cc)
-  targeting volatile staging directories (/tmp, /dev/shm, /var/tmp), or proxychains/chisel
-  SOCKS tunnel execution on Linux servers and pivot hosts.
+  Detects Linux post-exploitation staging, pivoting, and ARTEX operator-host behaviors:
+  on-box C/C++ compilation (gcc, g++, clang, cc) targeting volatile staging directories
+  (/tmp, /dev/shm, /var/tmp) outside package managers, proxychains/chisel/Impacket/NetExec
+  pivoting, and ARTEX task/mitmproxy/Docker host artifacts.
 references:
   - https://www.ic3.gov
   - https://threatdefence.com/article/artex-agentic-attack-framework-detection-hunting
+  - https://github.com/theori-io/aipt-detections
 author: ARTEX Defensive Research Workbench
 date: 2026-11-22
 tags:
   - attack.defense_evasion
   - attack.command_and_control
+  - attack.lateral_movement
   - attack.t1027.004
   - attack.t1090.001
 logsource:
@@ -23,22 +25,56 @@ detection:
   selection_compiler:
     Image|endswith:
       - 'gcc'
+      - 'g++'
       - 'clang'
+      - 'clang++'
       - '/cc'
   selection_staging_path:
     CommandLine|contains:
       - '/tmp/'
       - '/dev/shm/'
       - '/var/tmp/'
+  filter_legit_builds:
+    ParentImage|endswith:
+      - '/dpkg'
+      - '/apt'
+      - '/yum'
+      - '/dnf'
+      - '/rpm'
+      - '/pip'
+      - '/pip3'
+      - '/cargo'
+      - '/go'
+      - '/dkms'
+      - '/cmake'
   selection_proxychains:
-    CommandLine|contains|all:
+    CommandLine|contains:
       - 'proxychains'
-      - '-f'
+      - 'proxychains4'
   selection_chisel_linux:
     CommandLine|contains|all:
       - 'chisel'
       - 'client'
-  condition: (selection_compiler and selection_staging_path) or selection_proxychains or selection_chisel_linux
+  selection_linux_pivot_tools:
+    CommandLine|contains:
+      - 'ligolo-agent'
+      - 'ntlmrelayx'
+      - 'smbserver.py'
+      - 'petitpotam'
+      - 'coercer'
+      - 'certipy'
+      - 'ldapdomaindump'
+      - 'evil-winrm'
+      - 'netexec'
+  selection_artex_linux_host:
+    CommandLine|contains:
+      - 'mitmproxy-ca-cert.pem'
+      - 'traffic/_index/index.sqlite'
+      - '/cmd-output/'
+      - 'tomicdd/artex'
+      - 'congdonglinux/artex'
+  condition: (selection_compiler and selection_staging_path and not filter_legit_builds) or selection_proxychains or selection_chisel_linux or selection_linux_pivot_tools or selection_artex_linux_host
 falsepositives:
-  - Software build servers, CI/CD runners, or package managers (pip/dkms/autoconf) compiling temporary probes in /tmp (exclude known CI/build hosts).
+  - Dedicated CI/CD build servers compiling temporary probes in /tmp (exclude known CI/build hosts).
+  - Authorized red-team jump hosts running Proxychains, Chisel, or Impacket.
 level: high
