@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release from annotated tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TITLE="$(git tag -l --format='%(contents:subject)' "$TAG")"
+          if [ -z "$TITLE" ]; then
+            TITLE="$TAG"
+          fi
+          git tag -l --format='%(contents:body)' "$TAG" > release_notes.md
+
+          PRERELEASE_FLAG=""
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          if [ -s release_notes.md ]; then
+            gh release create "$TAG" --title "$TITLE" --notes-file release_notes.md $PRERELEASE_FLAG
+          else
+            gh release create "$TAG" --title "$TITLE" --generate-notes $PRERELEASE_FLAG
+          fi
