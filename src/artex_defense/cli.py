@@ -249,7 +249,7 @@ def sigma_compile(
         f"pySigma Core Schema Check ({report['total_rules']} rules in {report['rules_dir']}): {status_str}"
     )
     for iss in issues:
-        console.print(f"  [red]- {iss}[/red]")
+        console.print(f"  [red]- {rich_escape(str(iss))}[/red]")
 
     table = Table(title="Multi-Backend Sigma Compilation Matrix")
     table.add_column("Target Platform", style="cyan")

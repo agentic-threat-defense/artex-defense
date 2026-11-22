@@ -20,24 +20,25 @@ logsource:
   product: okta
   service: okta
 detection:
-  selection_mfa_abuse:
-    Action|contains:
+  selection_mfa_events:
+    eventType:
       - 'user.mfa.okta_verify.deny_push'
-      - 'VERIFICATION_ERROR'
       - 'user.mfa.factor.activate'
       - 'user.mfa.factor.deactivate'
       - 'user.mfa.factor.reset_all'
       - 'user.risk.detect'
       - 'workflows.user.invoke'
+  selection_mfa_reason:
+    outcome.reason: 'VERIFICATION_ERROR'
   selection_legacy_authn:
-    c-uri|contains:
+    debugContext.debugData.requestUri|contains:
       - '/api/v1/authn'
-    sc-status: 401
+    outcome.result: 'FAILURE'
   selection_workflow_invoke:
-    c-uri|contains:
+    debugContext.debugData.requestUri|contains:
       - '/api/flo/'
       - 'clientToken='
-  condition: selection_mfa_abuse or selection_legacy_authn or selection_workflow_invoke
+  condition: selection_mfa_events or selection_mfa_reason or selection_legacy_authn or selection_workflow_invoke
 falsepositives:
   - Legitimate users enrolling a new phone in Okta Verify (correlate with new ASN/IP or preceding auth failures).
 level: high

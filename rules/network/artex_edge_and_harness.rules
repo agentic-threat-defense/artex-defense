@@ -12,9 +12,9 @@ alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed ARTEX Infrastructure W
 
 alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"ARTEX-DEFENSE VAPOR PANDA BLOODALCHEMY C2 URI (/Inform/logger/)"; flow:to_server,established; http.uri; content:"/Inform/logger/"; classtype:trojan-activity; sid:9100006; rev:1;)
 
-alert tls $HOME_NET any -> $EXTERNAL_NET 443 (msg:"ARTEX-DEFENSE Outbound TLS to ARTEX LLM Relay Proxy (xcai.com)"; tls.sni; content:"xcai.com"; endswith; nocase; classtype:trojan-activity; sid:9100007; rev:1;)
+alert tls $HOME_NET any -> $EXTERNAL_NET 443 (msg:"ARTEX-DEFENSE Outbound TLS to ARTEX LLM Relay Proxy"; tls.sni; pcre:"/(?:^|\.)(?:xcai\.(?:com|pro)|artex\.lol|lanmao666\.(?:com|xyz)|nginxmysql\.com|vietnam852\.com|zhzy999\.net)$/i"; classtype:trojan-activity; sid:9100007; rev:2;)
 
-alert http $HOME_NET any -> any [8787,8790] (msg:"ARTEX-DEFENSE Outbound HTTP Traffic to Default ARTEX/ScopeWeaver Console Port (8787/8790)"; flow:to_server,established; classtype:trojan-activity; sid:9100002; rev:1;)
+alert http $HOME_NET any -> any [8787,8788,8790,8890] (msg:"ARTEX-DEFENSE Outbound HTTP Traffic to Default ARTEX/ScopeWeaver Console Port (8787/8788/8790/8890)"; flow:to_server,established; classtype:trojan-activity; sid:9100002; rev:2;)
 
 alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Exposed ARTEX Autonomous Pentest Console HTML Title"; flow:from_server,established; http.response_body; content:"|E8 87 AA E4 B8 BB E6 B8 97 E9 80 8F E6 B5 8B E8 AF 95 E6 8E A7 E5 88 B6 E5 8F B0|"; classtype:policy-violation; sid:9100003; rev:1;)
 

@@ -2,9 +2,10 @@ title: Potential ARTEX Rapid VPN Authentication Spray or WebVPN Probing on Cisco
 id: 6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a010
 status: experimental
 description: >
-  Detects rapid, low-dwell authentication failures or WebVPN/CSCOE URI probing against
-  Cisco ASA and Firepower Threat Defense (FTD) appliances consistent with autonomous
-  agentic offensive frameworks (e.g., ARTEX).
+  Detects WebVPN/CSCOE URI probing against Cisco ASA and Firepower Threat Defense (FTD)
+  appliances or AAA lockout / WebVPN authentication failure syslog codes (113015, 716039)
+  consistent with autonomous agentic offensive frameworks (e.g., ARTEX). For raw single-event
+  AAA rejections (113005), aggregate >= 5 failures per source IP within 60 seconds in your SIEM.
 references:
   - https://www.ic3.gov
   - https://blog.talosintelligence.com
@@ -19,16 +20,15 @@ logsource:
   category: firewall
   product: cisco_asa
 detection:
-  selection_asa_auth_fail:
-    Action|contains:
-      - 'asa_113005_auth_failed'
-      - 'ftd_113005_auth_failed'
-      - 'asa_113015_auth_failed'
+  selection_asa_lockout_or_webvpn_fail:
+    event.code:
+      - 113015
+      - 716039
   selection_webvpn_uri:
     c-uri|contains:
       - '/+CSCOE+/'
       - '/+webvpn+/'
-  condition: selection_asa_auth_fail and selection_webvpn_uri
+  condition: selection_asa_lockout_or_webvpn_fail or selection_webvpn_uri
 falsepositives:
   - Misconfigured VPN client profiles repeatedly retrying expired credentials.
 level: high

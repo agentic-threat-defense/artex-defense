@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ SIGMA_FIELD_MAP: dict[str, str] = {
     "DestinationPort": "dest_port",
     "DestinationHostname": "dest_host",
     "QueryName": "dest_host",
+    "cs-host": "dest_host",
     "Image": "process",
     "ParentImage": "parent_process",
     "CommandLine": "command_line",
@@ -26,39 +28,130 @@ SIGMA_FIELD_MAP: dict[str, str] = {
     "sc-status": "status_code",
     "Action": "action",
     "Computer": "source_host",
+    "ComputerName": "source_host",
+    "eventName": "action",
+    "eventType": "action",
+    "operationName": "action",
+    "errorCode": "command_line",
+    "userIdentity.arn": "actor",
+    "debugContext.debugData.requestUri": "http_path",
 }
 
 
-def _match_field_condition(event_val: Any, key_spec: str, expected: Any) -> bool:
+def _extract_dotted(obj: Any, parts: list[str]) -> list[Any]:
+    """Traverse nested dicts and lists of dicts to extract scalar leaf values for a dotted Sigma field."""
+    if obj is None:
+        return []
+    if not parts:
+        if isinstance(obj, (str, int, float, bool)):
+            return [obj]
+        if isinstance(obj, list):
+            out: list[Any] = []
+            for item in obj:
+                if isinstance(item, (str, int, float, bool)):
+                    out.append(item)
+            return out
+        return []
+
+    head, rest = parts[0], parts[1:]
+    if isinstance(obj, dict):
+        if head in obj:
+            return _extract_dotted(obj[head], rest)
+        # Also support flat dotted keys stored verbatim in dicts (e.g. {"event.code": "113015"})
+        full_key = ".".join(parts)
+        if full_key in obj:
+            return _extract_dotted(obj[full_key], [])
+        return []
+    if isinstance(obj, list):
+        results: list[Any] = []
+        for item in obj:
+            results.extend(_extract_dotted(item, parts))
+        return results
+    return []
+
+
+def _resolve_field_values(
+    event_val: dict[str, Any],
+    field: str,
+    raw_obj: dict[str, Any] | None = None,
+) -> list[Any]:
+    parts = field.split(".")
+
+    # 1. Direct lookup on the event (handles raw unmodified CloudTrail/Okta/Entra/GWS JSON)
+    direct = _extract_dotted(event_val, parts)
+    if direct:
+        return direct
+
+    # 2. Nested lookup inside preserved raw_json (handles normalized events from parsers.py)
+    parsed_raw = raw_obj
+    if parsed_raw is None:
+        raw_str = event_val.get("raw_json")
+        if isinstance(raw_str, str) and raw_str.startswith("{"):
+            try:
+                loaded = json.loads(raw_str)
+                if isinstance(loaded, dict):
+                    parsed_raw = loaded
+            except Exception:
+                parsed_raw = None
+    if isinstance(parsed_raw, dict):
+        from_raw = _extract_dotted(parsed_raw, parts)
+        if from_raw:
+            return from_raw
+
+    # 3. Fallback to normalized event field map
+    norm_key = SIGMA_FIELD_MAP.get(field)
+    if norm_key is not None:
+        val = event_val.get(norm_key)
+        if val is not None and val != "":
+            return [val]
+    return []
+
+
+def _match_field_condition(
+    event_val: dict[str, Any],
+    key_spec: str,
+    expected: Any,
+    raw_obj: dict[str, Any] | None = None,
+) -> bool:
     parts = key_spec.split("|")
     field = parts[0]
     modifiers = parts[1:]
 
-    norm_key = SIGMA_FIELD_MAP.get(field, field)
-    actual = event_val.get(norm_key)
-    if actual is None:
+    actuals = _resolve_field_values(event_val, field, raw_obj=raw_obj)
+    if not actuals:
         return False
 
     values = expected if isinstance(expected, list) else [expected]
-    actual_str = str(actual).lower()
+    actual_strs = [str(a).lower() for a in actuals]
 
     def single_match(v: Any) -> bool:
         v_str = str(v).lower()
-        if "contains" in modifiers:
-            return v_str in actual_str
-        if "startswith" in modifiers:
-            return actual_str.startswith(v_str)
-        if "endswith" in modifiers:
-            return actual_str.endswith(v_str)
-        return actual_str == v_str
+        for actual_str in actual_strs:
+            if "contains" in modifiers:
+                if v_str in actual_str:
+                    return True
+            elif "startswith" in modifiers:
+                if actual_str.startswith(v_str):
+                    return True
+            elif "endswith" in modifiers:
+                if actual_str.endswith(v_str):
+                    return True
+            else:
+                if actual_str == v_str:
+                    return True
+        return False
 
     if "all" in modifiers:
         return all(single_match(v) for v in values)
     return any(single_match(v) for v in values)
 
 
-def _match_selection(event: dict[str, Any], selection: dict[str, Any]) -> bool:
-    return all(_match_field_condition(event, k, v) for k, v in selection.items())
+def _match_selection(
+    event: dict[str, Any],
+    selection: dict[str, Any],
+    raw_obj: dict[str, Any] | None = None,
+) -> bool:
+    return all(_match_field_condition(event, k, v, raw_obj=raw_obj) for k, v in selection.items())
 
 
 def evaluate_sigma_rule_on_events(rule_doc: dict[str, Any], events: list[dict[str, Any]]) -> int:
@@ -74,12 +167,25 @@ def evaluate_sigma_rule_on_events(rule_doc: dict[str, Any], events: list[dict[st
 
     hits = 0
     for ev in events:
-        results = {name: _match_selection(ev, sel) for name, sel in selections.items()}
+        raw_obj: dict[str, Any] | None = None
+        raw_str = ev.get("raw_json")
+        if isinstance(raw_str, str) and raw_str.startswith("{"):
+            try:
+                loaded = json.loads(raw_str)
+                if isinstance(loaded, dict):
+                    raw_obj = loaded
+            except Exception:
+                raw_obj = None
+
+        results = {name: _match_selection(ev, sel, raw_obj=raw_obj) for name, sel in selections.items()}
         # Handle common Sigma boolean expressions cleanly
         expr = base_cond
         if "1 of selection*" in expr:
             any_sel = any(v for k, v in results.items() if k.startswith("selection"))
             expr = expr.replace("1 of selection*", str(any_sel))
+        if "all of selection*" in expr:
+            all_sel = all(v for k, v in results.items() if k.startswith("selection"))
+            expr = expr.replace("all of selection*", str(all_sel))
         for name in sorted(results.keys(), key=len, reverse=True):
             expr = expr.replace(name, str(results[name]))
         try:

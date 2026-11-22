@@ -5,22 +5,22 @@
 (process.command_line:(*chisel\ client* OR *chisel.exe\ client* OR *R\:socks* OR *proxychains\ \-f* OR *proxychains4\ \-f* OR *ligolo\-agent*)) OR (process.command_line:(*ntlmrelayx* OR *smbserver.py* OR *petitpotam* OR *coercer* OR *certipy* OR *ldapdomaindump*)) OR (((process.executable.caseless:(*\\edge.exe OR *\\msedge.exe)) AND process.command_line:*config.bin*) AND (NOT (process.executable.caseless:(*\\Program\ Files\\* OR *\\Program\ Files\ \(x86\)\\* OR *\\Windows\\System32\\*))))
 
 # === ARTEX Cloud Reconnaissance — AWS CloudWatch Secret Search or DryRun Permission Sweep (artex_aws_cloudwatch_and_dryrun_sweep.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a019 | level=high) ===
-(Action:FilterLogEvents AND (CommandLine:(*password* OR *AKIA* OR *secret* OR *token*))) OR CommandLine:*Client.DryRunOperation*
+(event.action:FilterLogEvents AND (aws.cloudtrail.request_parameters.filterPattern:(*password* OR *AKIA* OR *secret* OR *token*))) OR error.code:*DryRunOperation*
 
 # === AWS CloudTrail Agentic EC2 userData Harvesting, SSM Decryption/SendCommand, or External EC2 Role Replay (artex_aws_cyberstrikeai_userdata_ssm_and_ec2_role.yml | id=7c2e41b8-5a93-4d7c-9e12-4b8f71a6c309 | level=high) ===
-(Action:(*DescribeInstanceAttribute* OR *GetParametersByPath* OR *SendCommand*)) AND (CommandLine:(*userData* OR *WithDecryption* OR *assumed\-role\/*))
+(event.action:DescribeInstanceAttribute AND aws.cloudtrail.request_parameters.attribute:userData) OR ((event.action:(GetParametersByPath OR GetParameter OR GetParameters)) AND aws.cloudtrail.request_parameters.withDecryption:true) OR event.action:SendCommand OR (aws.cloudtrail.user_identity.arn:*assumed\-role\/* AND (event.action:(DescribeInstanceAttribute OR GetSecretValue OR GetParametersByPath OR SendCommand)))
 
 # === VAPOR PANDA BLOODALCHEMY Sideloading, C2 URI, or ARTEX Config/Proxy Artifacts (artex_bloodalchemy_sideload_and_c2.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a016 | level=critical) ===
 (process.command_line:(*graphics\-hook\-filter64.dll* OR *graphics\-hook_config.bin* OR *artex_config.json* OR *artex.yaml* OR *\\ProgramData\\artx5v\\* OR *\/Inform\/logger\/* OR *xcai.com* OR *xcai.pro*)) OR (process.command_line:(*tomicdd\/artex* OR *congdonglinux\/artex*))
 
 # === Potential ARTEX Rapid VPN Authentication Spray or WebVPN Probing on Cisco ASA / FTD (artex_cisco_asa_ftd_rapid_vpn_spray.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a010 | level=high) ===
-(Action:(*asa_113005_auth_failed* OR *ftd_113005_auth_failed* OR *asa_113015_auth_failed*)) AND (c-uri:(*\/\+CSCOE\+\/* OR *\/\+webvpn\+\/*))
+(event.code:(113015 OR 716039)) OR (url.original:(*\/\+CSCOE\+\/* OR *\/\+webvpn\+\/*))
 
 # === Potential ARTEX Automated Probing or Harness Activity Against Citrix NetScaler Gateway (artex_citrix_netscaler_agentic_probe.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a011 | level=high) ===
-(c-uri:(*\/vpn\/* OR *\/nf\/auth\/* OR *\/logon\/LogonPoint\/* OR *\/p\/u\/* OR *\/nitro\/v1*)) AND (cs-user-agent:(*HeadlessChrome* OR *Nuclei* OR *norma\/* OR *norma\-agent* OR *artex\/* OR *artex\-* OR *ScopeWeaver*))
+(url.original:(*\/vpn\/* OR *\/nf\/auth\/* OR *\/logon\/LogonPoint\/* OR *\/p\/u\/* OR *\/nitro\/v1*)) AND (user_agent.original:(*HeadlessChrome* OR *Nuclei* OR *norma\/* OR *norma\-agent* OR *artex\/* OR *artex\-* OR *ScopeWeaver*))
 
 # === ARTEX Control-Plane Routes, Recording Proxy (8788 / mitmproxy CA), or Task Cmd-Output Spill (artex_console_and_operator_host_forensics.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a018 | level=high) ===
-(c-uri:(*\/api\/exploration\/* OR *\/api\/intercept\/* OR *\/api\/sync\/scopesentry* OR *\/api\/llm\/profiles* OR *\/api\/llm\/records* OR *\/function\/tasks* OR *\/function\/findings*)) OR (CommandLine:(*\/cmd\-output\/* OR *mitmproxy\-ca\-cert.pem* OR *traffic\/_index\/index.sqlite* OR *artex_token\=*)) OR cs-user-agent:*artex\-selfupdate*
+(url.original:(*\/api\/exploration\/* OR *\/api\/intercept\/* OR *\/api\/sync\/scopesentry* OR *\/api\/llm\/profiles* OR *\/api\/llm\/records* OR *\/function\/tasks* OR *\/function\/findings*)) OR (CommandLine:(*\/cmd\-output\/* OR *mitmproxy\-ca\-cert.pem* OR *traffic\/_index\/index.sqlite* OR *artex_token\=*)) OR user_agent.original:*artex\-selfupdate*
 
 # === Rapid Automated EDR Sensor Discovery Commands (artex_edr_evasion_probe.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a003 | level=medium) ===
 (process.command_line:(*sc\ query* OR *Get\-Service* OR *tasklist* OR *wmic\ process*)) AND (process.command_line:(*CSFalcon* OR *CrowdStrike* OR *SentinelAgent* OR *CbDefense* OR *WinDefend* OR *Sysmon*))
@@ -29,31 +29,31 @@
 ((process.parent.executable.caseless:(*w3wp.exe* OR *nginx* OR *httpd* OR *php\-fpm* OR *restjavad*)) AND (process.executable.caseless:(*cmd.exe* OR *powershell.exe* OR *pwsh* OR *\/bin\/sh* OR *\/bin\/bash*))) OR (process.command_line:(*nltest\ \/domain_trusts* OR *aws\ sts\ get\-caller\-identity* OR *az\ account\ show*))
 
 # === Microsoft Entra ID Service Principal Secret Guessing (7000215) or MFA Denial / Security Info Tampering (artex_entra_sp_secret_abuse_and_mfa_tampering.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a022 | level=high) ===
-Action:(*err_7000215* OR *err_7000222* OR *err_500121* OR *Register\ security\ info* OR *AddServicePrincipalCredentials* OR *ConsentToApplication*)
+(azure.signinlogs.result_type:(7000215 OR 7000222 OR 500121)) OR (event.action:(*Register\ security\ info* OR *Add\ service\ principal\ credentials* OR *AddServicePrincipalCredentials* OR *Consent\ to\ application* OR *ConsentToApplication*))
 
 # === Duo Security, PingFederate, and Google Workspace 2FA Fatigue & Factor Tampering (artex_idp_duo_ping_gws_2fa_abuse.yml | id=9b4e1a27-3c8f-4f92-b7c1-8d2e60f4a139 | level=high) ===
 (Action:(*duo_fraud_reported* OR *fraud_reported* OR *user_marked_fraud* OR *duo_admin\:bypass_create* OR *duo_admin\:phone_create* OR *duo_admin\:2fa_device_enroll*)) OR (Action:(*pingid_device_paired* OR *mfa_device_enrolled* OR *mfa_rejected*)) OR (Action:(*2sv_disable* OR *2sv_enroll* OR *recovery_phone_edit* OR *recovery_email_edit* OR *second_factor_failure*))
 
 # === Anomalous Server or Endpoint Egress to External LLM APIs (artex_llm_api_egress.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a002 | level=medium) ===
-(dns.question.name:(*api.anthropic.com OR *api.openai.com OR *api.deepseek.com OR *open.bigmodel.cn OR *api.x.ai OR *api.moonshot.cn OR *api.moonshot.ai OR *dashscope.aliyuncs.com OR *openrouter.ai OR *api.siliconflow.cn OR *xcai.com OR *xcai.pro OR *lanmao666.com OR *lanmao666.xyz)) AND (NOT (winlog.event_data.Computer:(DEV\-AI\-GW\-* OR WKSTN\-* OR LAPTOP\-*)))
+(dns.question.name:(*api.anthropic.com OR *api.openai.com OR *api.deepseek.com OR *open.bigmodel.cn OR *api.x.ai OR *api.moonshot.cn OR *api.moonshot.ai OR *dashscope.aliyuncs.com OR *openrouter.ai OR *api.siliconflow.cn OR *xcai.com OR *xcai.pro OR *artex.lol OR *lanmao666.com OR *lanmao666.xyz OR *nginxmysql.com OR *vietnam852.com OR *zhzy999.net)) AND (NOT (winlog.computer_name:(DEV\-AI\-GW\-* OR WKSTN\-* OR LAPTOP\-*)))
 
 # === Potential ARTEX or ScopeWeaver Framework Artifact or Default Listener (artex_network_listener.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a001 | level=high) ===
 (destination.port:(8787 OR 8788 OR 8790 OR 8890)) OR (process.executable.caseless:(*ScopeWeaver* OR *AntiFox* OR *Pojun* OR *FORANG* OR *sco\-fix2* OR *artx5v* OR *artex\-server* OR *artex\-worker* OR *norma\-agent*))
 
 # === Okta 2FA / MFA Fatigue, Rogue Factor Enrollment, or Legacy /api/v1/authn Brute-Force Abuse (artex_okta_mfa_fatigue_and_authn_spray.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a021 | level=high) ===
-(Action:(*user.mfa.okta_verify.deny_push* OR *VERIFICATION_ERROR* OR *user.mfa.factor.activate* OR *user.mfa.factor.deactivate* OR *user.mfa.factor.reset_all* OR *user.risk.detect* OR *workflows.user.invoke*)) OR (c-uri:*\/api\/v1\/authn* AND sc-status:401) OR (c-uri:(*\/api\/flo\/* OR *clientToken\=*))
+(event.action:(user.mfa.okta_verify.deny_push OR user.mfa.factor.activate OR user.mfa.factor.deactivate OR user.mfa.factor.reset_all OR user.risk.detect OR workflows.user.invoke)) OR okta.outcome.reason:VERIFICATION_ERROR OR (okta.debug_context.debug_data.request_uri:*\/api\/v1\/authn* AND okta.outcome.result:FAILURE) OR (okta.debug_context.debug_data.request_uri:(*\/api\/flo\/* OR *clientToken\=*))
 
 # === Automated Agentic Fingerprinting Against Palo Alto PAN-OS or F5 BIG-IP Edge Endpoints (artex_panos_f5_edge_fingerprinting.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a012 | level=high) ===
-(c-uri:(*\/global\-protect\/* OR *\/ssl\-vpn\/* OR *\/my.policy* OR *\/tmui\/* OR *\/mgmt\/tm\/*)) AND (cs-user-agent:(*Nuclei* OR *HeadlessChrome* OR *norma\/* OR *norma\-agent* OR *python\-httpx* OR *Go\-http\-client*))
+(url.original:(*\/global\-protect\/* OR *\/ssl\-vpn\/* OR *\/my.policy* OR *\/tmui\/* OR *\/mgmt\/tm\/*)) AND (user_agent.original:(*Nuclei* OR *HeadlessChrome* OR *norma\/* OR *norma\-agent* OR *python\-httpx* OR *Go\-http\-client*))
 
 # === ARTEX Post-Exploitation AD Credential Dumping (Kerberoast/DCSync) or Follow-On C2 (vshell/AdaptixC2/WISP) (artex_post_exploit_ad_and_followon_c2.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a020 | level=critical) ===
 (process.command_line:(*lsadump\:\:* OR *sekurlsa\:\:* OR *kerberoast* OR *GetUserSPNs* OR *DS\-Replication\-Get\-Changes*)) OR (process.command_line:(*vshell* OR *AdaptixC2* OR *sqlserver\-sqlite.com*))
 
 # === ARTEX Agentic Canary Probes (zzq / nonexistent), Self-Describing UAs, or OAuth Redirect Abuse (artex_unit42_canary_and_spec_targeting.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a017 | level=high) ===
-(c-uri:(*zz_no_such_user* OR *zzq.nonexistent* OR *precheck.not\-a\-user* OR *zzzrandom* OR *zz\-no\-such\-key* OR *zz\-notexist\-* OR *nonexistent\-i* OR *ARTEX_WRITE_PROBE* OR *ARTEX_PERSIST_OK* OR *artex_control_marker* OR *artex\=* OR *eyJhbGciOiJub25l*)) OR (cs-user-agent:(*security\-testing;\ authorized* OR *LLMLeak\-RedTeam\/* OR *authorised\-scan* OR *authorized\-security\-research\/* OR *vulnerability\-disclosure\-policy\-review* OR *authorized\-exposure\-audit\/* OR *recon\-audit* OR *Fuzz\ Faster\ U\ Fool* OR *ArtExVerify\/1.0* OR *Mozilla\/5.0\ \(ARTEX\)*)) OR Action:*illegal_redirect_uri_enhanced*
+(url.original:(*zz_no_such_user* OR *zzq.nonexistent* OR *precheck.not\-a\-user* OR *zzzrandom* OR *zz\-no\-such\-key* OR *zz\-notexist\-* OR *nonexistent\-i* OR *ARTEX_WRITE_PROBE* OR *ARTEX_PERSIST_OK* OR *artex_control_marker* OR *artex\=* OR *eyJhbGciOiJub25l*)) OR (user_agent.original:(*security\-testing;\ authorized* OR *LLMLeak\-RedTeam\/* OR *authorised\-scan* OR *authorized\-security\-research\/* OR *vulnerability\-disclosure\-policy\-review* OR *authorized\-exposure\-audit\/* OR *recon\-audit* OR *Fuzz\ Faster\ U\ Fool* OR *ArtExVerify\/1.0* OR *Mozilla\/5.0\ \(ARTEX\)*)) OR Action:*illegal_redirect_uri_enhanced*
 
 # === Web Portal Sensitive Endpoint Access Following Automated Probing (Agentic Error-Correction Pivot) (artex_web_error_correction_burst.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a013 | level=critical) ===
-(c-uri:(*\/.env* OR *\/admin\/shell.php* OR *\/cmd.jsp* OR *\/.git\/config*)) AND sc-status:200
+(url.original:(*\/.env* OR *\/admin\/shell.php* OR *\/cmd.jsp* OR *\/.git\/config*)) AND http.response.status_code:200
 
 # === Potential ARTEX Webhook Exfiltration or Norma Agent Harness Network Activity (artex_webhook_exfil_and_norma_harness.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a015 | level=high) ===
-(DestinationHostname:(*webhook.site* OR *oast.live* OR *oast.fun* OR *interact.sh*)) OR (cs-user-agent:(*norma\/* OR *norma\-agent* OR *artex\-enrich\/* OR *artex\-readonly\/* OR *ARTEX\-worker\/* OR *ArtexProbe* OR *artex\-probe*))
+(url.domain:(*webhook.site* OR *oast.live* OR *oast.fun* OR *interact.sh*)) OR (user_agent.original:(*norma\/* OR *norma\-agent* OR *artex\-enrich\/* OR *artex\-readonly\/* OR *ARTEX\-worker\/* OR *ArtexProbe* OR *artex\-probe*))

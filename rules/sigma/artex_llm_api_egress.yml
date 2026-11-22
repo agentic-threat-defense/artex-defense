@@ -31,11 +31,15 @@ detection:
       - 'api.siliconflow.cn'
       - 'xcai.com'
       - 'xcai.pro'
+      - 'artex.lol'
       - 'lanmao666.com'
       - 'lanmao666.xyz'
+      - 'nginxmysql.com'
+      - 'vietnam852.com'
+      - 'zhzy999.net'
   filter_authorized_hosts:
     # Scope to Servers / DMZ / DCs; suppress approved AI gateways and standard user workstations
-    Computer|startswith:
+    ComputerName|startswith:
       - 'DEV-AI-GW-'
       - 'WKSTN-'
       - 'LAPTOP-'

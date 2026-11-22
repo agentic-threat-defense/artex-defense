@@ -847,7 +847,7 @@ def parse_cisco_asa_ftd_syslog(lines: list[str]) -> list[dict[str, Any]]:
                 http_path=uri,
                 status_code=401 if is_failure else 200,
                 action=action,
-                raw={"raw": line, "msgid": f"{prod}-{msgid}"},
+                raw={"raw": line, "msgid": f"{prod}-{msgid}", "event": {"code": msgid}},
             )
         )
     return events

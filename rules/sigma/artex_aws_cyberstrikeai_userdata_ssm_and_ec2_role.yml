@@ -21,17 +21,25 @@ logsource:
   product: aws
   service: cloudtrail
 detection:
-  selection_userdata_or_ssm:
-    Action|contains:
+  selection_ec2_userdata:
+    eventName: 'DescribeInstanceAttribute'
+    requestParameters.attribute: 'userData'
+  selection_ssm_decrypt:
+    eventName:
+      - 'GetParametersByPath'
+      - 'GetParameter'
+      - 'GetParameters'
+    requestParameters.withDecryption: true
+  selection_ssm_exec:
+    eventName: 'SendCommand'
+  selection_ec2_role_sensitive:
+    userIdentity.arn|contains: 'assumed-role/'
+    eventName:
       - 'DescribeInstanceAttribute'
+      - 'GetSecretValue'
       - 'GetParametersByPath'
       - 'SendCommand'
-  selection_ec2_role_context:
-    CommandLine|contains:
-      - 'userData'
-      - 'WithDecryption'
-      - 'assumed-role/'
-  condition: selection_userdata_or_ssm and selection_ec2_role_context
+  condition: selection_ec2_userdata or selection_ssm_decrypt or selection_ssm_exec or selection_ec2_role_sensitive
 falsepositives:
   - Approved cloud-inventory or configuration-management automation (allowlist by IaC/automation IP or role ARN).
 level: high

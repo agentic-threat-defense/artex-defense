@@ -19,16 +19,16 @@ logsource:
   service: cloudtrail
 detection:
   selection_cw_action:
-    Action: 'FilterLogEvents'
+    eventName: 'FilterLogEvents'
   selection_cw_secret:
-    CommandLine|contains:
+    requestParameters.filterPattern|contains:
       - 'password'
       - 'AKIA'
       - 'secret'
       - 'token'
   selection_dryrun:
-    CommandLine|contains:
-      - 'Client.DryRunOperation'
+    errorCode|contains:
+      - 'DryRunOperation'
   condition: (selection_cw_action and selection_cw_secret) or selection_dryrun
 falsepositives:
   - Authorized security-engineering secret-scanning jobs running against CloudWatch Logs.

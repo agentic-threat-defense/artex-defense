@@ -18,7 +18,7 @@ logsource:
   category: proxy
 detection:
   selection_webhook:
-    DestinationHostname|contains:
+    cs-host|contains:
       - 'webhook.site'
       - 'oast.live'
       - 'oast.fun'

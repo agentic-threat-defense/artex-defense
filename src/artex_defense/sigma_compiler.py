@@ -11,14 +11,299 @@ Compiles rules/sigma/*.yml across enterprise SIEM/XDR backends:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
+from sigma.backends.elasticsearch.elasticsearch_esql import ESQLBackend
+from sigma.backends.kusto import KustoBackend
+from sigma.backends.sentinelone import SentinelOneBackend
 from sigma.collection import SigmaCollection
+from sigma.conditions import ConditionAND, ConditionFieldEqualsValueExpression, ConditionOR
+from sigma.conversion.deferred import DeferredQueryExpression
+from sigma.conversion.state import ConversionState
 from sigma.plugins import InstalledSigmaPlugins
+from sigma.processing.conditions import LogsourceCondition
+from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
+from sigma.processing.transformations import FieldMappingTransformation
+from sigma.types import SigmaBool, SigmaNumber, SigmaString, SpecialChars
 from sigma.validation import SigmaValidator
 from sigma.validators.core import validators as core_validators
+
+_KQL_SIMPLE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _lowercase_sigma_string(val: SigmaString) -> SigmaString:
+    """Return a copy of SigmaString with literal text segments lowercased (preserving wildcards)."""
+    out = SigmaString()
+    out.s = tuple(part.lower() if isinstance(part, str) else part for part in val.s)
+    return out
+
+
+class HardenedKustoBackend(KustoBackend):
+    """KustoBackend fixed for valid KQL identifier quoting (['field']), boolean `==`, and unquoted numeric in (...)."""
+
+    def escape_and_quote_field(self, field_name: str) -> str:
+        if _KQL_SIMPLE_IDENT_RE.match(field_name):
+            return field_name
+        if field_name.startswith("['") and field_name.endswith("']"):
+            return field_name
+        escaped = field_name.replace("'", "\\'")
+        return f"['{escaped}']"
+
+    def convert_condition_field_eq_val_bool(
+        self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
+    ) -> str | DeferredQueryExpression:
+        if not isinstance(cond.value, SigmaBool):
+            raise TypeError(f"Expected SigmaBool for cond.value, got {type(cond.value)}")
+        bool_token = self.bool_values[cond.value.boolean]
+        if bool_token is None:
+            raise NotImplementedError(f"Boolean value {cond.value.boolean} not supported by the backend.")
+        return f"{self.escape_and_quote_field(cond.field)} == {bool_token}"
+
+    def convert_condition_as_in_expression(
+        self, cond: Union[ConditionOR, ConditionAND], state: ConversionState
+    ) -> Union[str, DeferredQueryExpression]:
+        raw_field = cond.args[0].field  # type: ignore[union-attr]
+        quoted_field = self.escape_and_quote_field(raw_field)
+        op1 = self.or_in_operator if isinstance(cond, ConditionOR) else self.and_in_operator
+        op2 = self.or_token if isinstance(cond, ConditionOR) else self.and_token
+
+        num_args = [
+            arg
+            for arg in cond.args
+            if isinstance(arg, ConditionFieldEqualsValueExpression) and isinstance(arg.value, SigmaNumber)
+        ]
+        str_nonwildcard_args = [
+            arg
+            for arg in cond.args
+            if isinstance(arg, ConditionFieldEqualsValueExpression)
+            and isinstance(arg.value, SigmaString)
+            and not arg.value.contains_special()
+        ]
+        list_wildcards = [
+            arg.value
+            for arg in cond.args
+            if isinstance(arg, ConditionFieldEqualsValueExpression)
+            and isinstance(arg.value, SigmaString)
+            and arg.value.contains_special()
+        ]
+
+        as_in_expr = ""
+        if num_args and not str_nonwildcard_args:
+            # Numeric KQL columns (RemotePort, DstPortNumber, status.errorCode) require unquoted ints + `in`
+            num_op = "in" if isinstance(cond, ConditionOR) else op1
+            num_list = self.list_separator.join(str(a.value.number) for a in num_args)
+            as_in_expr = self.field_in_list_expression.format(field=quoted_field, op=num_op, list=num_list)
+        elif str_nonwildcard_args or num_args:
+            mixed_items = [self.convert_value_str(a.value, state) for a in str_nonwildcard_args] + [
+                str(a.value.number) for a in num_args
+            ]
+            as_in_expr = self.field_in_list_expression.format(
+                field=quoted_field, op=op1, list=self.list_separator.join(mixed_items)
+            )
+
+        wildcard_exprs_list: list[str] = []
+        for arg_val in list_wildcards:
+            # Pass raw_field (NOT quoted_field) so nested conversion never double-quotes the identifier
+            new_cond = ConditionFieldEqualsValueExpression(field=raw_field, value=arg_val)
+            if arg_val[1:-1].contains_special():
+                expr = f"{self.token_separator}{self.and_token}{self.token_separator}".join(
+                    [
+                        self.contains_expression.format(
+                            field=quoted_field, value=self.convert_value_str(SigmaString(str(x)), state)
+                        )
+                        for x in arg_val.s
+                        if not isinstance(x, SpecialChars)
+                    ]
+                )
+                expr = self.group_expression.format(expr=expr)
+            else:
+                expr = str(self.convert_condition_field_eq_val_str(new_cond, state))
+            wildcard_exprs_list.append(expr)
+
+        wildcard_exprs = f"{self.token_separator}{op2}{self.token_separator}".join(wildcard_exprs_list)
+        if as_in_expr and wildcard_exprs:
+            return as_in_expr + self.token_separator + op2 + self.token_separator + wildcard_exprs
+        return as_in_expr + wildcard_exprs
+
+
+class HardenedESQLBackend(ESQLBackend):
+    """ESQLBackend fixed to lowercase literals matched against Elastic ECS `*.caseless` fields."""
+
+    def convert_condition_field_eq_val_str(
+        self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
+    ) -> str | DeferredQueryExpression:
+        if cond.field and cond.field.endswith(".caseless") and isinstance(cond.value, SigmaString):
+            cond = ConditionFieldEqualsValueExpression(
+                field=cond.field,
+                value=_lowercase_sigma_string(cond.value),
+            )
+        return super().convert_condition_field_eq_val_str(cond, state)
+
+    def convert_condition_as_in_expression(
+        self, cond: ConditionOR | ConditionAND, state: ConversionState
+    ) -> str | DeferredQueryExpression:
+        if (
+            cond.args
+            and isinstance(cond.args[0], ConditionFieldEqualsValueExpression)
+            and cond.args[0].field
+            and cond.args[0].field.endswith(".caseless")
+        ):
+            lowered_args = [
+                ConditionFieldEqualsValueExpression(
+                    field=arg.field,
+                    value=_lowercase_sigma_string(arg.value) if isinstance(arg.value, SigmaString) else arg.value,
+                )
+                if isinstance(arg, ConditionFieldEqualsValueExpression)
+                else arg
+                for arg in cond.args
+            ]
+            cond = type(cond)(lowered_args)
+        return super().convert_condition_as_in_expression(cond, state)
+
+
+class HardenedSentinelOneBackend(SentinelOneBackend):
+    """SentinelOneBackend fixed to use exact `In` for numeric lists / DstPort rather than `In Contains AnyCase`."""
+
+    def convert_condition_as_in_expression(
+        self, cond: Union[ConditionOR, ConditionAND], state: ConversionState
+    ) -> Union[str, DeferredQueryExpression]:
+        if cond.args and (
+            all(isinstance(arg.value, SigmaNumber) for arg in cond.args)
+            or cond.args[0].field in {"DstPort", "SrcPort"}
+        ):
+            return self.field_in_list_expression.format(
+                field=self.escape_and_quote_field(cond.args[0].field),
+                op="In",
+                list=self.list_separator.join(
+                    self.convert_value_str(arg.value, state)
+                    if isinstance(arg.value, SigmaString)
+                    else str(arg.value)
+                    for arg in cond.args
+                ),
+            )
+        return super().convert_condition_as_in_expression(cond, state)
+
+
+def _build_ecs_real_wire_pipeline() -> ProcessingPipeline:
+    """Supplemental Elastic ECS field mappings for web/proxy, DNS, AWS CloudTrail, Okta, and Entra ID."""
+    return ProcessingPipeline(
+        name="artex_ecs_real_wire",
+        priority=50,
+        items=[
+            ProcessingItem(
+                identifier="artex_ecs_dns_host",
+                transformation=FieldMappingTransformation({"ComputerName": "host.name"}),
+                rule_conditions=[LogsourceCondition(product="windows", category="dns_query")],
+            ),
+            ProcessingItem(
+                identifier="artex_ecs_web_proxy_fw",
+                transformation=FieldMappingTransformation(
+                    {
+                        "c-uri": "url.original",
+                        "cs-user-agent": "user_agent.original",
+                        "sc-status": "http.response.status_code",
+                        "cs-host": "url.domain",
+                    }
+                ),
+            ),
+            ProcessingItem(
+                identifier="artex_ecs_cloudtrail",
+                transformation=FieldMappingTransformation(
+                    {
+                        "eventName": "event.action",
+                        "errorCode": "error.code",
+                        "userIdentity.arn": "aws.cloudtrail.user_identity.arn",
+                        "requestParameters.filterPattern": "aws.cloudtrail.request_parameters.filterPattern",
+                        "requestParameters.attribute": "aws.cloudtrail.request_parameters.attribute",
+                        "requestParameters.withDecryption": "aws.cloudtrail.request_parameters.withDecryption",
+                    }
+                ),
+                rule_conditions=[LogsourceCondition(product="aws", service="cloudtrail")],
+            ),
+            ProcessingItem(
+                identifier="artex_ecs_okta",
+                transformation=FieldMappingTransformation(
+                    {
+                        "eventType": "event.action",
+                        "outcome.reason": "okta.outcome.reason",
+                        "outcome.result": "okta.outcome.result",
+                        "debugContext.debugData.requestUri": "okta.debug_context.debug_data.request_uri",
+                    }
+                ),
+                rule_conditions=[LogsourceCondition(product="okta")],
+            ),
+            ProcessingItem(
+                identifier="artex_ecs_entra",
+                transformation=FieldMappingTransformation(
+                    {
+                        "status.errorCode": "azure.signinlogs.result_type",
+                        "operationName": "event.action",
+                    }
+                ),
+                rule_conditions=[LogsourceCondition(product="azure")],
+            ),
+        ],
+    )
+
+
+def _build_kusto_generic_pipeline() -> ProcessingPipeline:
+    """Clean ASIM/KQL column mappings for generic web, proxy, firewall, DNS, and cloud rules."""
+    return ProcessingPipeline(
+        name="artex_kusto_generic_real_wire",
+        priority=50,
+        items=[
+            ProcessingItem(
+                identifier="artex_kql_web_proxy",
+                transformation=FieldMappingTransformation(
+                    {
+                        "c-uri": "UrlOriginal",
+                        "cs-user-agent": "HttpUserAgentOriginal",
+                        "sc-status": "HttpStatusCode",
+                        "cs-host": "DstDomain",
+                        "ComputerName": "Computer",
+                    }
+                ),
+            ),
+        ],
+    )
+
+
+def _build_splunk_cim_web_pipeline() -> ProcessingPipeline:
+    """Supplemental Splunk CIM field mappings for web/proxy/firewall logs."""
+    return ProcessingPipeline(
+        name="artex_splunk_cim_web",
+        priority=50,
+        items=[
+            ProcessingItem(
+                identifier="artex_splunk_web_proxy",
+                transformation=FieldMappingTransformation(
+                    {
+                        "c-uri": "uri_path",
+                        "cs-user-agent": "http_user_agent",
+                        "sc-status": "status",
+                        "cs-host": "dest",
+                    }
+                ),
+            ),
+        ],
+    )
+
+
+_BACKEND_OVERRIDES: dict[str, type[Any]] = {
+    "kusto": HardenedKustoBackend,
+    "esql": HardenedESQLBackend,
+    "sentinel_one": HardenedSentinelOneBackend,
+}
+
+_EXTRA_PIPELINES: dict[str, Any] = {
+    "esql_ecs": _build_ecs_real_wire_pipeline,
+    "lucene_ecs": _build_ecs_real_wire_pipeline,
+    "kusto_generic": _build_kusto_generic_pipeline,
+    "splunk_spl": _build_splunk_cim_web_pipeline,
+}
 
 
 @dataclass(frozen=True)
@@ -107,7 +392,11 @@ def compile_sigma_directory(
 
     for spec in targets:
         pipe = resolver.resolve([spec.pipeline]) if spec.pipeline else None
-        backend_cls = plugins.backends[spec.backend]
+        extra_factory = _EXTRA_PIPELINES.get(spec.key)
+        if extra_factory is not None:
+            extra_pipe = extra_factory()
+            pipe = (pipe + extra_pipe) if pipe is not None else extra_pipe
+        backend_cls = _BACKEND_OVERRIDES.get(spec.backend, plugins.backends[spec.backend])
         backend = backend_cls(processing_pipeline=pipe) if pipe else backend_cls()
 
         compiled_rules: list[dict[str, Any]] = []
