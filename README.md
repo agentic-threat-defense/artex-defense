@@ -106,6 +106,7 @@ bash lab/docker-range/run-range.sh
 - [docs/ROADMAP.md](docs/ROADMAP.md) — Known limitations and open engineering work
 - [lab/docker-range/README.md](lab/docker-range/README.md) — Non-routed isolated Docker validation range (real Suricata 7, Zeek LTS, YARA, Nginx)
 - [lab/kvm/README.md](lab/kvm/README.md) — Reproducible host-only isolated KVM/QEMU Zeek & Linux Auditd lab setup
+- [rules/intel_hunting/adjacent_china_nexus_edge_and_idp_hunts.md](rules/intel_hunting/adjacent_china_nexus_edge_and_idp_hunts.md) — Companion hunting templates for overlapping China-nexus edge/router/IdP campaigns (Storm-0940, Crystal Typhoon, Salt Typhoon)
 
 </details>
 
