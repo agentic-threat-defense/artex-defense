@@ -47,7 +47,10 @@ write_files:
                   self._send(200, {"service": "benign-lab-portal", "path": self.path})
 
           def do_POST(self):
-              length = int(self.headers.get("Content-Length", "0") or 0)
+              try:
+                  length = max(0, min(int(self.headers.get("Content-Length", "0") or 0), 1048576))
+              except ValueError:
+                  length = 0
               _ = self.rfile.read(length) if length > 0 else b""
               if any(p in self.path for p in ("/vpn/", "/+CSCOE+/", "/auth/login")):
                   self._send(401, {"error": "invalid_credentials"})

@@ -9,12 +9,16 @@ produces a compact summary ready for local Gemma 4 rule drafting.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from .sanitizer import sanitize_payload
+
+MAX_TASK_FILES = 2000
+MAX_TASK_FILE_BYTES = 10 * 1024 * 1024
 
 TASK_ID_LINE_RE = re.compile(
     r"(?:(?:task[_-]?id|taskid|intent[_-]?id|intent)\s*[:=]\s*['\"]?(?P<tid>[A-Za-z0-9_\-]+)|\b(?P<intent>i\d{1,8})\b)",
@@ -94,16 +98,38 @@ def analyze_task_artifacts(
     target_path: str | Path,
     *,
     sanitize: bool = True,
+    max_files: int = MAX_TASK_FILES,
+    max_file_bytes: int = MAX_TASK_FILE_BYTES,
 ) -> dict[str, Any]:
     """Parse a sanitized TaskID JSONL/log file or directory and extract defensive TTP summaries."""
     path = Path(target_path)
-    files = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+    files: list[Path] = []
+    if path.is_dir():
+        for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+            dirnames.sort()
+            cur = Path(dirpath)
+            for fname in sorted(filenames):
+                fp = cur / fname
+                if fp.is_symlink() or not fp.is_file():
+                    continue
+                files.append(fp)
+                if len(files) >= max_files:
+                    break
+            if len(files) >= max_files:
+                break
+    elif path.is_file() and not path.is_symlink():
+        files = [path]
 
     tasks: list[dict[str, Any]] = []
     tool_counts: Counter[str] = Counter()
     outcome_counts: Counter[str] = Counter()
 
     for fpath in files:
+        try:
+            if fpath.stat().st_size > max_file_bytes:
+                continue
+        except OSError:
+            continue
         fn_m = INTENT_FILENAME_RE.match(fpath.stem) or INTENT_FILENAME_RE.match(fpath.parent.name)
         file_intent = fn_m.group(1) if fn_m else None
         text = fpath.read_text(encoding="utf-8", errors="replace")

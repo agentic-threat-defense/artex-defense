@@ -89,14 +89,22 @@ cmd_build_seeds() {
   mkdir -p "${out_dir}"
   ensure_ssh_key
   local pubkey
-  pubkey="$(cat "${SSH_KEY_FILE}.pub")"
+  pubkey="$(tr -d '\r\n' < "${SSH_KEY_FILE}.pub")"
+  if [[ ! "${pubkey}" =~ ^ssh-(ed25519|rsa|ecdsa-sha2-nistp256)[[:space:]]+[A-Za-z0-9+/=]+([[:space:]]+[A-Za-z0-9._@-]+)?$ ]]; then
+    echo "ERROR: Refusing invalid or unsafe SSH public key in ${SSH_KEY_FILE}.pub" >&2
+    exit 1
+  fi
 
   for role in sensor target; do
     local stage="${out_dir}/${role}_stage"
     rm -rf "${stage}"
     mkdir -p "${stage}"
-    sed "s|__LAB_SSH_PUBKEY__|${pubkey}|g" \
-      "${SCRIPT_DIR}/cloud-init/${role}/user-data.yaml" > "${stage}/user-data"
+    python3 -c '
+import sys
+from pathlib import Path
+src, dst, key = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+dst.write_text(src.read_text(encoding="utf-8").replace("__LAB_SSH_PUBKEY__", key), encoding="utf-8")
+' "${SCRIPT_DIR}/cloud-init/${role}/user-data.yaml" "${stage}/user-data" "${pubkey}"
     cp "${SCRIPT_DIR}/cloud-init/${role}/meta-data.yaml" "${stage}/meta-data"
     cp "${SCRIPT_DIR}/cloud-init/${role}/network-config.yaml" "${stage}/network-config"
     local iso="${out_dir}/${role}-seed.iso"
@@ -153,6 +161,10 @@ cmd_up() {
 
 cmd_snapshot() {
   local snap="${1:-clean-baseline}"
+  if [[ ! "${snap}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: Invalid snapshot name '${snap}' (allowed: A-Za-z0-9._-)" >&2
+    exit 1
+  fi
   for vm in "${SENSOR_VM}" "${TARGET_VM}"; do
     if virsh --connect qemu:///system dominfo "${vm}" >/dev/null 2>&1; then
       virsh --connect qemu:///system snapshot-create-as "${vm}" --name "${snap}" --description "ARTEX lab ${snap}" >/dev/null 2>&1 || true
@@ -163,6 +175,10 @@ cmd_snapshot() {
 
 cmd_revert() {
   local snap="${1:-clean-baseline}"
+  if [[ ! "${snap}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "ERROR: Invalid snapshot name '${snap}' (allowed: A-Za-z0-9._-)" >&2
+    exit 1
+  fi
   for vm in "${SENSOR_VM}" "${TARGET_VM}"; do
     virsh --connect qemu:///system snapshot-revert "${vm}" --snapshotname "${snap}" --force
     echo "[revert] ${vm} <- ${snap}"
@@ -176,8 +192,11 @@ cmd_status() {
 
 cmd_export_logs() {
   local out_dir="${1:-${REPO_ROOT}/quarantine/kvm_export}"
-  mkdir -p "${out_dir}/raw"
-  local ssh_opts=(-i "${SSH_KEY_FILE}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5)
+  mkdir -p "${out_dir}/raw" "${STATE_DIR}"
+  local known_hosts="${STATE_DIR}/known_hosts"
+  touch "${known_hosts}"
+  chmod 600 "${known_hosts}"
+  local ssh_opts=(-i "${SSH_KEY_FILE}" -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=${known_hosts}" -o ConnectTimeout=5)
   scp "${ssh_opts[@]}" "labops@192.168.250.10:/var/log/zeek/*.log" "${out_dir}/raw/" 2>/dev/null || true
   scp "${ssh_opts[@]}" "labops@192.168.250.20:/var/log/audit/audit.log" "${out_dir}/raw/target_audit.log" 2>/dev/null || true
   python3 "${SCRIPT_DIR}/export_sensor_to_jsonl.py" --input-dir "${out_dir}/raw" --out "${out_dir}/lab_telemetry.jsonl"

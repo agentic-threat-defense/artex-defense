@@ -37,6 +37,10 @@ if [[ ! -e "$INPUT_PATH" ]]; then
   echo "Error: input path not found: $INPUT_PATH" >&2
   exit 1
 fi
+if [[ "$INPUT_PATH" == *:* || "$INPUT_PATH" == *,* || "$INPUT_PATH" == *$'\n'* ]]; then
+  echo "Error: input path contains unsupported mount delimiters (':' or ',')." >&2
+  exit 1
+fi
 
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
   echo "Building hardened sandbox image $IMAGE_NAME..."
@@ -46,8 +50,9 @@ fi
 if [[ -d "$INPUT_PATH" ]]; then
   CONTAINER_TARGET="/quarantine/tasks"
 else
-  INPUT_BASE="$(basename "$INPUT_PATH")"
-  CONTAINER_TARGET="/quarantine/${INPUT_BASE}"
+  SAFE_BASE="$(basename "$INPUT_PATH" | tr -c 'A-Za-z0-9._-' '_' | sed 's/^-*/input_/')"
+  [[ -z "$SAFE_BASE" || "$SAFE_BASE" == "." || "$SAFE_BASE" == ".." ]] && SAFE_BASE="input_artifact.jsonl"
+  CONTAINER_TARGET="/quarantine/${SAFE_BASE}"
 fi
 
 DOCKER_ARGS=(
@@ -61,15 +66,24 @@ DOCKER_ARGS=(
   --memory=2g
   --cpus=4
   --tmpfs /tmp:rw,noexec,nosuid,size=256m
-  -v "${INPUT_PATH}:${CONTAINER_TARGET}:ro"
+  --mount "type=bind,source=${INPUT_PATH},target=${CONTAINER_TARGET},readonly"
 )
 
 if [[ -n "$OUTPUT_FILE" ]]; then
-  OUT_DIR="$(dirname "$(realpath -m "$OUTPUT_FILE")")"
-  OUT_BASE="$(basename "$OUTPUT_FILE")"
+  OUT_REAL="$(realpath -m "$OUTPUT_FILE")"
+  OUT_DIR="$(dirname "$OUT_REAL")"
+  OUT_BASE="$(basename "$OUT_REAL")"
+  if [[ "$OUT_DIR" == "/" || "$OUT_DIR" == "$HOME" ]]; then
+    echo "Error: refusing to mount '$OUT_DIR' read-write into sandbox; use a dedicated output subdirectory." >&2
+    exit 1
+  fi
+  if [[ "$OUT_DIR" == *:* || "$OUT_DIR" == *,* || "$OUT_BASE" == -* || "$OUT_BASE" =~ [^A-Za-z0-9._-] ]]; then
+    echo "Error: unsafe output path or filename: $OUTPUT_FILE" >&2
+    exit 1
+  fi
   mkdir -p "$OUT_DIR"
-  DOCKER_ARGS+=(-v "${OUT_DIR}:/out:rw")
-  exec docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" analyze-tasks "$CONTAINER_TARGET" --out "/out/${OUT_BASE}"
+  DOCKER_ARGS+=(--mount "type=bind,source=${OUT_DIR},target=/out")
+  exec docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" analyze-tasks --out "/out/${OUT_BASE}" -- "$CONTAINER_TARGET"
 else
-  exec docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" analyze-tasks "$CONTAINER_TARGET"
+  exec docker "${DOCKER_ARGS[@]}" "$IMAGE_NAME" analyze-tasks -- "$CONTAINER_TARGET"
 fi

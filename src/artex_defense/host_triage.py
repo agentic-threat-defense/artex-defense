@@ -389,7 +389,11 @@ def check_filesystem_artifacts(
                     )
 
                 # Optional bounded read-only scan of small text/log/json files for hard-coded ARTEX audit markers
-                if scan_log_contents and full_path.suffix.lower() in {".log", ".jsonl", ".json", ".txt", ".audit"}:
+                if (
+                    scan_log_contents
+                    and not full_path.is_symlink()
+                    and full_path.suffix.lower() in {".log", ".jsonl", ".json", ".txt", ".audit"}
+                ):
                     try:
                         if full_path.stat().st_size <= 2 * 1024 * 1024:
                             text = full_path.read_text(encoding="utf-8", errors="ignore")
@@ -424,7 +428,7 @@ def check_installed_ca_certs(fs_root: Path) -> list[TriageFinding]:
         except OSError:
             continue
         for item in entries:
-            if not item.is_file():
+            if item.is_symlink() or not item.is_file():
                 continue
             name_low = item.name.lower()
             if "mitmproxy" in name_low or "artex" in name_low:
@@ -443,6 +447,8 @@ def check_installed_ca_certs(fs_root: Path) -> list[TriageFinding]:
 def check_postgres_dual_graph(pg_schema_file: Path | None) -> list[TriageFinding]:
     """Inspect a read-only PostgreSQL table/schema listing or SQL dump for ARTEX's dual-graph tables."""
     if pg_schema_file is None or not pg_schema_file.is_file():
+        return []
+    if pg_schema_file.stat().st_size > 10 * 1024 * 1024:
         return []
     text = pg_schema_file.read_text(encoding="utf-8", errors="ignore").lower()
     has_anchor = bool(re.search(rf"\b{ARTEX_PG_ANCHOR_TABLE}\b", text))

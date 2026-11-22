@@ -975,7 +975,7 @@ def detect_log_format(lines: list[str]) -> str:
 def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]:
     """Auto-detect and parse any supported JSONL, edge appliance, proxy, or web log file."""
     path = Path(file_path)
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     chosen = detect_log_format(lines) if fmt == "auto" else fmt
 
     if chosen == "cisco_asa_ftd":
