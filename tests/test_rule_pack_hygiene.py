@@ -62,6 +62,11 @@ def test_suricata_rules_have_valid_classtypes_buffers_sids_and_no_fp_traps() -> 
                 buf in ln for buf in ("http.uri;", "http.user_agent;", "http.header;", "http.response_body;")
             ), f"HTTP PCRE rule missing sticky buffer: {ln[:80]}"
 
+        # Unescaped semicolons inside pcre:"..." or content:"..." break Suricata's option parser
+        for kw in ("pcre", "content"):
+            for m in re.finditer(rf'{kw}:"((?:[^"\\]|\\.)*)"', ln):
+                assert ";" not in m.group(1), f"Unescaped ';' inside Suricata {kw}: {ln[:100]}"
+
 
 def test_zeek_script_decouples_c2_relays_and_bounds_notice_identifiers() -> None:
     zeek_path = RULES_ROOT / "network" / "artex_agentic_cadence.zeek"

@@ -7,6 +7,7 @@ dist/
 build/
 quarantine/*
 !quarantine/README.md
+lab/docker-range/out/
 data/
 docs/private_refs/
 docs/intel_corpus/external_feeds/

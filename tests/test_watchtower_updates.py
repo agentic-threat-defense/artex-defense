@@ -189,3 +189,30 @@ def test_ai_agent_spawning_offensive_tool_vs_benign_dev_commands(tmp_path: Path)
     p_fp = tmp_path / "ai_agent_benign_dev.jsonl"
     p_fp.write_text("\n".join(json.dumps(e) for e in benign) + "\n", encoding="utf-8")
     assert scan_telemetry_file(p_fp) == []
+
+
+def test_static_asset_404s_and_env_example_do_not_trigger_canary_or_pivot_fp(tmp_path: Path) -> None:
+    """CTO regression: benign static-asset 404s + /.env.example 200 MUST produce 0 candidates."""
+    nginx_lines = [
+        '198.51.100.77 - - [22/Nov/2026:12:00:00 +0000] "GET /favicon.ico HTTP/1.1" 404 162 "-" "Mozilla/5.0 Chrome/131.0.0.0"',
+        '198.51.100.77 - - [22/Nov/2026:12:00:20 +0000] "GET /nonexistent-a.png HTTP/1.1" 404 162 "-" "Mozilla/5.0 Chrome/131.0.0.0"',
+        '198.51.100.77 - - [22/Nov/2026:12:00:40 +0000] "GET /nonexistent-b.png?v=2 HTTP/1.1" 404 162 "-" "Mozilla/5.0 Chrome/131.0.0.0"',
+        '198.51.100.77 - - [22/Nov/2026:12:01:00 +0000] "GET /.env.example HTTP/1.1" 200 128 "-" "Mozilla/5.0 Chrome/131.0.0.0"',
+        '198.51.100.77 - - [22/Nov/2026:12:01:20 +0000] "GET /.env.sample HTTP/1.1" 200 128 "-" "Mozilla/5.0 Chrome/131.0.0.0"',
+    ]
+    p_ng = tmp_path / "benign_assets_env_example.log"
+    p_ng.write_text("\n".join(nginx_lines) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(p_ng) == []
+
+    # True positive preserved: 3 non-asset 4xx responses followed by 200 on real /.env still fires pivot!
+    attack_nginx = [
+        '198.51.100.88 - - [22/Nov/2026:12:05:00 +0000] "GET /api/v1/secret-a HTTP/1.1" 404 64 "-" "python-httpx/0.28.1"',
+        '198.51.100.88 - - [22/Nov/2026:12:05:08 +0000] "GET /api/v1/secret-b HTTP/1.1" 403 64 "-" "python-httpx/0.28.1"',
+        '198.51.100.88 - - [22/Nov/2026:12:05:16 +0000] "GET /api/v1/secret-c HTTP/1.1" 404 64 "-" "python-httpx/0.28.1"',
+        '198.51.100.88 - - [22/Nov/2026:12:05:24 +0000] "GET /.env HTTP/1.1" 200 512 "-" "python-httpx/0.28.1"',
+    ]
+    p_atk = tmp_path / "real_env_pivot.log"
+    p_atk.write_text("\n".join(attack_nginx) + "\n", encoding="utf-8")
+    cands = scan_telemetry_file(p_atk)
+    assert len(cands) == 1
+    assert "web_error_correction_pivot" in cands[0].reasons

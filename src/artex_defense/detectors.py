@@ -347,7 +347,7 @@ EDGE_PROBE_PATH_RE = re.compile(
 )
 
 SENSITIVE_WEB_PIVOT_RE = re.compile(
-    r"(/\.env|/admin|/config|/debug|/secrets|/export|/backup|/\.git|/shell\.php|/cmd\.jsp|/api/v\d+/(?:secrets|export|users|token))",
+    r"(/\.env(?![._-]?(?:example|sample|template|dist)\b)|/admin|/config|/debug|/secrets|/export|/backup|/\.git|/shell\.php|/cmd\.jsp|/api/v\d+/(?:secrets|export|users|token))",
     re.IGNORECASE,
 )
 
@@ -947,7 +947,6 @@ def _inspect_window_signals(
     surfaces: Counter[str] = Counter()
     appliances: Counter[str] = Counter()
 
-    saw_4xx_5xx = False
     saw_non_asset_4xx = False
     non_asset_error_count = 0
     non_asset_error_codes: set[int] = set()
@@ -1043,9 +1042,10 @@ def _inspect_window_signals(
             write_readback_count += 1
             indicators.add(f"write_readback:{ev_path[:80]}")
 
-        # Generalized mutated negative-control canary probes on 4xx responses
+        # Generalized mutated negative-control canary probes on 4xx responses (excluding static asset 404s)
         ev_status_pre = ev.get("status_code")
-        if ev_status_pre in {400, 401, 403, 404, 422}:
+        ev_path_base = ev_path.split("?", 1)[0] if ev_path else ""
+        if ev_status_pre in {400, 401, 403, 404, 422} and not (ev_path_base and STATIC_ASSET_PATH_RE.search(ev_path_base)):
             canary_target = f"{ev_path} {ev.get('actor', '')}"
             m_can = MUTATED_CANARY_STEM_RE.search(canary_target)
             if m_can:
@@ -1169,8 +1169,7 @@ def _inspect_window_signals(
         # Web error-correction loop, error-handling calibration (multi-code forcing / random-slug 404), & UA diversity
         status = ev.get("status_code")
         if status is not None and status >= 400:
-            saw_4xx_5xx = True
-            if not (ev_path and STATIC_ASSET_PATH_RE.search(ev_path)):
+            if not (ev_path_base and STATIC_ASSET_PATH_RE.search(ev_path_base)):
                 saw_non_asset_4xx = True
                 non_asset_error_count += 1
                 if ev.get("surface") in {"web_portal", "edge_appliance"} or ev_path:
@@ -1180,10 +1179,10 @@ def _inspect_window_signals(
             if ua_raw:
                 error_uas.add(ua_raw)
         elif (
-            saw_4xx_5xx
+            saw_non_asset_4xx
             and status is not None
             and 200 <= status < 300
-            and SENSITIVE_WEB_PIVOT_RE.search(ev_path)
+            and SENSITIVE_WEB_PIVOT_RE.search(ev_path_base)
         ):
             saw_sensitive_2xx_after_error = True
             indicators.add(f"sensitive_pivot_2xx:{ev_path}")
@@ -1529,7 +1528,7 @@ def _inspect_window_signals(
         indicators.add(f"unique_edge_paths:{len(edge_path_probes)}")
 
     # Web error-correction pivot, forced error-handling calibration, spec-driven targeting, & read-back
-    if saw_sensitive_2xx_after_error and error_count >= 3:
+    if saw_sensitive_2xx_after_error and non_asset_error_count >= 3:
         reasons.add("web_error_correction_pivot")
     fault_codes = non_asset_error_codes & {405, 415, 422, 500}
     if (

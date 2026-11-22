@@ -42,17 +42,32 @@ def _decode_audit_arg(val: str, quoted: bool) -> str:
     return val
 
 
-def convert_zeek_json_lines(lines: list[str], kind: str) -> list[dict[str, Any]]:
+def convert_zeek_json_lines(
+    lines: list[str],
+    kind: str,
+    *,
+    ssl_by_uid: dict[str, tuple[str, str]] | None = None,
+    skip_uids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Convert Zeek JSONL (`conn`, `http`, or `ssl`) into normalized artex-hunt JSONL dicts."""
     out: list[dict[str, Any]] = []
     for raw in lines:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        rec = json.loads(line)
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        uid = str(rec.get("uid") or "")
+        if skip_uids and uid and uid in skip_uids:
+            continue
         ts = _iso_from_epoch(rec.get("ts", 0))
         src = rec.get("id.orig_h", "unknown")
-        dst = rec.get("host") or rec.get("server_name") or rec.get("id.resp_h", "")
+        sni_join, ja4_join = (ssl_by_uid.get(uid, ("", "")) if ssl_by_uid and uid else ("", ""))
+        dst = rec.get("host") or rec.get("server_name") or sni_join or rec.get("id.resp_h", "")
         port = rec.get("id.resp_p")
 
         if kind == "http":
@@ -102,7 +117,7 @@ def convert_zeek_json_lines(lines: list[str], kind: str) -> list[dict[str, Any]]
                     "appliance": "zeek_conn",
                     "dest_host": dst,
                     "dest_port": port,
-                    "ja4": rec.get("ja4", ""),
+                    "ja4": rec.get("ja4") or ja4_join,
                     "bytes_out": rec.get("orig_bytes") if rec.get("orig_bytes") is not None else rec.get("orig_ip_bytes"),
                     "bytes_in": rec.get("resp_bytes") if rec.get("resp_bytes") is not None else rec.get("resp_ip_bytes"),
                     "action": f"zeek_conn_{rec.get('conn_state', 'SF')}",
@@ -167,10 +182,72 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
 def convert_directory(input_dir: Path, out_file: Path, *, target_host: str = "artex-target-01") -> int:
     """Convert all Zeek JSON logs and Auditd logs in `input_dir` into a single sorted JSONL file."""
     all_events: list[dict[str, Any]] = []
-    for name, kind in (("conn.log", "conn"), ("http.log", "http"), ("ssl.log", "ssl")):
+    ssl_by_uid: dict[str, tuple[str, str]] = {}
+    http_uids: set[str] = set()
+    conn_uids: set[str] = set()
+
+    ssl_path = input_dir / "ssl.log"
+    if ssl_path.is_file():
+        for raw in ssl_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            uid = str(rec.get("uid") or "")
+            if uid:
+                prev_sni, prev_ja4 = ssl_by_uid.get(uid, ("", ""))
+                new_sni = str(rec.get("server_name") or "") or prev_sni
+                new_ja4 = str(rec.get("ja4") or "") or prev_ja4
+                ssl_by_uid[uid] = (new_sni, new_ja4)
+
+    http_path = input_dir / "http.log"
+    if http_path.is_file():
+        for raw in http_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and rec.get("uid"):
+                http_uids.add(str(rec["uid"]))
+
+    conn_path = input_dir / "conn.log"
+    if conn_path.is_file():
+        for raw in conn_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and rec.get("uid"):
+                conn_uids.add(str(rec["uid"]))
+
+    for name, kind, skips in (
+        # Avoid double-counting connections: HTTP connections use rich http.log rows;
+        # TLS connections use conn.log rows enriched with ssl.log server_name/ja4.
+        ("conn.log", "conn", http_uids),
+        ("http.log", "http", None),
+        ("ssl.log", "ssl", conn_uids),
+    ):
         p = input_dir / name
         if p.is_file():
-            all_events.extend(convert_zeek_json_lines(p.read_text(encoding="utf-8", errors="ignore").splitlines(), kind))
+            all_events.extend(
+                convert_zeek_json_lines(
+                    p.read_text(encoding="utf-8", errors="ignore").splitlines(),
+                    kind,
+                    ssl_by_uid=ssl_by_uid if kind == "conn" else None,
+                    skip_uids=skips,
+                )
+            )
     for audit_file in sorted(input_dir.glob("*audit*.log")):
         all_events.extend(
             convert_auditd_lines(

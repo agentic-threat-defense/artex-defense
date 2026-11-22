@@ -34,10 +34,14 @@ EOF
 }
 
 require_airgap_xml() {
-  if grep -qi "<forward" "${NET_XML}"; then
+  if ! python3 -c "import sys, xml.etree.ElementTree as ET; sys.exit(0 if not ET.parse(sys.argv[1]).getroot().findall('.//forward') else 1)" "${NET_XML}"; then
     echo "ERROR: Security invariant violated — ${NET_XML} must NOT contain a <forward> directive!" >&2
     exit 1
   fi
+}
+
+require_airgap_stdin() {
+  python3 -c "import sys, xml.etree.ElementTree as ET; sys.exit(0 if not ET.fromstring(sys.stdin.read()).findall('.//forward') else 1)"
 }
 
 ensure_ssh_key() {
@@ -60,7 +64,7 @@ cmd_check() {
   done
   echo "[check] Network XML air-gap check: PASS (zero <forward> directives)"
   if virsh --connect qemu:///system net-info "${NET_NAME}" >/dev/null 2>&1; then
-    if virsh --connect qemu:///system net-dumpxml "${NET_NAME}" | grep -qi "<forward"; then
+    if ! virsh --connect qemu:///system net-dumpxml "${NET_NAME}" | require_airgap_stdin; then
       echo "ERROR: Live libvirt network ${NET_NAME} has a <forward> directive!" >&2
       exit 1
     fi
@@ -77,7 +81,7 @@ cmd_init_network() {
   fi
   virsh --connect qemu:///system net-autostart "${NET_NAME}" >/dev/null || true
   virsh --connect qemu:///system net-start "${NET_NAME}" >/dev/null 2>&1 || true
-  if virsh --connect qemu:///system net-dumpxml "${NET_NAME}" | grep -qi "<forward"; then
+  if ! virsh --connect qemu:///system net-dumpxml "${NET_NAME}" | require_airgap_stdin; then
     echo "ERROR: Active ${NET_NAME} contains <forward>; refusing to continue!" >&2
     exit 1
   fi

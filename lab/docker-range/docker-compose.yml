@@ -1,0 +1,44 @@
+services:
+  target:
+    image: artex-range-sensor:local
+    build:
+      context: .
+      dockerfile: Dockerfile.sensor
+    container_name: artex-range-target
+    networks:
+      range_isolated:
+        ipv4_address: 172.30.0.20
+    volumes:
+      - ./target:/target:ro
+      - ./out:/out
+    command: ["/bin/bash", "/target/start_target.sh"]
+
+  capture:
+    image: artex-range-sensor:local
+    container_name: artex-range-capture
+    network_mode: "service:target"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./out:/out
+    command: ["/bin/bash", "-c", "sleep infinity"]
+
+  replayer:
+    image: artex-range-sensor:local
+    container_name: artex-range-replayer
+    networks:
+      range_isolated:
+        ipv4_address: 172.30.0.10
+    volumes:
+      - ./replayer:/replayer:ro
+      - ./out:/out
+    command: ["/bin/bash", "-c", "sleep infinity"]
+
+networks:
+  range_isolated:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
