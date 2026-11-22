@@ -563,12 +563,12 @@ def _normalize_cloudtrail_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
     """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
-    # Detect native AWS CloudTrail JSON (eventSource + eventName + userIdentity / *.amazonaws.com)
+    # Detect native AWS CloudTrail JSON (eventSource + eventName + userIdentity / *.amazonaws.com[.cn])
     if (
         "eventName" in record
         and "eventSource" in record
         and (
-            str(record.get("eventSource", "")).lower().endswith(".amazonaws.com")
+            str(record.get("eventSource", "")).lower().endswith((".amazonaws.com", ".amazonaws.com.cn"))
             or isinstance(record.get("userIdentity"), dict)
         )
     ):

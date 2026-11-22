@@ -182,3 +182,35 @@ WHERE (silkAppLabel IN (80, 443) AND destinationTransportPort IN (8787, 8788, 87
    OR (substring(ja4, 4, 1) = 'i' AND destinationTransportPort = 443 AND octetTotalCount >= 12000)
 ORDER BY flowStartMicroseconds DESC;
 ```
+
+---
+
+## 7. Wildcard IP-Reflecting DNS (`sslip.io` / `nip.io` / `xip.io` / `traefik.me`) — IP-Evasion & Throwaway-TLS Hunting
+
+Wildcard IP-reflecting DNS services resolve embedded IPv4/IPv6 addresses directly from the hostname (e.g., `169-254-169-254.sslip.io`, `192-168-1-1.nip.io`, `a9fea9fe.nip.io`). Attackers and autonomous web-exploitation agents abuse them in three ways:
+1. **SSRF & IP-blocklist evasion:** Bypassing naive URL filters that block literal `169.254.169.254`, `127.0.0.1`, or RFC1918 strings.
+2. **Throwaway HTTPS C2 / LLM relays:** Obtaining free Let's Encrypt TLS certificates for a raw VPS IP (`203-0-113-5.sslip.io`) without registering a domain.
+3. **OAuth / webhook callback fallback:** Supplying `*.sslip.io` / `*.nip.io` in `redirect_uri=` when `oast.*` / `interact.sh` / `webhook.site` are blocked.
+
+> **False-Positive Discipline:** Do **not** alert globally on developer workstations or K8s/Rancher/k3s lab clusters (which routinely use `192-168-x-x.sslip.io` or `127-0-0-1.nip.io`). Scope DNS/TLS hunting to **production servers / DMZ hosts** and pair with SSRF query parameters, post-probe server DNS callbacks, or autonomous TLS turn-loop telemetry.
+
+### Microsoft Defender for Endpoint (KQL — Server / DMZ Hunt)
+```kql
+DeviceNetworkEvents
+| where Timestamp > ago(7d)
+| where DeviceName has_any ("srv", "web", "api", "app", "dmz", "edge", "prod")
+| where RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:sslip\.io|nip\.io|xip\.io|traefik\.me)(?:[:/]|$)"
+| project Timestamp, DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName,
+          InitiatingProcessCommandLine, RemoteUrl, RemoteIP, RemotePort
+| order by Timestamp desc
+```
+
+### Splunk SPL (DNS / Proxy — Server Outbound & SSRF Parameter Hunt)
+```spl
+(index=dns OR index=proxy OR index=web)
+(query="*.sslip.io" OR query="*.nip.io" OR query="*.xip.io" OR query="*.traefik.me"
+ OR url="*sslip.io*" OR url="*nip.io*" OR url="*xip.io*" OR url="*localtest.me*" OR url="*lvh.me*")
+| eval is_imds_or_rfc1918=if(match(lower(coalesce(query, url)), "(?:^|[./:@=-])(169[.-]254[.-]169[.-]254|169[.-]254[.-]170[.-]2|a9fea9fe|127[.-]0[.-]0[.-]1|7f000001|192[.-]168[.-]|10[.-]\\d+[.-]\\d+[.-]\\d+|172[.-](1[6-9]|2\\d|3[01])[.-]|localtest\\.me|lvh\\.me)"), "1_HIGH_SSRF_EVASION", "2_HUNT_PUBLIC_OR_DEV")
+| stats count values(is_imds_or_rfc1918) as signal values(dest) as targets by src, host, sourcetype
+| sort + signal, - count
+```

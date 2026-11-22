@@ -130,15 +130,35 @@ def test_compiled_siem_packs_pass_real_wire_schema_and_syntax_linter(tmp_path: P
         lit_list = match.group(1)
         assert lit_list == lit_list.lower(), f"ES|QL .caseless in(...) contains uppercase chars: {lit_list!r}"
 
-    # 3. SentinelOne S1QL: numeric port list must use exact `In`, never `In Contains AnyCase`
+    # 3. SentinelOne S1QL: numeric port list must use exact `In`, and single numeric port must use exact `=`
     s1_text = Path(by_key["sentinelone_s1ql"]["exported_file"]).read_text(encoding="utf-8")
     assert "In Contains AnyCase (8787" not in s1_text
     assert "DstPort In (8787,8788,8790,8890)" in s1_text
 
-    # 4. Splunk SPL: web/proxy fields mapped to CIM (uri_path, http_user_agent, status, dest)
+    from sigma.collection import SigmaCollection
+    from artex_defense.sigma_compiler import HardenedSentinelOneBackend
+
+    single_port_rule = SigmaCollection.from_yaml(
+        "title: Single Port Test\nstatus: experimental\nlogsource:\n  category: network_connection\n  product: windows\n"
+        "detection:\n  sel:\n    DstPort: 8787\n  condition: sel\n"
+    )
+    single_s1ql = HardenedSentinelOneBackend().convert(single_port_rule)[0]
+    assert "DstPort = 8787" in single_s1ql
+    assert "Contains AnyCase" not in single_s1ql
+
+    # 4. Splunk SPL: web/proxy fields mapped to CIM AND Linux process_creation mapped to CIM Endpoint.Processes
     spl_text = Path(by_key["splunk_spl"]["exported_file"]).read_text(encoding="utf-8")
     assert '"c-uri"' not in spl_text
     assert "uri_path IN " in spl_text or "uri_path=" in spl_text
+    linux_spl_item = next(
+        r for r in by_key["splunk_spl"]["rules"] if r["file"] == "artex_linux_staging_compiler_and_proxychains_pivot.yml"
+    )
+    assert "process_path IN " in linux_spl_item["query"]
+    assert "parent_process_path IN " in linux_spl_item["query"]
+    assert "process IN " in linux_spl_item["query"]
+    assert "Image IN " not in linux_spl_item["query"]
+    assert "ParentImage IN " not in linux_spl_item["query"]
+    assert "CommandLine IN " not in linux_spl_item["query"]
 
 
 def test_sigma_rules_match_unmodified_raw_vendor_json_without_parser() -> None:

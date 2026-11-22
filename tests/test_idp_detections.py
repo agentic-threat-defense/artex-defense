@@ -312,3 +312,49 @@ def test_federated_cross_rp_trust_probe_caught_with_zero_monday_morning_sso_fps(
     # Hard Benign Control 2: Existing employee with 1 broken bookmark (403) + 4 normal 200 OK apps -> MUST be 0 FPs!
     one_broken = [{**monday_sso[0], "status_code": 403, "action": "access_denied"}] + monday_sso[1:5]
     assert scan_telemetry_file(_write_jsonl(tmp_path / "benign_one_broken_sso.jsonl", one_broken)) == []
+
+
+def test_idp_oauth_redirect_uri_wildcard_dns_evasion(tmp_path: Path) -> None:
+    """Detect OAuth redirect_uri pointing to wildcard IP-reflecting DNS (including URL-encoded) without benign FP."""
+    evil_oauth = [
+        {
+            "timestamp": "2026-11-22T17:45:00Z",
+            "source_host": "198.51.100.71",
+            "actor": "attacker@external.example",
+            "surface": "cloud_iam",
+            "event_type": "idp_auth",
+            "dest_host": "corp.okta.com",
+            "http_path": "/oauth2/v1/authorize?client_id=0oa123&redirect_uri=https%3A%2F%2F45-33-32-156.sslip.io%2Fcb",
+            "status_code": 400,
+            "action": "invalid_redirect_uri",
+        }
+    ]
+    cands = scan_telemetry_file(_write_jsonl(tmp_path / "oauth_sslip.jsonl", evil_oauth))
+    assert cands and any("idp_probe_registration_or_workflow_abuse" in c.reasons for c in cands)
+
+    # Benign local dev OAuth using localtest.me or normal corp redirect_uri must NOT trigger OAuth or SSRF alerts
+    benign_oauth = [
+        {
+            "timestamp": "2026-11-22T17:46:00Z",
+            "source_host": "10.0.5.20",
+            "actor": "dev@corp.local",
+            "surface": "cloud_iam",
+            "event_type": "idp_auth",
+            "dest_host": "corp.okta.com",
+            "http_path": "/oauth2/v1/authorize?client_id=dev_app&redirect_uri=https%3A%2F%2Fapp.corp.local%2Fcallback",
+            "status_code": 200,
+            "action": "sso_success",
+        },
+        {
+            "timestamp": "2026-11-22T17:46:05Z",
+            "source_host": "10.0.5.20",
+            "actor": "dev@corp.local",
+            "surface": "cloud_iam",
+            "event_type": "idp_auth",
+            "dest_host": "corp.okta.com",
+            "http_path": "/oauth2/v1/authorize?client_id=dev_app&redirect_uri=http%3A%2F%2Flocaltest.me%3A3000%2Fcallback",
+            "status_code": 200,
+            "action": "sso_success",
+        },
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "oauth_benign.jsonl", benign_oauth)) == []

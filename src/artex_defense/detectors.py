@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import ipaddress
 import json
 import re
@@ -9,6 +10,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import duckdb
 
@@ -129,25 +131,58 @@ WORKSTATION_HOST_PREFIXES: tuple[str, ...] = (
     "desktop-",
 )
 
+def _is_valid_ip_address(value: str) -> bool:
+    """Return True if value parses cleanly as an IPv4 or IPv6 address."""
+    try:
+        ipaddress.ip_address(str(value).strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _is_known_llm_api_dest(dest: str) -> bool:
+    """Return True if dest matches a known commercial LLM API domain."""
+    low = dest.strip().rstrip(".").lower()
+    if not low:
+        return False
+    return any(low == d or low.endswith(f".{d}") for d in KNOWN_LLM_API_DOMAINS)
+
+
+def _is_allowlisted_host_or_ip(
+    source_host: str,
+    allowlist: list[str] | set[str] | tuple[str, ...] | None,
+) -> bool:
+    """Return True if source_host matches an operator-supplied IP, CIDR, exact hostname, or glob pattern."""
+    if not allowlist or not source_host:
+        return False
+    cleaned = source_host.strip()
+    low = cleaned.lower()
+    try:
+        src_ip = ipaddress.ip_address(cleaned)
+    except ValueError:
+        src_ip = None
+    for entry in allowlist:
+        token = entry.strip()
+        if not token:
+            continue
+        if src_ip is not None:
+            try:
+                if src_ip in ipaddress.ip_network(token, strict=False):
+                    return True
+                continue
+            except ValueError:
+                pass
+        if fnmatch.fnmatchcase(low, token.lower()):
+            return True
+    return False
+
+
 def _is_allowlisted_scanner_ip(
     source_host: str,
     authorized_scanner_ips: list[str] | set[str] | tuple[str, ...] | None,
 ) -> bool:
     """Return True if source_host matches an operator-supplied authorized scanner IP or CIDR."""
-    if not authorized_scanner_ips or not source_host:
-        return False
-    try:
-        src_ip = ipaddress.ip_address(source_host.strip())
-    except ValueError:
-        return source_host.strip().lower() in {s.strip().lower() for s in authorized_scanner_ips}
-    for entry in authorized_scanner_ips:
-        try:
-            net = ipaddress.ip_network(entry.strip(), strict=False)
-            if src_ip in net:
-                return True
-        except ValueError:
-            continue
-    return False
+    return _is_allowlisted_host_or_ip(source_host, authorized_scanner_ips)
 
 # Risk-Based Alerting (RBA) weights per detection reason (alert >= 70, hunt >= 45, info < 45)
 REASON_RISK_WEIGHTS: dict[str, int] = {
@@ -528,7 +563,8 @@ IDP_SP_SECRET_FAIL_RE = re.compile(
 )
 # Okta Threat Intel (Oct/Nov 2026): high-velocity user.risk.detect, Workflows invoke-URL/clientToken abuse, wildcard OAuth callbacks
 IDP_WORKFLOW_OR_OAUTH_ABUSE_RE = re.compile(
-    r"(workflows\.user\.invoke|/api/flo/|clienttoken=|redirect_uri=[^&\s]*(?:\*|%2a|interact\.sh|oast\.|webhook\.site))",
+    r"(workflows\.user\.invoke|/api/flo/|clienttoken=|"
+    r"redirect_uri=[^&\s]*(?:\*|%2a|[./:@](?:interact\.sh|oast\.[a-z]{2,10}|webhook\.site|sslip\.io|nip\.io|xip\.io|traefik\.me)(?![a-z0-9.\-])))",
     re.IGNORECASE,
 )
 IDP_RISK_DETECT_RE = re.compile(r"user\.risk\.detect", re.IGNORECASE)
@@ -669,6 +705,102 @@ WEB_SSRF_METADATA_RE = re.compile(
     r"(169\.254\.169\.254|169\.254\.170\.2|metadata\.google\.internal|100\.100\.100\.200/latest)",
     re.IGNORECASE,
 )
+# Wildcard IP-reflecting DNS services (sslip.io, nip.io, xip.io, traefik.me, localtest.me, lvh.me)
+# used for IP-blocklist evasion, blind SSRF/DNS rebinding, and throwaway Let's Encrypt C2 relays.
+WILDCARD_DNS_HOST_RE = re.compile(
+    r"(?<![a-z0-9\-])("
+    r"[a-z0-9](?:[a-z0-9.\-]{0,180}[a-z0-9])?\.(?:sslip\.io|nip\.io|xip\.io|traefik\.me)"
+    r"|(?:[a-z0-9](?:[a-z0-9.\-]{0,180}[a-z0-9])?\.)?(?:localtest\.me|lvh\.me)"
+    r")(?![a-z0-9\-]|\.[a-z0-9])",
+    re.IGNORECASE,
+)
+WILDCARD_IPV4_DOTTED_OR_DASHED_RE = re.compile(
+    r"(?:^|[.\-])(\d{1,3})([.\-])(\d{1,3})\2(\d{1,3})\2(\d{1,3})$"
+)
+WILDCARD_IPV4_HEX_RE = re.compile(r"(?:^|[.\-])([0-9a-f]{8})$", re.IGNORECASE)
+CLOUD_IMDS_IPS: frozenset[str] = frozenset({"169.254.169.254", "169.254.170.2", "100.100.100.200"})
+INTERNAL_OR_IMDS_IPV4_NETS: tuple[ipaddress.IPv4Network, ...] = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("127.0.0.0/8"),
+    ipaddress.IPv4Network("169.254.0.0/16"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+    ipaddress.IPv4Network("100.64.0.0/10"),
+    ipaddress.IPv4Network("0.0.0.0/8"),
+)
+
+
+def _is_wildcard_ip_dns_fqdn(fqdn: str) -> bool:
+    """Return True if an FQDN belongs to a wildcard IP-reflecting DNS service."""
+    host = fqdn.strip().rstrip(".").lower()
+    return bool(host and WILDCARD_DNS_HOST_RE.fullmatch(host))
+
+
+def _extract_wildcard_dns_embedded_ip(fqdn: str) -> ipaddress.IPv4Address | None:
+    """Decode the embedded IPv4 address from sslip.io / nip.io / xip.io / traefik.me / localtest.me / lvh.me."""
+    host = fqdn.strip().rstrip(".").lower()
+    if host == "localtest.me" or host.endswith(".localtest.me") or host == "lvh.me" or host.endswith(".lvh.me"):
+        return ipaddress.IPv4Address("127.0.0.1")
+    matched_suffix = next(
+        (sfx for sfx in (".sslip.io", ".nip.io", ".xip.io", ".traefik.me") if host.endswith(sfx)),
+        None,
+    )
+    if not matched_suffix:
+        return None
+    prefix = host[: -len(matched_suffix)]
+    m_dec = WILDCARD_IPV4_DOTTED_OR_DASHED_RE.search(prefix)
+    if m_dec:
+        candidate = f"{m_dec.group(1)}.{m_dec.group(3)}.{m_dec.group(4)}.{m_dec.group(5)}"
+        try:
+            return ipaddress.IPv4Address(candidate)
+        except ValueError:
+            return None
+    if matched_suffix == ".nip.io":
+        m_hex = WILDCARD_IPV4_HEX_RE.search(prefix)
+        if m_hex:
+            try:
+                return ipaddress.IPv4Address(int(m_hex.group(1), 16))
+            except ValueError:
+                return None
+    return None
+
+
+def _find_wildcard_dns_ssrf_evasion(text: str, *, imds_only: bool = False) -> str | None:
+    """Detect internal/loopback/IMDS IP evasion via wildcard DNS hosts inside HTTP paths or commands."""
+    if not text:
+        return None
+    decoded = unquote(unquote(text))
+    for match in WILDCARD_DNS_HOST_RE.finditer(decoded):
+        host = match.group(1).lower()
+        ip = _extract_wildcard_dns_embedded_ip(host)
+        if ip is None:
+            continue
+        if imds_only:
+            if str(ip) in CLOUD_IMDS_IPS:
+                return f"{host}->{ip}"
+            continue
+        if str(ip) in CLOUD_IMDS_IPS or any(ip in net for net in INTERNAL_OR_IMDS_IPV4_NETS):
+            return f"{host}->{ip}"
+    return None
+
+
+def _find_wildcard_dns_ssrf_evasion_in_http_path(ev_path: str, *, surface: str = "") -> str | None:
+    """Inspect HTTP path/query for wildcard-DNS SSRF without flagging full-URL proxy/Zscaler dev authority hosts
+    or local developer OAuth `localtest.me`/`lvh.me` redirects on `cloud_iam` surfaces."""
+    if not ev_path:
+        return None
+    low = ev_path.lstrip().lower()
+    imds_only_for_path = surface == "cloud_iam"
+    if low.startswith(("http://", "https://")):
+        parsed = urlsplit(ev_path.strip())
+        netloc_hit = _find_wildcard_dns_ssrf_evasion(parsed.netloc, imds_only=True)
+        if netloc_hit:
+            return netloc_hit
+        tail = "?".join(part for part in (parsed.path, parsed.query) if part)
+        if parsed.fragment:
+            tail = f"{tail}#{parsed.fragment}"
+        return _find_wildcard_dns_ssrf_evasion(tail, imds_only=imds_only_for_path)
+    return _find_wildcard_dns_ssrf_evasion(ev_path, imds_only=imds_only_for_path)
 UPLOAD_WEBSHELL_PATH_RE = re.compile(
     r"/(?:uploads?|media|attachments|files|static/uploads|sites/default/files|wp-content/uploads)/"
     r"(?:[^?\s]+/)*(?:\.htaccess|[^?\s]+\.(?:php\d?|phtml|phar|pht|shtml|jsp|jspx|asp|aspx|ashx|sh|py|pl|cgi))\b",
@@ -715,7 +847,7 @@ ON_BOX_STAGING_COMPILER_RE = re.compile(
 
 # Post-exploitation AD credential dumping (Kerberoasting/DCSync/Mimikatz), SQL xp_cmdshell/BYOVD, & ARTEX follow-on C2s
 POST_EXPLOIT_AD_OR_C2_RE = re.compile(
-    r"(\bmimikatz\b|lsadump::|sekurlsa::|\brubeus\b|kerberoast|getuserspns|\bdcsync\b|"
+    r"(\bmimikatz\b|lsadump::|sekurlsa::|\brubeus\b|\bkerberoast(?:ing)?\b|\bgetuserspns(?:\.py|\.exe)?\b|\bdcsync\b|"
     r"ds-replication-get-changes|\bxp_cmdshell\b|winring0x64\.sys|\bvshell\b|adaptixc2|"
     r"\bwisp[-_]?c2\b|sqlserver-sqlite\.com)",
     re.IGNORECASE,
@@ -792,6 +924,10 @@ def _detect_sawtooth_context_flow(events: list[dict[str, Any]]) -> list[str]:
 
     hits: list[str] = []
     for dest, pts in by_dest.items():
+        # Commercial LLM APIs are tracked separately by llm_api_egress (hunt tier) and workstation/allowlist policy;
+        # sawtooth flow specifically catches unlisted / self-hosted VPS LLM proxies.
+        if _is_known_llm_api_dest(dest):
+            continue
         if len(pts) < 5:
             continue
         pts.sort(key=lambda x: x[0])
@@ -835,6 +971,30 @@ def _detect_sawtooth_context_flow(events: list[dict[str, Any]]) -> list[str]:
             hits.append(f"sawtooth_flow:{dest}(turns={best_run},peak={best_peak}B,ratio={best_ratio:.1f}x)")
         elif compacted_climbs >= 2 and compaction_drops >= 1:
             hits.append(f"sawtooth_compacted:{dest}(climbs={compacted_climbs},drops={compaction_drops},peak={best_peak}B)")
+        else:
+            # Padding-resilient fallback: defeats 0-4KB random JSON padding that breaks strict +1500B monotonicity
+            # by checking LLM-sized turns (300B-50KB, dt >= 3s) for strong net growth + 1-dip or lag-2 climb.
+            llm_pts = [pts[0]] if (300 <= pts[0][2] <= 50000) else []
+            for p in pts[1:]:
+                if not (300 <= p[2] <= 50000):
+                    continue
+                if not llm_pts or (p[0] - llm_pts[-1][0]) >= 3.0:
+                    llm_pts.append(p)
+            if len(llm_pts) >= 5:
+                outs = [p[1] for p in llm_pts]
+                start_b, end_b, peak_b = outs[0], outs[-1], max(outs)
+                net_growth = end_b - start_b
+                dips = sum(1 for a, b in zip(outs, outs[1:]) if b < a + 500)
+                lag2_pairs = len(outs) - 2
+                lag2_pos = sum(1 for k in range(2, len(outs)) if outs[k] >= outs[k - 2] + 1000)
+                if (
+                    peak_b >= 15000
+                    and net_growth >= 6000
+                    and (dips <= 1 or (lag2_pairs >= 3 and (lag2_pos / lag2_pairs) >= 0.75))
+                ):
+                    hits.append(
+                        f"sawtooth_padded:{dest}(turns={len(outs)},growth=+{net_growth}B,peak={peak_b}B)"
+                    )
     return hits
 
 
@@ -887,7 +1047,7 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
     hits: list[str] = []
     seen_dests: set[str] = set()
     for (dest, stream_id), pts in by_stream.items():
-        if dest in seen_dests:
+        if dest in seen_dests or _is_known_llm_api_dest(dest):
             continue
         pts.sort(key=lambda x: x[0])
         # Filter to substantive LLM-like turns (non-trivial prompt/response + real server inference latency)
@@ -1019,6 +1179,7 @@ def _inspect_window_signals(
     stddev_interval: float | None,
     span_seconds: float,
     error_count: int,
+    authorized_llm_hosts: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> tuple[list[str], list[str], SurfaceType, str | None]:
     reasons: set[str] = set()
     indicators: set[str] = set()
@@ -1088,6 +1249,8 @@ def _inspect_window_signals(
     post_signup_rps: set[str] = set()
 
     is_workstation = source_host.lower().startswith(WORKSTATION_HOST_PREFIXES)
+    is_explicit_authorized_llm_host = _is_allowlisted_host_or_ip(source_host, authorized_llm_hosts)
+    is_authorized_llm_host = is_workstation or is_explicit_authorized_llm_host
 
     timestamps: list[float] = []
 
@@ -1165,10 +1328,17 @@ def _inspect_window_signals(
                 mutated_canary_4xx_hits += 1
                 indicators.add(f"mutated_canary_4xx:{m_can.group(0)}")
 
-        # Web SSRF (cloud metadata), JWT alg:none SSO spray, & upload-directory executable scripts
+        # Web SSRF (cloud metadata & wildcard-DNS IP evasion), JWT alg:none SSO spray, & upload-directory scripts
         if WEB_SSRF_METADATA_RE.search(f"{ev_path} {ev.get('command_line', '')}"):
             reasons.add("web_ssrf_or_upload_webshell")
             indicators.add(f"web_ssrf_metadata:{ev_path[:80]}")
+        wildcard_ssrf = (
+            _find_wildcard_dns_ssrf_evasion_in_http_path(ev_path, surface=str(ev.get("surface") or ""))
+            or _find_wildcard_dns_ssrf_evasion(ev.get("command_line", ""), imds_only=True)
+        )
+        if wildcard_ssrf:
+            reasons.add("web_ssrf_or_upload_webshell")
+            indicators.add(f"web_ssrf_wildcard_dns:{wildcard_ssrf[:80]}")
         if ev_path and UPLOAD_WEBSHELL_PATH_RE.search(ev_path):
             reasons.add("web_ssrf_or_upload_webshell")
             indicators.add(f"upload_webshell:{ev_path[:80]}")
@@ -1203,7 +1373,16 @@ def _inspect_window_signals(
             indicators.add(f"staging_compiler:{ev.get('command_line', '')[:70]}")
 
         # Post-exploitation AD credential dumping (Kerberoasting/DCSync/Mimikatz) & ARTEX follow-on C2s
-        m_c2 = POST_EXPLOIT_AD_OR_C2_RE.search(f"{ev.get('event_type', '')} {searchable}")
+        # Restricted to process/command/dest/event_type (excluding http_path/user_agent so doc URLs never FP)
+        post_exploit_blob = " ".join(
+            [
+                ev.get("event_type", ""),
+                ev.get("process", ""),
+                ev.get("command_line", ""),
+                ev.get("dest_host", ""),
+            ]
+        )
+        m_c2 = POST_EXPLOIT_AD_OR_C2_RE.search(post_exploit_blob)
         if m_c2:
             reasons.add("post_exploit_ad_or_followon_c2")
             indicators.add(f"post_exploit_or_c2:{m_c2.group(0)}")
@@ -1229,7 +1408,7 @@ def _inspect_window_signals(
                 reasons.add("llm_api_egress")
                 indicators.add(f"malicious_llm_relay:{domain}")
 
-        if not is_workstation:
+        if not is_authorized_llm_host:
             for domain in KNOWN_LLM_API_DOMAINS:
                 if domain in dest_lower or domain in cmd_lower or domain in path_lower:
                     reasons.add("llm_api_egress")
@@ -1496,7 +1675,7 @@ def _inspect_window_signals(
             okta_legacy_authn_fails += 1
         if IDP_RISK_DETECT_RE.search(action_raw):
             idp_risk_detect_hits += 1
-        if IDP_WORKFLOW_OR_OAUTH_ABUSE_RE.search(idp_blob):
+        if IDP_WORKFLOW_OR_OAUTH_ABUSE_RE.search(unquote(idp_blob)):
             saw_idp_workflow_or_oauth_abuse = True
             indicators.add(f"idp_workflow_or_oauth:{idp_blob[:70]}")
         if IDP_SP_SECRET_FAIL_RE.search(action_raw) and status in {401, 403}:
@@ -1569,6 +1748,7 @@ def _inspect_window_signals(
         and span_seconds <= 120.0
         and bool(cloud_services_seen & CLOUD_HIGH_VALUE_SERVICES)
         and not cloud_is_iac_automation
+        and _is_valid_ip_address(source_host)
     ):
         reasons.add("cloud_stolen_key_multi_service_enum")
         indicators.add("cloud_services_enum:" + ",".join(sorted(cloud_services_seen)))
@@ -1678,14 +1858,17 @@ def _inspect_window_signals(
         indicators.add(f"recon_cmd_variety:{len(recon_cmds)}")
 
     # Zero-IOC Detector 1: Self-hosted LLM proxy sawtooth growing-context flow (multi-conn + persistent TLS 1.3)
-    sawtooth_hits = _detect_sawtooth_context_flow(events)
-    if sawtooth_hits:
-        reasons.add("llm_sawtooth_context_flow")
-        indicators.update(sawtooth_hits)
-    tls_loop_hits = _detect_persistent_tls_agent_loop(events)
-    if tls_loop_hits:
-        reasons.add("encrypted_tls_agent_turn_loop")
-        indicators.update(tls_loop_hits)
+    # Note: KNOWN_LLM_API_DOMAINS are skipped inside both detectors; explicit authorized_llm_hosts also skips
+    # self-hosted/internal LLM gateways, while compromised workstations talking to rogue VPS proxies still alert.
+    if not is_explicit_authorized_llm_host:
+        sawtooth_hits = _detect_sawtooth_context_flow(events)
+        if sawtooth_hits:
+            reasons.add("llm_sawtooth_context_flow")
+            indicators.update(sawtooth_hits)
+        tls_loop_hits = _detect_persistent_tls_agent_loop(events)
+        if tls_loop_hits:
+            reasons.add("encrypted_tls_agent_turn_loop")
+            indicators.update(tls_loop_hits)
 
     # Zero-IOC Detector 2: Multi-worker redundant read-only recon collision
     repeated_recon = {cmd: cnt for cmd, cnt in readonly_recon_counts.items() if cnt >= 2}
@@ -1763,6 +1946,7 @@ def scan_telemetry_file(
     error_retry_ratio_threshold: float = 0.35,
     max_sample_events: int = 15,
     authorized_scanner_ips: list[str] | set[str] | tuple[str, ...] | None = None,
+    authorized_llm_hosts: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> list[CandidateWindow]:
     """Run Stage 1 deterministic DuckDB + Python behavioral & artifact detection.
 
@@ -1962,6 +2146,7 @@ def scan_telemetry_file(
             stddev_interval=float(stddev_interval) if stddev_interval is not None else None,
             span_seconds=span,
             error_count=int(error_count),
+            authorized_llm_hosts=authorized_llm_hosts,
         )
 
         # General behavioral cadence detections (suppressed only for operator-allowlisted scanner IPs/CIDRs
@@ -2017,6 +2202,210 @@ def scan_telemetry_file(
                     unique_targets=int(unique_targets),
                 ),
                 sample_events=compact_samples,
+            )
+        )
+
+    # Pass 1b: Source-Host-Only Fallback for Fragmented Single-IP Web/Edge Actor Rotation
+    # Prevents an attacker from shattering a single-IP web/edge burst below burst_event_threshold by varying
+    # username / Basic auth / JWT sub actor strings across requests (<4 events per (source_host, actor)).
+    frag_host_rows = con.execute(
+        f"""
+        WITH per_actor_counts AS (
+            SELECT
+                source_host,
+                actor,
+                session_id,
+                COUNT(*) AS actor_ev_cnt
+            FROM sessionized_events
+            WHERE surface IN ('web_portal', 'edge_appliance')
+            GROUP BY source_host, actor, session_id
+        ),
+        frag_events AS (
+            SELECT se.*
+            FROM sessionized_events se
+            JOIN per_actor_counts pac
+              ON se.source_host = pac.source_host
+             AND se.actor = pac.actor
+             AND se.session_id = pac.session_id
+            WHERE pac.actor_ev_cnt < 4
+        ),
+        host_ordered AS (
+            SELECT
+                *,
+                ts_epoch - LAG(ts_epoch) OVER (
+                    PARTITION BY source_host
+                    ORDER BY ts_epoch
+                ) AS host_raw_delta
+            FROM frag_events
+        ),
+        host_sess AS (
+            SELECT
+                *,
+                SUM(CASE WHEN host_raw_delta IS NULL OR host_raw_delta > {session_gap} THEN 1 ELSE 0 END) OVER (
+                    PARTITION BY source_host
+                    ORDER BY ts_epoch
+                    ROWS UNBOUNDED PRECEDING
+                ) AS hsess_id
+            FROM host_ordered
+        ),
+        host_deltas AS (
+            SELECT
+                *,
+                ts_epoch - LAG(ts_epoch) OVER (
+                    PARTITION BY source_host, hsess_id
+                    ORDER BY ts_epoch
+                ) AS delta_sec
+            FROM host_sess
+        )
+        SELECT
+            source_host,
+            hsess_id,
+            COUNT(*) AS event_count,
+            COUNT(DISTINCT actor) AS unique_actors,
+            MIN(ts_epoch) AS min_ts,
+            MAX(ts_epoch) AS max_ts,
+            AVG(delta_sec) AS mean_interval,
+            STDDEV_POP(delta_sec) AS stddev_interval,
+            SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS error_count,
+            COUNT(DISTINCT NULLIF(COALESCE(NULLIF(http_path, ''), dest_host), '')) AS unique_targets
+        FROM host_deltas
+        GROUP BY source_host, hsess_id
+        HAVING COUNT(DISTINCT actor) >= 2
+           AND COUNT(*) >= 4
+        ORDER BY min_ts ASC
+        """
+    ).fetchall()
+
+    for fh_idx, fhrow in enumerate(frag_host_rows, start=1):
+        (
+            fh_host,
+            fh_sess,
+            fh_cnt,
+            fh_actors,
+            fh_min_ts,
+            fh_max_ts,
+            fh_mean,
+            fh_std,
+            fh_errs,
+            fh_tgts,
+        ) = fhrow
+        if _is_allowlisted_scanner_ip(fh_host, authorized_scanner_ips):
+            continue
+        fh_events_rows = con.execute(
+            """
+            WITH per_actor_counts AS (
+                SELECT source_host, actor, session_id, COUNT(*) AS actor_ev_cnt
+                FROM sessionized_events
+                WHERE source_host = ?
+                  AND surface IN ('web_portal', 'edge_appliance')
+                GROUP BY source_host, actor, session_id
+            )
+            SELECT se.timestamp, se.ts_epoch, se.actor, se.event_type, se.surface, se.appliance,
+                   se.process, se.parent_process, se.command_line, se.dest_host, se.dest_port,
+                   se.http_method, se.http_path, se.user_agent, se.ja4, se.ja4h,
+                   se.bytes_out, se.bytes_in, se.status_code, se.action, se.raw_json
+            FROM sessionized_events se
+            JOIN per_actor_counts pac
+              ON se.source_host = pac.source_host
+             AND se.actor = pac.actor
+             AND se.session_id = pac.session_id
+            WHERE pac.actor_ev_cnt < 4
+              AND se.ts_epoch >= ?
+              AND se.ts_epoch <= ?
+            ORDER BY se.ts_epoch ASC
+            """,
+            [fh_host, fh_min_ts, fh_max_ts],
+        ).fetchall()
+        fh_events = [
+            {
+                "timestamp": r[0],
+                "ts_epoch": r[1],
+                "actor": r[2],
+                "event_type": r[3],
+                "surface": r[4],
+                "appliance": r[5],
+                "process": r[6],
+                "parent_process": r[7],
+                "command_line": r[8],
+                "dest_host": r[9],
+                "dest_port": r[10],
+                "http_method": r[11],
+                "http_path": r[12],
+                "user_agent": r[13],
+                "ja4": r[14],
+                "ja4h": r[15],
+                "bytes_out": r[16],
+                "bytes_in": r[17],
+                "status_code": r[18],
+                "action": r[19],
+                "raw_json": r[20],
+            }
+            for r in fh_events_rows
+        ]
+        fh_span = max(float(fh_max_ts - fh_min_ts), 1.0)
+        fh_epm = round((fh_cnt / fh_span) * 60.0, 2)
+        fh_err_ratio = round((fh_errs / fh_cnt) if fh_cnt else 0.0, 3)
+
+        fh_reasons, fh_indicators, fh_surface, fh_appliance = _inspect_window_signals(
+            fh_events,
+            source_host=fh_host,
+            mean_interval=float(fh_mean) if fh_mean is not None else None,
+            stddev_interval=float(fh_std) if fh_std is not None else None,
+            span_seconds=fh_span,
+            error_count=int(fh_errs),
+            authorized_llm_hosts=authorized_llm_hosts,
+        )
+        # NAT/SWG FP guard: require error-heavy probing (or an explicit behavioral signal) before adding cadence
+        if (
+            fh_cnt >= burst_event_threshold
+            and (fh_tgts >= 2 or fh_reasons)
+            and ((fh_errs >= 3 and fh_err_ratio >= error_retry_ratio_threshold) or bool(fh_reasons))
+        ):
+            if fh_mean is not None and fh_mean <= 3.0:
+                fh_reasons.append("machine_speed_burst")
+            if (
+                fh_std is not None
+                and fh_mean is not None
+                and fh_mean <= 5.0
+                and fh_std <= low_jitter_stddev_threshold
+            ):
+                fh_reasons.append("low_jitter_programmatic_cadence")
+            if fh_err_ratio >= error_retry_ratio_threshold and fh_errs >= 3:
+                fh_reasons.append("automated_error_retry_loop")
+
+        fh_reasons = sorted(set(fh_reasons))
+        if not fh_reasons:
+            continue
+
+        fh_indicators = sorted(set(fh_indicators) | {f"rotated_actors:{fh_actors}"})
+        fh_risk, fh_tier = compute_risk_score(fh_reasons)
+        candidates.append(
+            CandidateWindow(
+                window_id=f"HOSTFRAG{fh_idx:03d}-{fh_host}-S{fh_sess}",
+                source_host=fh_host,
+                actor=f"{fh_actors}_rotated_actors",
+                surface=fh_surface,
+                appliance=fh_appliance,
+                start_time=datetime.fromtimestamp(fh_min_ts, tz=timezone.utc),
+                end_time=datetime.fromtimestamp(fh_max_ts, tz=timezone.utc),
+                reasons=fh_reasons,
+                risk_score=fh_risk,
+                alert_tier=fh_tier,  # type: ignore[arg-type]
+                matched_indicators=fh_indicators,
+                cadence=CadenceStats(
+                    event_count=int(fh_cnt),
+                    window_seconds=round(fh_span, 2),
+                    events_per_minute=fh_epm,
+                    mean_interval_sec=round(float(fh_mean), 3) if fh_mean is not None else None,
+                    stddev_interval_sec=round(float(fh_std), 3) if fh_std is not None else None,
+                    error_count=int(fh_errs),
+                    error_ratio=fh_err_ratio,
+                    unique_targets=int(fh_tgts),
+                ),
+                sample_events=[
+                    {k: v for k, v in ev.items() if k not in {"ts_epoch", "raw_json"} and v not in ("", None)}
+                    for ev in fh_events[:max_sample_events]
+                ],
             )
         )
 
@@ -2619,7 +3008,11 @@ def scan_telemetry_file(
 
     oob_idx = 0
     for d_srv, d_ip, d_fqdn, d_probe_ts, d_dns_ts in dns_oob_rows:
-        if not _is_oob_high_entropy_dns_fqdn(d_fqdn):
+        norm_fqdn = d_fqdn.strip().rstrip(".").lower()
+        norm_srv = d_srv.strip().rstrip(".").lower()
+        if norm_fqdn == norm_srv:
+            continue
+        if not (_is_oob_high_entropy_dns_fqdn(d_fqdn) or _is_wildcard_ip_dns_fqdn(d_fqdn)):
             continue
         oob_idx += 1
         d_delay = round(max(0.0, float(d_dns_ts - d_probe_ts)), 2)

@@ -202,3 +202,150 @@ def test_ja4_proxy_collapse_multi_ua_catches_recording_proxy_and_avoids_swg_fp(t
     swg_cands = scan_telemetry_file(swg_path)
     swg_reasons = {r for c in swg_cands for r in c.reasons}
     assert "ja4_proxy_collapse_multi_ua" not in swg_reasons
+
+
+def test_wildcard_ip_dns_ssrf_and_post_probe_oob_with_dev_fp_guards(tmp_path: Path) -> None:
+    """Verify sslip.io/nip.io/localtest.me IP-evasion hooks catch SSRF & post-probe DNS with 0 dev FPs."""
+    import json
+
+    # 1. True Positives: SSRF path evasion (hyphenated RFC1918, URL-encoded hex nip.io IMDS, bare localtest.me,
+    #    and command-line IMDS via sslip.io)
+    ssrf_cases = [
+        ("hyphenated_rfc1918", "/proxy?url=http://192-168-1-1.sslip.io/admin", ""),
+        ("hex_imds_encoded", "/fetch?target=http%3A%2F%2Fa9fea9fe.nip.io%2Flatest%2Fmeta-data", ""),
+        ("loopback_localtest", "/webhook?cb=http://localtest.me:8080/internal", ""),
+        ("cmd_imds_sslip", "", "curl -s http://169-254-169-254.sslip.io/latest/meta-data/iam/"),
+    ]
+    for name, path, cmd in ssrf_cases:
+        p = tmp_path / f"ssrf_{name}.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-11-22T17:40:00Z",
+                    "surface": "web_portal" if path else "endpoint",
+                    "source_host": "198.51.100.55" if path else "srv-web-01",
+                    "dest_host": "portal.corp.local",
+                    "http_method": "GET" if path else "",
+                    "http_path": path,
+                    "command_line": cmd,
+                    "status_code": 200,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cands = scan_telemetry_file(p)
+        assert cands, f"Expected wildcard-DNS SSRF evasion case {name} to fire"
+        reasons = {r for c in cands for r in c.reasons}
+        assert "web_ssrf_or_upload_webshell" in reasons
+        assert any("web_ssrf_wildcard_dns:" in ind for c in cands for ind in c.matched_indicators)
+
+    # 2. True Positive: Pass 8 post-probe server DNS lookup to sslip.io (blind SSRF / public C2 IP reflection)
+    oob_path = tmp_path / "post_probe_sslip_oob.jsonl"
+    oob_events = [
+        {
+            "timestamp": "2026-11-22T17:41:00Z",
+            "surface": "web_portal",
+            "source_host": "198.51.100.88",
+            "dest_host": "srv-api-01",
+            "event_type": "http",
+            "http_method": "POST",
+            "http_path": "/api/v1/preview",
+            "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-22T17:41:03Z",
+            "surface": "network",
+            "source_host": "srv-api-01",
+            "dest_host": "192-168-1-1.sslip.io",
+            "event_type": "dns_query",
+            "dest_port": 53,
+        },
+    ]
+    oob_path.write_text("\n".join(json.dumps(e) for e in oob_events) + "\n", encoding="utf-8")
+    oob_cands = scan_telemetry_file(oob_path)
+    assert any("dns_oob_callback_after_probe" in c.reasons for c in oob_cands)
+
+    # 3. True Negatives (Zero Dev/K8s FPs):
+    #    - Developer hitting their own k3s/Rancher cluster on app.192-168-1-10.sslip.io (dest_host, normal path)
+    #    - Developer running local curl against 192-168-1-10.sslip.io (non-IMDS command_line)
+    #    - Dev server resolving its own sslip.io hostname (norm_fqdn == norm_srv)
+    benign_dev = [
+        {
+            "timestamp": "2026-11-22T17:42:00Z",
+            "surface": "web_portal",
+            "source_host": "10.0.5.12",
+            "dest_host": "app.192-168-1-10.sslip.io",
+            "event_type": "http",
+            "http_method": "GET",
+            "http_path": "/api/pods",
+            "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-22T17:42:02Z",
+            "surface": "network",
+            "source_host": "app.192-168-1-10.sslip.io",
+            "dest_host": "app.192-168-1-10.sslip.io",
+            "event_type": "dns_query",
+            "dest_port": 53,
+        },
+        {
+            "timestamp": "2026-11-22T17:42:05Z",
+            "surface": "endpoint",
+            "source_host": "dev-laptop-01",
+            "command_line": "curl -s https://app.192-168-1-10.sslip.io/health",
+            "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-22T17:42:08Z",
+            "surface": "web_portal",
+            "source_host": "10.0.5.12",
+            "dest_host": "portal.corp.local",
+            "http_method": "GET",
+            "http_path": "/docs?ref=192-168-1-1.sslip.io.corp.local",
+            "status_code": 200,
+        },
+        # Zscaler NSS full-URL k3s dev event (authority host is sslip.io, path is benign)
+        {
+            "datetime": "2026-11-22T17:42:10Z",
+            "ClientIP": "10.0.5.12",
+            "user": "dev@corp.local",
+            "hostname": "app.192-168-1-10.sslip.io",
+            "url": "https://app.192-168-1-10.sslip.io/api/pods",
+            "requestmethod": "GET",
+            "responsecode": 200,
+        },
+        # Forward-proxy full-URL local dev event targeting localtest.me
+        {
+            "datetime": "2026-11-22T17:42:12Z",
+            "ClientIP": "10.0.5.12",
+            "user": "dev@corp.local",
+            "hostname": "localtest.me",
+            "url": "http://localtest.me:3000/dashboard",
+            "requestmethod": "GET",
+            "responsecode": 200,
+        },
+    ]
+    dev_path = tmp_path / "benign_dev_sslip.jsonl"
+    dev_path.write_text("\n".join(json.dumps(e) for e in benign_dev) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(dev_path) == []
+
+    # Full-URL forward-proxy log carrying SSRF inside query string MUST still fire
+    proxy_ssrf = tmp_path / "proxy_query_ssrf.jsonl"
+    proxy_ssrf.write_text(
+        json.dumps(
+            {
+                "datetime": "2026-11-22T17:42:20Z",
+                "ClientIP": "198.51.100.55",
+                "user": "ext",
+                "hostname": "portal.corp.local",
+                "url": "https://portal.corp.local/proxy?u=http://192-168-1-1.sslip.io/admin",
+                "requestmethod": "GET",
+                "responsecode": 200,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    proxy_cands = scan_telemetry_file(proxy_ssrf)
+    assert proxy_cands and any("web_ssrf_or_upload_webshell" in c.reasons for c in proxy_cands)

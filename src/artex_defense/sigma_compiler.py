@@ -204,7 +204,15 @@ class HardenedESQLBackend(ESQLBackend):
 
 
 class HardenedSentinelOneBackend(SentinelOneBackend):
-    """SentinelOneBackend fixed to use exact `In` for numeric lists / DstPort rather than `In Contains AnyCase`."""
+    """SentinelOneBackend fixed to use exact numeric `=` and `In` for ports/numbers rather than `Contains AnyCase`."""
+
+    def convert_condition_field_eq_val_num(
+        self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
+    ) -> Union[str, DeferredQueryExpression]:
+        if isinstance(cond.value, SigmaNumber) or cond.field in {"DstPort", "SrcPort"}:
+            num_val = cond.value.number if isinstance(cond.value, SigmaNumber) else str(cond.value)
+            return f"{self.escape_and_quote_field(cond.field)} = {num_val}"
+        return super().convert_condition_field_eq_val_num(cond, state)
 
     def convert_condition_as_in_expression(
         self, cond: Union[ConditionOR, ConditionAND], state: ConversionState
@@ -317,11 +325,22 @@ def _build_kusto_generic_pipeline() -> ProcessingPipeline:
 
 
 def _build_splunk_cim_web_pipeline() -> ProcessingPipeline:
-    """Supplemental Splunk CIM field mappings for web/proxy/firewall logs."""
+    """Supplemental Splunk CIM field mappings for web/proxy/firewall and Linux Endpoint.Processes logs."""
     return ProcessingPipeline(
         name="artex_splunk_cim_web",
         priority=50,
         items=[
+            ProcessingItem(
+                identifier="artex_splunk_linux_proc",
+                transformation=FieldMappingTransformation(
+                    {
+                        "Image": "process_path",
+                        "ParentImage": "parent_process_path",
+                        "CommandLine": "process",
+                    }
+                ),
+                rule_conditions=[LogsourceCondition(product="linux", category="process_creation")],
+            ),
             ProcessingItem(
                 identifier="artex_splunk_web_proxy",
                 transformation=FieldMappingTransformation(

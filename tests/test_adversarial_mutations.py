@@ -1025,3 +1025,201 @@ def test_hermes_agent_telegram_c2_egress_server_vs_workstation(tmp_path: Path) -
 
     wkstn_ev = [{**srv_ev[0], "source_host": "laptop-user-03", "actor": "alice"}]
     assert scan_telemetry_file(_write_jsonl(tmp_path / "benign_tg_laptop.jsonl", wkstn_ev)) == []
+
+
+def test_seat1_2_4_audit_fixes_kerberoast_llm_allowlist_actor_rotation_padding_and_aws_internal(
+    tmp_path: Path,
+) -> None:
+    """Permanent regression suite for combined Seat 1 / Seat 2 / Seat 4A audit findings."""
+    t = datetime(2026, 11, 22, 18, 0, 0, tzinfo=timezone.utc)
+
+    # 1. [Seat 1] Doc URLs (/docs/kerberoast-mitigation, /playbooks/dcsync-detection) and defensive script names
+    #    (Test-KerberoastingExposure.ps1) MUST NOT trigger post_exploit_ad_or_followon_c2, while real commands MUST!
+    benign_docs = [
+        {
+            "timestamp": _iso(t),
+            "source_host": "10.0.1.25",
+            "actor": "analyst",
+            "surface": "web_portal",
+            "dest_host": "wiki.corp.local",
+            "http_method": "GET",
+            "http_path": "/docs/kerberoast-mitigation",
+            "status_code": 200,
+        },
+        {
+            "timestamp": _iso(t + timedelta(seconds=5)),
+            "source_host": "10.0.1.25",
+            "actor": "analyst",
+            "surface": "web_portal",
+            "dest_host": "wiki.corp.local",
+            "http_method": "GET",
+            "http_path": "/playbooks/dcsync-detection",
+            "status_code": 200,
+        },
+        {
+            "timestamp": _iso(t + timedelta(seconds=10)),
+            "source_host": "wkstn-sec-01",
+            "actor": "analyst",
+            "surface": "endpoint",
+            "process": "powershell.exe",
+            "command_line": "powershell.exe -File C:\\Scripts\\Test-KerberoastingExposure.ps1",
+            "status_code": 200,
+        },
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "benign_kerberoast_docs.jsonl", benign_docs)) == []
+
+    real_kerb = [
+        {
+            "timestamp": _iso(t),
+            "source_host": "srv-app-09",
+            "actor": "svc_app",
+            "surface": "endpoint",
+            "process": "python3",
+            "command_line": "python3 GetUserSPNs.py corp.local/svc:pass -request",
+            "status_code": 200,
+        }
+    ]
+    c_kerb = scan_telemetry_file(_write_jsonl(tmp_path / "real_kerberoast.jsonl", real_kerb))
+    assert c_kerb and "post_exploit_ad_or_followon_c2" in c_kerb[0].reasons and c_kerb[0].risk_score >= 95
+
+    # 2. [Seat 1] Linux dev host / CI runner using Anthropic commercial API MUST NOT double-score sawtooth to 100 (alert),
+    #    and authorized_llm_hosts suppresses commercial LLM egress completely while malicious relay (artex.lol) still alerts!
+    dev_claude = [
+        {
+            "timestamp": _iso(t + timedelta(seconds=i * 5)),
+            "source_host": "ubuntu-dev01",
+            "actor": "dev",
+            "surface": "network",
+            "dest_host": "api.anthropic.com",
+            "dest_port": 443,
+            "bytes_out": 4000 + i * 4000,
+            "bytes_in": 2200,
+            "status_code": 200,
+        }
+        for i in range(6)
+    ]
+    dev_claude_path = _write_jsonl(tmp_path / "ubuntu_dev_claude.jsonl", dev_claude)
+    c_unlisted = scan_telemetry_file(dev_claude_path)
+    assert len(c_unlisted) == 1
+    assert c_unlisted[0].reasons == ["llm_api_egress"]
+    assert c_unlisted[0].alert_tier == "hunt"
+    assert scan_telemetry_file(dev_claude_path, authorized_llm_hosts=["ubuntu-dev*", "ci-runner-*"]) == []
+
+    evil_relay_from_auth_host = [
+        {
+            "timestamp": _iso(t),
+            "source_host": "ubuntu-dev01",
+            "actor": "dev",
+            "surface": "network",
+            "dest_host": "api.artex.lol",
+            "dest_port": 443,
+            "status_code": 200,
+        }
+    ]
+    c_evil = scan_telemetry_file(
+        _write_jsonl(tmp_path / "evil_relay_dev.jsonl", evil_relay_from_auth_host),
+        authorized_llm_hosts=["ubuntu-dev*"],
+    )
+    assert c_evil and "malicious_llm_relay_c2" in c_evil[0].reasons and c_evil[0].alert_tier == "alert"
+
+    # 3. [Seat 2] Single-IP web probing rotating 6 distinct actors (2 events each) MUST be reassembled by Pass 1b,
+    #    while 6 employees behind corporate NAT making normal 200 OK requests MUST remain 0 FPs!
+    rotated_probe = [
+        {
+            "timestamp": _iso(t + timedelta(seconds=i)),
+            "source_host": "198.51.100.144",
+            "actor": f"rot_user_{i // 2}",
+            "surface": "web_portal",
+            "dest_host": "api.corp.local",
+            "http_method": "GET",
+            "http_path": f"/api/v1/resource-{i}",
+            "user_agent": "CustomClient/1.0",
+            "status_code": [404, 422, 500, 404, 405, 404][i % 6],
+        }
+        for i in range(12)
+    ]
+    c_rot = scan_telemetry_file(_write_jsonl(tmp_path / "actor_rotated_probe.jsonl", rotated_probe))
+    assert c_rot, "Expected Pass 1b to reassemble single-IP actor-rotated web probing"
+    rot_reasons = {r for c in c_rot for r in c.reasons}
+    assert "web_error_handling_calibration" in rot_reasons
+    assert max(c.risk_score for c in c_rot) >= 70
+
+    benign_nat = [
+        {
+            "timestamp": _iso(t + timedelta(seconds=i)),
+            "source_host": "203.0.113.88",
+            "actor": f"employee_{i // 2}",
+            "surface": "web_portal",
+            "dest_host": "portal.corp.local",
+            "http_method": "GET",
+            "http_path": f"/app/view/{i}",
+            "user_agent": "Mozilla/5.0 Chrome/131.0.0.0 Safari/537.36",
+            "status_code": 200,
+        }
+        for i in range(12)
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "benign_nat_200.jsonl", benign_nat)) == []
+
+    # 4. [Seat 2] Random 0-4KB JSON padding on custom VPS LLM proxy MUST still fire llm_sawtooth_context_flow,
+    #    while flat noisy REST traffic around 15-19KB MUST produce 0 FPs!
+    padded_proxy = [
+        {
+            "timestamp": _iso(t + timedelta(seconds=i * 5)),
+            "source_host": "srv-web-04",
+            "actor": "www-data",
+            "surface": "network",
+            "dest_host": "proxy-44.unlisted.example",
+            "dest_port": 443,
+            "bytes_out": b_out,
+            "bytes_in": 2400,
+            "status_code": 200,
+        }
+        for i, b_out in enumerate((14000, 18000, 15000, 21000, 17000, 24000))
+    ]
+    c_pad = scan_telemetry_file(_write_jsonl(tmp_path / "padded_sawtooth.jsonl", padded_proxy))
+    assert c_pad and "llm_sawtooth_context_flow" in c_pad[0].reasons
+
+    flat_noisy_rest = [
+        {
+            "timestamp": _iso(t + timedelta(seconds=i * 5)),
+            "source_host": "srv-web-04",
+            "actor": "www-data",
+            "surface": "network",
+            "dest_host": "telemetry-sink.example",
+            "dest_port": 443,
+            "bytes_out": b_out,
+            "bytes_in": 2400,
+            "status_code": 200,
+        }
+        for i, b_out in enumerate((15000, 18000, 14000, 19000, 15000, 17000))
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "flat_noisy_rest.jsonl", flat_noisy_rest)) == []
+
+    # 5. [Seat 4A] CloudTrail sourceIPAddress="AWS Internal" MUST NOT trigger cloud_stolen_key_multi_service_enum,
+    #    and AWS China (.amazonaws.com.cn) CloudTrail records must normalize cleanly!
+    aws_internal = [
+        {
+            "eventVersion": "1.09",
+            "eventTime": _iso(t + timedelta(seconds=i * 2)),
+            "eventSource": f"{svc}.amazonaws.com.cn",
+            "eventName": act,
+            "sourceIPAddress": "AWS Internal",
+            "userAgent": "aws-internal/3",
+            "userIdentity": {"arn": "arn:aws-cn:iam::111122223333:role/AdminConsoleSession"},
+        }
+        for i, (svc, act) in enumerate(
+            [
+                ("sts", "GetCallerIdentity"),
+                ("iam", "ListRoles"),
+                ("secretsmanager", "ListSecrets"),
+                ("s3", "ListBuckets"),
+                ("ec2", "DescribeInstances"),
+                ("kms", "ListKeys"),
+            ]
+        )
+    ]
+    assert scan_telemetry_file(_write_jsonl(tmp_path / "aws_internal_cn.jsonl", aws_internal)) == []
+    from artex_defense.parsers import parse_auto
+
+    parsed_cn = parse_auto(_write_jsonl(tmp_path / "aws_cn_single.jsonl", [aws_internal[0]]))
+    assert len(parsed_cn) == 1 and parsed_cn[0]["appliance"] == "aws_cloudtrail"
