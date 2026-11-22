@@ -8,6 +8,7 @@ from typing import Literal
 
 import typer
 from rich.console import Console
+from rich.markup import escape as rich_escape
 from rich.table import Table
 
 from .detectors import correlate_kill_chains, scan_telemetry_file
@@ -67,32 +68,38 @@ def scan(
     )
     if not candidates:
         console.print("[green]No suspicious behavioral or artifact windows detected.[/green]")
+        if out:
+            out.write_text("[]\n", encoding="utf-8")
+            console.print(f"Saved empty candidate list to [bold]{out}[/bold]")
         return
 
-    table = Table(title=f"Stage 1 Candidate Windows ({len(candidates)})")
+    payload = [c.model_dump(mode="json") for c in candidates]
+    if sanitize:
+        payload = sanitize_payload(payload)
+
+    table = Table(title=f"Stage 1 Candidate Windows ({len(payload)})")
     table.add_column("Window ID", style="cyan")
     table.add_column("Risk / Tier")
     table.add_column("Surface / Appliance")
     table.add_column("Host / Actor")
     table.add_column("Events (EPM)", justify="right")
     table.add_column("Reasons", style="yellow")
-    for c in candidates:
-        surf = f"{c.surface} ({c.appliance})" if c.appliance else c.surface
-        tier_color = "bold red" if c.alert_tier == "alert" else ("yellow" if c.alert_tier == "hunt" else "dim")
+    for item in payload:
+        surf = f"{item['surface']} ({item['appliance']})" if item.get("appliance") else str(item["surface"])
+        tier = str(item.get("alert_tier", "info"))
+        tier_color = "bold red" if tier == "alert" else ("yellow" if tier == "hunt" else "dim")
+        cadence = item.get("cadence", {})
         table.add_row(
-            c.window_id,
-            f"[{tier_color}]{c.risk_score} ({c.alert_tier})[/{tier_color}]",
-            surf,
-            f"{c.source_host} / {c.actor}",
-            f"{c.cadence.event_count} ({c.cadence.events_per_minute}/m)",
-            ", ".join(c.reasons),
+            rich_escape(str(item.get("window_id", ""))),
+            f"[{tier_color}]{item.get('risk_score', 0)} ({rich_escape(tier)})[/{tier_color}]",
+            rich_escape(surf),
+            f"{rich_escape(str(item.get('source_host', '')))} / {rich_escape(str(item.get('actor', '')))}",
+            f"{cadence.get('event_count', 0)} ({cadence.get('events_per_minute', 0)}/m)",
+            rich_escape(", ".join(str(r) for r in item.get("reasons", []))),
         )
     console.print(table)
 
     if out:
-        payload = [c.model_dump(mode="json") for c in candidates]
-        if sanitize:
-            payload = sanitize_payload(payload)
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         console.print(f"Saved candidate windows to [bold]{out}[/bold]")
 

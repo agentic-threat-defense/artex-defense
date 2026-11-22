@@ -1,6 +1,8 @@
 # Blind Anti-Echo-Chamber Stress-Test Log (2026-11-20)
 
-> **Methodology:** To eliminate single-author bias ("echo chamber"), an isolated local LLM (**`gemma4-hunter`**, 26B MoE running via local Ollama) — which had zero access to `detectors.py`, `rules/`, `simulator.py`, or `tests/` — independently generated **16 out-of-distribution telemetry scenarios** (8 ugly real-world enterprise benign chaos scenarios + 8 blind stealthy agentic intrusion scenarios) using only the `NormalizedEvent` schema.
+> **Methodology & Limitations:** To test beyond hand-written unit fixtures, a local LLM (**`gemma4-hunter`**, 26B MoE running via local Ollama) without access to `detectors.py`, `rules/`, `simulator.py`, or `tests/` generated out-of-distribution telemetry scenarios (benign enterprise chaos + stealthy agentic attacks) using the `NormalizedEvent` schema.
+>
+> **Important Caveat:** Because these rounds used small pre-normalized event snippets (`n=8` in Round 1; `n=5` benign / `n=5` attack in held-out Rounds 2–3) generated via our own Modelfile rather than raw vendor wire logs or uncurated production enterprise firehoses, treat these results as **synthetic logic checks—not proof of production false-positive rates**. Live shadow-mode validation and raw-wire parser testing remain essential.
 
 ---
 

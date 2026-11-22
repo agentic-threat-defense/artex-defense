@@ -32,7 +32,7 @@ MAX_MCP_LOG_BYTES = 25 * 1024 * 1024
 MAX_MCP_TEXT_BYTES = 5 * 1024 * 1024
 BLOCKED_PATH_PARTS: frozenset[str] = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".git"})
 BLOCKED_FILENAMES_RE = re.compile(
-    r"^(?:\.env(?:\..+)?|\.netrc|id_(?:rsa|ed25519|ecdsa)(?:\.pub)?|.*\.(?:key|p12|pfx))$",
+    r"^(?:\.env(?:\..+)?|\.netrc|\.npmrc|\.pypirc|id_(?:rsa|ed25519|ecdsa)(?:\.pub)?|.*\.(?:key|pem|p12|pfx|jks))$",
     re.IGNORECASE,
 )
 
@@ -80,7 +80,7 @@ def artex_scan_deterministic(
     payload = {
         "security_notice": UNTRUSTED_OUTPUT_NOTE,
         "sanitized": do_sanitize,
-        "file_name": safe_path.name,
+        "file_name": sanitize_text(safe_path.name) if do_sanitize else safe_path.name,
         "candidate_count": len(candidates),
         "storyline_count": len(storylines),
         "storylines": [s.model_dump(mode="json") for s in storylines],
@@ -143,8 +143,10 @@ def gemma4_extract_intel(file_path: str, sanitize: bool = True) -> str:
     safe_path = _resolve_safe_mcp_path(file_path, max_bytes=MAX_MCP_TEXT_BYTES)
     do_sanitize = _effective_sanitize(sanitize)
     text = safe_path.read_text(encoding="utf-8", errors="replace")
+    if do_sanitize:
+        text = sanitize_text(text)
     worker = GemmaWorker()
-    extraction = worker.extract_intel(text, source_name=safe_path.name).model_dump(mode="json")
+    extraction = worker.extract_intel(text, source_name=sanitize_text(safe_path.name)).model_dump(mode="json")
     if do_sanitize:
         extraction = sanitize_payload(extraction)
     return json.dumps(
@@ -168,7 +170,8 @@ def gemma4_delegate(
     context: str | None = None
     if file_path:
         safe_path = _resolve_safe_mcp_path(file_path, max_bytes=MAX_MCP_TEXT_BYTES)
-        context = safe_path.read_text(encoding="utf-8", errors="replace")
+        raw_ctx = safe_path.read_text(encoding="utf-8", errors="replace")
+        context = sanitize_text(raw_ctx) if do_sanitize else raw_ctx
     worker = GemmaWorker()
     result = worker.delegate(task, context=context)
     if do_sanitize:

@@ -150,6 +150,7 @@ def _is_allowlisted_scanner_ip(
 
 # Risk-Based Alerting (RBA) weights per detection reason (alert >= 70, hunt >= 45, info < 45)
 REASON_RISK_WEIGHTS: dict[str, int] = {
+    "malicious_llm_relay_c2": 95,
     "artex_console_or_host_forensics": 95,
     "post_exploit_ad_or_followon_c2": 95,
     "idp_spray_then_success": 95,
@@ -401,6 +402,18 @@ SHELL_CHILD_PROCESSES: tuple[str, ...] = (
     "bash",
     "sh",
 )
+# Direct interpreter / downloader children spawned by web daemons (nginx/w3wp/httpd/php-fpm)
+WEB_DAEMON_EXTRA_CHILDREN: tuple[str, ...] = (
+    "python",
+    "python3",
+    "perl",
+    "php",
+    "curl",
+    "wget",
+    "socat",
+    "certutil.exe",
+    "wmic.exe",
+)
 
 CLOUD_IAM_HIGH_RISK_ACTIONS: set[str] = {
     "addserviceprincipalcredentials",
@@ -535,6 +548,11 @@ CLOUD_HIGH_VALUE_SERVICES: frozenset[str] = frozenset(
 )
 CLOUD_IAC_AUTOMATION_UA_RE = re.compile(
     r"(terraform|ansible|cloudcustodian|aws-config|datadog|wiz\.io|orca-security|prisma-cloud)",
+    re.IGNORECASE,
+)
+# Identity-backed IaC / CSPM automation actor check (prevents attacker User-Agent: Terraform/1.9 spoofing)
+CLOUD_IAC_ACTOR_ROLE_RE = re.compile(
+    r"(terraform|ansible|cloudcustodian|aws-config|datadog|wiz|orca|prisma|github[-_]?actions|gitlab|cspm|ci[-_]?cd|service-role)",
     re.IGNORECASE,
 )
 # Elastic Security Labs ("56 AWS API calls in 141ms" / CyberStrikeAI CloudTrail):
@@ -894,6 +912,7 @@ def _inspect_window_signals(
 
     saw_4xx_5xx = False
     saw_non_asset_4xx = False
+    non_asset_error_count = 0
     non_asset_error_codes: set[int] = set()
     random_slug_probe_paths: set[str] = set()
     saw_sensitive_2xx_after_error = False
@@ -1056,6 +1075,7 @@ def _inspect_window_signals(
 
         for domain in MALICIOUS_LLM_RELAY_DOMAINS:
             if domain in dest_lower or domain in cmd_lower or domain in path_lower:
+                reasons.add("malicious_llm_relay_c2")
                 reasons.add("llm_api_egress")
                 indicators.add(f"malicious_llm_relay:{domain}")
 
@@ -1065,8 +1085,9 @@ def _inspect_window_signals(
                     reasons.add("llm_api_egress")
                     indicators.add(f"llm_domain:{domain}")
 
-            # Self-hosted / proxied LLM API endpoint from non-browser UA on non-workstation hosts
-            if ev_method == "POST" and SELF_HOSTED_LLM_PATH_RE.search(ev_path) and not ua_lower.startswith("mozilla/"):
+            # Self-hosted / proxied LLM API endpoint on non-workstation hosts (strip query string before matching)
+            clean_llm_path = ev_path.split("?", 1)[0]
+            if ev_method == "POST" and SELF_HOSTED_LLM_PATH_RE.search(clean_llm_path):
                 reasons.add("llm_api_egress")
                 indicators.add(f"self_hosted_llm_path:{ev_path[:80]}")
 
@@ -1112,6 +1133,7 @@ def _inspect_window_signals(
             saw_4xx_5xx = True
             if not (ev_path and STATIC_ASSET_PATH_RE.search(ev_path)):
                 saw_non_asset_4xx = True
+                non_asset_error_count += 1
                 if ev.get("surface") in {"web_portal", "edge_appliance"} or ev_path:
                     non_asset_error_codes.add(int(status))
                 if ua_family:
@@ -1127,8 +1149,11 @@ def _inspect_window_signals(
             saw_sensitive_2xx_after_error = True
             indicators.add(f"sensitive_pivot_2xx:{ev_path}")
 
-        if ev_path and status in {404, 200} and _is_high_entropy_probe_slug(ev_path):
-            random_slug_probe_paths.add(ev_path.split("?", 1)[0])
+        if ev_path and _is_high_entropy_probe_slug(ev_path):
+            slug_base = ev_path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].split(".", 1)[0]
+            is_pure_hex_id = bool(re.fullmatch(r"[0-9a-fA-F]{8,64}", slug_base))
+            if status == 404 or (status == 200 and saw_non_asset_4xx and not is_pure_hex_id):
+                random_slug_probe_paths.add(ev_path.split("?", 1)[0])
 
         # Endpoint compressed recon commands, wrapper-stripped redundant worker recon, LLM CLI idioms, & touch-and-bail
         cmd_raw = ev.get("command_line", "")
@@ -1150,7 +1175,7 @@ def _inspect_window_signals(
             llm_idiom_types.add("structured_framing")
         if GENERIC_PROC_CHECK_RE.search(cmd_raw) and ev.get("dest_host"):
             proc_check_hosts.add(ev["dest_host"])
-        if cmd_raw and LLM_API_KEY_HARVEST_RE.search(cmd_raw):
+        if not is_workstation and cmd_raw and LLM_API_KEY_HARVEST_RE.search(cmd_raw):
             llm_key_harvest_hits += 1
             indicators.add(f"llm_api_key_harvest:{cmd_raw[:80]}")
         if ev.get("surface") == "endpoint" and cmd_raw:
@@ -1179,12 +1204,19 @@ def _inspect_window_signals(
 
         parent_low = ev.get("parent_process", "").lower()
         proc_low = ev.get("process", "").lower()
-        if parent_low and proc_low and any(sc in proc_low for sc in SHELL_CHILD_PROCESSES):
+        proc_base = proc_low.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if parent_low and proc_low:
             parent_base = parent_low.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-            if any(wp in parent_low for wp in WEB_PARENT_PROCESSES):
+            if any(wp in parent_low for wp in WEB_PARENT_PROCESSES) and (
+                any(sc in proc_low for sc in SHELL_CHILD_PROCESSES) or proc_base in WEB_DAEMON_EXTRA_CHILDREN
+            ):
                 reasons.add("web_parent_shell_spawn")
                 indicators.add(f"parent_child:{ev['parent_process']}->{ev['process']}")
-            elif parent_base in RUNTIME_WEB_PARENTS and SUSPICIOUS_RUNTIME_SHELL_ARG_RE.search(cmd_raw):
+            elif (
+                parent_base in RUNTIME_WEB_PARENTS
+                and any(sc in proc_low for sc in SHELL_CHILD_PROCESSES)
+                and SUSPICIOUS_RUNTIME_SHELL_ARG_RE.search(cmd_raw)
+            ):
                 reasons.add("web_parent_shell_spawn")
                 indicators.add(f"runtime_parent_susp_shell:{ev['parent_process']}->{ev['process']}")
 
@@ -1211,7 +1243,9 @@ def _inspect_window_signals(
         # PLUS stolen valid cloud-key multi-service enumeration (0 AccessDenied) & CyberStrikeAI CloudTrail TTPs
         if ev.get("surface") == "cloud_iam":
             cloud_api_event_count += 1
-            if CLOUD_IAC_AUTOMATION_UA_RE.search(f"{ua_raw} {ev.get('actor', '')}"):
+            actor_str = str(ev.get("actor", ""))
+            # Require verified IaC/CSPM role identity (NEVER suppress on attacker-spoofable User-Agent alone)
+            if CLOUD_IAC_ACTOR_ROLE_RE.search(actor_str) and not EC2_INSTANCE_ROLE_ACTOR_RE.search(actor_str):
                 cloud_is_iac_automation = True
             for sm in CLOUD_SERVICE_TOKEN_RE.finditer(f"{ev.get('event_type', '')} {ev.get('dest_host', '')} {action_raw} {ev_path} {cmd_raw}"):
                 cloud_services_seen.add(sm.group(1).lower())
@@ -1320,7 +1354,14 @@ def _inspect_window_signals(
         elif saw_fresh_signup_in_session and rp_id and rp_id not in {"okta.system.log", "login.microsoftonline.com"}:
             if OAUTH_PATH_OR_ERROR_RE.search(oauth_blob) or ev.get("event_type") in {"idp_auth", "idp_sp_auth", "http"}:
                 post_signup_rps.add(rp_id)
-        if rp_id and status is not None and status in {400, 401, 403} and OAUTH_PATH_OR_ERROR_RE.search(oauth_blob):
+        if (
+            rp_id
+            and status is not None
+            and status in {400, 401, 403}
+            and OAUTH_PATH_OR_ERROR_RE.search(oauth_blob)
+            and "prompt=none" not in oauth_blob.lower()
+            and "login_required" not in oauth_blob.lower()
+        ):
             oauth_failing_clients.add(rp_id)
 
     if edr_hits >= 1:
@@ -1360,18 +1401,23 @@ def _inspect_window_signals(
     ):
         reasons.add("cloud_stolen_key_multi_service_enum")
         indicators.add("cloud_services_enum:" + ",".join(sorted(cloud_services_seen)))
-    if not cloud_is_iac_automation and (
-        cloud_userdata_hits >= 3
-        or cloud_ssm_sendcmd_hits >= 1
-        or (cloud_ssm_decrypt_hits >= 3 and span_seconds <= 30.0)
-        or (cloud_api_event_count >= 10 and span_seconds <= 2.0)
+    if (
+        cloud_ssm_sendcmd_hits >= 1
+        or (
+            not cloud_is_iac_automation
+            and (
+                cloud_userdata_hits >= 3
+                or (cloud_ssm_decrypt_hits >= 3 and span_seconds <= 30.0)
+                or (cloud_api_event_count >= 10 and span_seconds <= 2.0)
+            )
+        )
     ):
         reasons.add("cloud_ec2_userdata_or_ssm_burst")
         if cloud_userdata_hits >= 3:
             indicators.add(f"ec2_userdata_burst:{cloud_userdata_hits}")
         if cloud_api_event_count >= 10 and span_seconds <= 2.0:
             indicators.add(f"subsecond_cloud_api_burst:{cloud_api_event_count}_in_{span_seconds:.2f}s")
-    if cloud_ec2_role_external_sensitive and not cloud_is_iac_automation:
+    if cloud_ec2_role_external_sensitive:
         reasons.add("cloud_ec2_role_external_replay")
     if (saw_graphql_introspection and post_introspection_api_hits >= 2) or len(ai_mcp_discovery_paths) >= 2:
         reasons.add("graphql_or_ai_mcp_discovery_probe")
@@ -1426,10 +1472,15 @@ def _inspect_window_signals(
     # Web error-correction pivot, forced error-handling calibration, spec-driven targeting, & read-back
     if saw_sensitive_2xx_after_error and error_count >= 3:
         reasons.add("web_error_correction_pivot")
-    fault_codes = non_asset_error_codes & {405, 415, 422, 500, 502}
+    fault_codes = non_asset_error_codes & {405, 415, 422, 500}
     if (
-        len(non_asset_error_codes) >= 3
-        or (len(fault_codes) >= 1 and bool(non_asset_error_codes & {400, 404}) and len(non_asset_error_codes) >= 2)
+        (len(non_asset_error_codes) >= 3 and non_asset_error_count >= 3)
+        or (
+            len(fault_codes) >= 1
+            and bool(non_asset_error_codes & {400, 404})
+            and len(non_asset_error_codes) >= 2
+            and non_asset_error_count >= 3
+        )
         or len(random_slug_probe_paths) >= 3
     ):
         reasons.add("web_error_handling_calibration")
@@ -1475,9 +1526,11 @@ def _inspect_window_signals(
         indicators.add("llm_idioms:" + ",".join(sorted(llm_idiom_types)))
 
     # Zero-IOC Detector 4: NAT-safe FoxIO JA4 / JA4H client stack whiplash from single IP
-    # Require spoofed identical UA, OR >=3 4xx errors, OR edge portal targeting (avoids corporate NAT FPs)
-    if (len(ja4_fingerprints) >= 3 or len(ja4h_fingerprints) >= 3) and (
-        len(distinct_uas) <= 1 or error_count >= 3 or len(edge_path_probes) >= 1
+    # Single-browser SPA sessions legitimately produce 3+ JA4H hashes (GET/cookie/POST), so ONLY match
+    # TLS JA4 whiplash under identical UA, and gate JA4H / shared-NAT checks on non-asset errors or edge auth failures.
+    if (
+        (len(ja4_fingerprints) >= 3 and (len(distinct_uas) <= 1 or non_asset_error_count >= 3 or edge_auth_failures >= 2))
+        or (len(ja4h_fingerprints) >= 3 and (non_asset_error_count >= 3 or edge_auth_failures >= 2))
     ):
         reasons.add("ja4_client_stack_whiplash")
         indicators.add(f"distinct_ja4:{len(ja4_fingerprints)},ja4h:{len(ja4h_fingerprints)}")
@@ -1485,17 +1538,17 @@ def _inspect_window_signals(
     # Zero-IOC Detector 4b: Traffic-recording proxy TLS collapse (single JA4 + >=3 distinct UA families)
     # Complements ja4_client_stack_whiplash when an agent routes curl/python/browser tools through an
     # optional recording proxy (e.g., ARTEX's Go traffic recorder collapsing all tools to one Go TLS stack).
-    # SWG/NAT-safe: collapses browser version drift and requires non-asset 4xx or edge probing plus either
-    # a non-browser CLI/script UA mixed in or >=3 distinct UA families actively hitting non-asset errors.
+    # SWG/NAT-safe: collapses browser version drift and requires actual edge auth failures or non-asset 4xx errors
+    # (never fires on zero-error 200 OK VPN portal loads behind Zscaler/Netskope).
     has_non_browser_ua = any(not fam.startswith("browser_") for fam in distinct_ua_families)
     if (
         len(ja4_fingerprints) == 1
         and len(distinct_ua_families) >= 3
         and (
-            len(edge_path_probes) >= 1
+            edge_auth_failures >= 2
             or (
                 saw_non_asset_4xx
-                and error_count >= 3
+                and non_asset_error_count >= 3
                 and (has_non_browser_ua or len(error_ua_families) >= 3)
             )
         )
@@ -2329,6 +2382,8 @@ def scan_telemetry_file(
 
     for l_idx, lrow in enumerate(lateral_rows, start=1):
         l_host, l_sess, l_cnt, l_tgts, l_ports, l_min, l_max, l_mean = lrow
+        if _is_allowlisted_scanner_ip(l_host, authorized_scanner_ips):
+            continue
         l_span = max(float(l_max - l_min), 1.0)
         l_reasons = ["agentic_lateral_fanout_smb_winrm"]
         l_risk, l_tier = compute_risk_score(l_reasons)
@@ -2443,11 +2498,12 @@ def scan_telemetry_file(
             OR LOWER(dest_host) LIKE '%.amazonaws.com'
           )
           AND NOT (
-            LOWER(user_agent) LIKE '%terraform%'
-            OR LOWER(user_agent) LIKE '%ansible%'
-            OR LOWER(user_agent) LIKE '%datadog%'
-            OR LOWER(user_agent) LIKE '%wiz.io%'
-            OR LOWER(user_agent) LIKE '%prisma-cloud%'
+            LOWER(actor) LIKE '%terraform%'
+            OR LOWER(actor) LIKE '%ansible%'
+            OR LOWER(actor) LIKE '%datadog%'
+            OR LOWER(actor) LIKE '%wiz%'
+            OR LOWER(actor) LIKE '%prisma%'
+            OR LOWER(actor) LIKE '%cspm%'
           )
         GROUP BY source_host
         HAVING COUNT(DISTINCT actor) >= 3
@@ -2492,32 +2548,113 @@ def scan_telemetry_file(
     return candidates
 
 
+_SYNTHETIC_ACTOR_RE = re.compile(
+    r"(?:rotating_ips|identities|lateral_sweep_|distributed:|probe_signups|unknown|^(?:\d{1,3}\.){3}\d{1,3}$)",
+    re.IGNORECASE,
+)
+
+
+def _window_entity_sets(cand: CandidateWindow) -> tuple[set[str], set[str], set[str]]:
+    """Extract (source_hosts, dest_hosts, non_ip_actors) for bipartite graph-edge kill-chain correlation."""
+    src_hosts: set[str] = set()
+    dst_hosts: set[str] = set()
+    actors: set[str] = set()
+
+    sh = (cand.source_host or "").strip().lower()
+    if sh:
+        if sh.startswith("distributed:"):
+            target = sh.split(":", 1)[1].strip()
+            if target:
+                dst_hosts.add(target)
+        else:
+            src_hosts.add(sh)
+
+    act = (cand.actor or "").strip().lower()
+    if act and act != sh and not _SYNTHETIC_ACTOR_RE.search(act):
+        actors.add(act)
+
+    for ev in cand.sample_events:
+        dh = str(ev.get("dest_host") or "").strip().lower()
+        if dh and dh != sh:
+            dst_hosts.add(dh)
+        ev_act = str(ev.get("actor") or "").strip().lower()
+        if ev_act and ev_act != sh and not _SYNTHETIC_ACTOR_RE.search(ev_act):
+            actors.add(ev_act)
+    return src_hosts, dst_hosts, actors
+
+
+def _windows_entity_linked(
+    ent_a: tuple[set[str], set[str], set[str]],
+    ent_b: tuple[set[str], set[str], set[str]],
+) -> bool:
+    """Return True if two candidate windows share a host, stolen identity, or external->internal pivot edge."""
+    src_a, dst_a, act_a = ent_a
+    src_b, dst_b, act_b = ent_b
+    return bool(
+        (src_a & src_b)
+        or (act_a & act_b)
+        or (dst_a & src_b)
+        or (dst_b & src_a)
+        or (dst_a & dst_b)
+    )
+
+
+def _cluster_entity_linked(
+    ordered: list[CandidateWindow],
+    entities: list[tuple[set[str], set[str], set[str]]],
+    *,
+    max_gap_seconds: float,
+) -> list[list[CandidateWindow]]:
+    """Connected-component clustering over entity-linked windows using a rolling inter-stage gap."""
+    n = len(ordered)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            gap = (ordered[j].start_time - ordered[i].end_time).total_seconds()
+            if gap > max_gap_seconds:
+                continue
+            if _windows_entity_linked(entities[i], entities[j]):
+                union(i, j)
+
+    comps: dict[int, list[CandidateWindow]] = {}
+    for i, cand in enumerate(ordered):
+        comps.setdefault(find(i), []).append(cand)
+    return list(comps.values())
+
+
 def correlate_kill_chains(
     candidates: list[CandidateWindow],
     *,
     horizon_minutes: int = 180,
     long_horizon_days: int = 30,
 ) -> list[KillChainStoryline]:
-    """Correlate flagged windows across compressed (<3h) AND multi-week dormant-gap (<=30d) shared-IP timelines."""
+    """Correlate flagged windows via bipartite entity-graph edges across short (<3h) & rolling long-horizon (<=30d) gaps."""
     if not candidates:
         return []
 
     ordered = sorted(candidates, key=lambda c: c.start_time)
-    groups: list[list[CandidateWindow]] = []
+    entities = [_window_entity_sets(c) for c in ordered]
+    short_max_sec = horizon_minutes * 60
+    long_max_sec = long_horizon_days * 86400
 
-    for cand in ordered:
-        placed = False
-        for grp in groups:
-            if (cand.start_time - grp[0].start_time).total_seconds() <= horizon_minutes * 60:
-                grp.append(cand)
-                placed = True
-                break
-        if not placed:
-            groups.append([cand])
+    groups = _cluster_entity_linked(ordered, entities, max_gap_seconds=short_max_sec)
 
     storylines: list[KillChainStoryline] = []
     short_window_sets: set[frozenset[str]] = set()
-    for idx, grp in enumerate(groups, start=1):
+    kc_idx = 0
+    for grp in groups:
         surfaces = sorted({c.surface for c in grp if c.surface != "unknown"})
         appliances = sorted({c.appliance for c in grp if c.appliance})
         if len(surfaces) < 2 and len(grp) < 2:
@@ -2525,6 +2662,9 @@ def correlate_kill_chains(
 
         start = min(c.start_time for c in grp)
         end = max(c.end_time for c in grp)
+        if (end - start).total_seconds() > short_max_sec:
+            continue
+        kc_idx += 1
         duration_min = round(max((end - start).total_seconds() / 60.0, 0.01), 2)
         progression = " -> ".join(f"{c.surface}({c.source_host})" for c in grp)
         wids = [c.window_id for c in grp]
@@ -2532,7 +2672,7 @@ def correlate_kill_chains(
 
         storylines.append(
             KillChainStoryline(
-                storyline_id=f"KC-{idx:03d}",
+                storyline_id=f"KC-{kc_idx:03d}",
                 start_time=start,
                 end_time=end,
                 duration_minutes=duration_min,
@@ -2547,46 +2687,42 @@ def correlate_kill_chains(
             )
         )
 
-    # Long-horizon shared-IP dormant-gap correlation (defeats CyberStrikeAI's 14-day pause evasion)
-    by_host: dict[str, list[CandidateWindow]] = {}
-    for cand in ordered:
-        if cand.source_host and not cand.source_host.startswith("distributed:"):
-            by_host.setdefault(cand.source_host, []).append(cand)
-
+    # Long-horizon rolling-gap correlation (links shared IP, stolen actor, or external->internal pivots across >3h / <=30d gaps)
+    long_groups = _cluster_entity_linked(ordered, entities, max_gap_seconds=long_max_sec)
     long_idx = 0
-    max_long_sec = long_horizon_days * 86400
-    for host, h_cands in by_host.items():
-        if len(h_cands) < 2:
+    for lgrp in long_groups:
+        if len(lgrp) < 2:
             continue
-        span_sec = (h_cands[-1].end_time - h_cands[0].start_time).total_seconds()
-        if span_sec <= horizon_minutes * 60 or span_sec > max_long_sec:
+        start = min(c.start_time for c in lgrp)
+        end = max(c.end_time for c in lgrp)
+        span_sec = (end - start).total_seconds()
+        if span_sec <= short_max_sec:
             continue
-        wids = [c.window_id for c in h_cands]
+        wids = [c.window_id for c in lgrp]
         if frozenset(wids) in short_window_sets:
             continue
         long_idx += 1
-        start = min(c.start_time for c in h_cands)
-        end = max(c.end_time for c in h_cands)
-        duration_min = round(max((end - start).total_seconds() / 60.0, 0.01), 2)
+        duration_min = round(max(span_sec / 60.0, 0.01), 2)
         gap_days = round(span_sec / 86400.0, 2)
+        hosts_involved = sorted({c.source_host for c in lgrp})
         storylines.append(
             KillChainStoryline(
                 storyline_id=f"KC-LONG-{long_idx:03d}",
                 start_time=start,
                 end_time=end,
                 duration_minutes=duration_min,
-                surfaces_involved=sorted({c.surface for c in h_cands if c.surface != "unknown"}),
-                appliances_involved=sorted({c.appliance for c in h_cands if c.appliance}),
-                actors=sorted({c.actor for c in h_cands}),
-                hosts=[host],
+                surfaces_involved=sorted({c.surface for c in lgrp if c.surface != "unknown"}),
+                appliances_involved=sorted({c.appliance for c in lgrp if c.appliance}),
+                actors=sorted({c.actor for c in lgrp}),
+                hosts=hosts_involved,
                 window_ids=wids,
-                combined_reasons=sorted({r for c in h_cands for r in c.reasons}),
+                combined_reasons=sorted({r for c in lgrp for r in c.reasons}),
                 combined_indicators=sorted(
-                    {i for c in h_cands for i in c.matched_indicators}
+                    {i for c in lgrp for i in c.matched_indicators}
                     | {f"long_horizon_dormant_gap_days:{gap_days}"}
                 ),
-                progression_summary=f"long_horizon({host}, {gap_days}d): "
-                + " -> ".join(f"{c.surface}({c.actor})" for c in h_cands),
+                progression_summary=f"long_horizon({','.join(hosts_involved[:3])}, {gap_days}d): "
+                + " -> ".join(f"{c.surface}({c.actor})" for c in lgrp),
             )
         )
     return storylines

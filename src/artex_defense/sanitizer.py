@@ -18,12 +18,19 @@ SECRET_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{24,}|github_pat_[A-Za-z0-9_]{24,})\b"),
     re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
-    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b"),
+    re.compile(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9\-._~+/]+=*\b"),
     re.compile(
-        r"(?i)\b(api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*['\"]?([^\s'\",;}{]{6,})['\"]?"
+        r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|artex[_-]?token|client[_-]?secret|password|passwd|secret)[\"']?\s*[:=]\s*['\"]?([^\s'\",;}{]{6,})['\"]?"
     ),
 ]
-URL_USERINFO_RE = re.compile(r"(https?://)([^/\s@:]+:[^/\s@]+)@", re.IGNORECASE)
+SENSITIVE_DICT_KEY_RE = re.compile(
+    r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?token|auth[_-]?token|artex[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|secret)",
+    re.IGNORECASE,
+)
+URL_USERINFO_RE = re.compile(
+    r"((?:https?|postgres(?:ql)?|mysql|redis|rediss|mongodb(?:\+srv)?|amqp|amqps|ftp|ftps|sftp|socks5h?|ldap|ldaps)://)([^/\s@:]+:[^/\s@]+)@",
+    re.IGNORECASE,
+)
 
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -33,7 +40,7 @@ DOMAIN_RE = re.compile(
     r"\b("
     r"[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9\-]{1,63})*\."
     r"(?:com|net|org|io|ai|cn|ru|uk|de|gov|mil|edu|co|app|dev|xyz|top|info|local|corp|internal|"
-    r"pro|site|live|fun|me|cc|su|biz|cloud|online|store|tech)"
+    r"pro|site|live|fun|me|cc|su|biz|cloud|online|store|tech|lol|eu|kr|jp|au|icu|cfd|sbs|gg|ca|fr|nl|se|ch|in|br)"
     r"|[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9\-]{1,63})+\.(?:sh|zip)"
     r"|(?:interact|artex)\.sh"
     r")\b",
@@ -141,10 +148,21 @@ class SanitizerContext:
         if isinstance(obj, list):
             return [self.sanitize_obj(item) for item in obj]
         if isinstance(obj, dict):
-            return {
-                (self.sanitize_str(k) if isinstance(k, str) else k): self.sanitize_obj(v)
-                for k, v in obj.items()
-            }
+            out: dict[Any, Any] = {}
+            for k, v in obj.items():
+                sk = self.sanitize_str(k) if isinstance(k, str) else k
+                if (
+                    self.redact_secrets
+                    and isinstance(k, str)
+                    and isinstance(v, str)
+                    and len(v.strip()) >= 6
+                    and SENSITIVE_DICT_KEY_RE.search(k)
+                    and "[REDACTED_SECRET]" not in v
+                ):
+                    out[sk] = "[REDACTED_SECRET]"
+                else:
+                    out[sk] = self.sanitize_obj(v)
+            return out
         return obj
 
 

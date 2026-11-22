@@ -757,9 +757,15 @@ def test_fork_agnostic_blindspot_pivots_caught_with_zero_benign_fps(tmp_path: Pa
     c1 = scan_telemetry_file(_write_jsonl(tmp_path / "stolen_valid_key.jsonl", stolen_valid_key))
     assert any("cloud_stolen_key_multi_service_enum" in c.reasons for c in c1)
 
-    # Benign control 1: Terraform IaC running the same 200 OK read sweep must produce 0 FPs
-    tf_benign = [{**ev, "user_agent": "HashiCorp Terraform/1.9.5"} for ev in stolen_valid_key]
+    # Benign control 1: Verified Terraform CI role running the same 200 OK read sweep must produce 0 FPs,
+    # whereas an attacker reusing a human admin key and merely spoofing User-Agent: Terraform MUST still fire!
+    tf_benign = [
+        {**ev, "actor": "arn:aws:iam::111122223333:role/terraform-ci", "user_agent": "HashiCorp Terraform/1.9.5"}
+        for ev in stolen_valid_key
+    ]
     assert scan_telemetry_file(_write_jsonl(tmp_path / "terraform_benign.jsonl", tf_benign)) == []
+    tf_spoofed = [{**ev, "user_agent": "HashiCorp Terraform/1.9.5"} for ev in stolen_valid_key]
+    assert any("cloud_stolen_key_multi_service_enum" in c.reasons for c in scan_telemetry_file(_write_jsonl(tmp_path / "terraform_spoofed.jsonl", tf_spoofed)))
 
     # 2. Custom-domain high-entropy OOB DNS callback <=90s after web probe
     oob_dns = [

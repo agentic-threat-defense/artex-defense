@@ -209,7 +209,11 @@ def parse_feed_xml(
     """Parse RSS 2.0 or Atom XML into normalized FeedItem entries with DTD/entity & size guards."""
     if len(xml_text.encode("utf-8", errors="ignore")) > MAX_FEED_XML_BYTES:
         raise ValueError(f"Watchtower rejected oversized XML feed from {source} (>{MAX_FEED_XML_BYTES} bytes)")
-    if XML_FORBIDDEN_DECL_RE.search(xml_text):
+    # Inspect ONLY the XML prolog (before root <rss>/<feed>/<rdf:RDF>) for DOCTYPE/ENTITY declarations
+    # so XXE advisories mentioning "<!ENTITY" inside <description> never blind the feed.
+    prolog_match = re.search(r"<(?:rss|feed|rdf:rdf)\b", xml_text[:8192], re.IGNORECASE)
+    prolog = xml_text[: prolog_match.start()] if prolog_match else xml_text[:4096]
+    if XML_FORBIDDEN_DECL_RE.search(prolog):
         raise ValueError(f"Watchtower rejected unsafe XML feed containing DOCTYPE/ENTITY declaration from {source}")
     items: list[FeedItem] = []
     try:
@@ -357,24 +361,32 @@ def run_watchtower(
                 feed_errors.append(f"{fp.stem}: {exc}")
     else:
         headers = {"User-Agent": "artex-defense-watchtower/0.1 (defensive-rss-reader)"}
+        def _fetch_bounded(client: httpx.Client, url: str) -> str:
+            cur_url = url
+            validate_feed_url(cur_url)
+            for hop in range(3):
+                with client.stream("GET", cur_url) as resp:
+                    if resp.status_code in {301, 302, 307, 308} and resp.headers.get("location") and hop < 2:
+                        cur_url = urljoin(cur_url, resp.headers["location"])
+                        validate_feed_url(cur_url)
+                        continue
+                    resp.raise_for_status()
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in resp.iter_bytes():
+                        total += len(chunk)
+                        if total > MAX_FEED_XML_BYTES:
+                            raise ValueError(f"Feed response exceeded {MAX_FEED_XML_BYTES} bytes")
+                        chunks.append(chunk)
+                    return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+            raise ValueError("Too many redirects")
+
         with httpx.Client(timeout=timeout_sec, follow_redirects=False, headers=headers) as client:
             for spec in feeds:
                 try:
-                    cur_url = spec.url
-                    validate_feed_url(cur_url)
-                    resp = client.get(cur_url)
-                    for _ in range(2):
-                        if resp.status_code in {301, 302, 307, 308} and resp.headers.get("location"):
-                            cur_url = urljoin(cur_url, resp.headers["location"])
-                            validate_feed_url(cur_url)
-                            resp = client.get(cur_url)
-                        else:
-                            break
-                    resp.raise_for_status()
-                    if len(resp.content) > MAX_FEED_XML_BYTES:
-                        raise ValueError(f"Feed response exceeded {MAX_FEED_XML_BYTES} bytes")
+                    xml_body = _fetch_bounded(client, spec.url)
                     parsed = parse_feed_xml(
-                        resp.text,
+                        xml_body,
                         source=spec.name,
                         always_relevant=spec.always_relevant,
                         category=spec.category,
@@ -408,7 +420,8 @@ def run_watchtower(
     if with_gemma4 and new_relevant:
         coverage_ctx = _inventory_existing_coverage(rules_dir)
         fenced_entries = "\n\n".join(
-            f"- [{it.source}] ({it.category}) {it.title} ({it.published})\n  URL: {sanitize_text(it.link)}\n  Summary: {sanitize_text(it.summary)}"
+            f"- [{it.source}] ({it.category}) {sanitize_text(it.title)} ({sanitize_text(it.published)})\n"
+            f"  URL: {sanitize_text(it.link)}\n  Summary: {sanitize_text(it.summary)}"
             for it in new_relevant[:max_llm_items]
         )
         prompt = (
@@ -428,10 +441,12 @@ def run_watchtower(
             feed_errors.append(f"local_gemma4: {exc}")
 
     def _render_item_block(it: FeedItem) -> list[str]:
+        safe_link = sanitize_text(it.link).replace("`", "").replace("\n", " ").replace("\r", "")
+        safe_pub = sanitize_text(it.published or "unknown").replace("\n", " ").replace("\r", "")
         block = [
-            f"### [{it.source}] {sanitize_text(it.title)}",
-            f"- **Published:** {it.published or 'unknown'}",
-            f"- **Reference (defanged):** `{sanitize_text(it.link)}`",
+            f"### [{it.source}] {sanitize_text(it.title).replace(chr(10), ' ')}",
+            f"- **Published:** {safe_pub}",
+            f"- **Reference (defanged):** `{safe_link}`",
         ]
         if it.summary:
             block.append(f"- **Excerpt:** {sanitize_text(it.summary)}")
@@ -477,7 +492,7 @@ def run_watchtower(
         "new_ignored": new_ignored,
         "new_releases_count": len(new_releases),
         "new_relevant_count": len(new_relevant),
-        "new_relevant_titles": [f"[{it.source}] {it.title}" for it in new_relevant],
+        "new_relevant_titles": [f"[{it.source}] {sanitize_text(it.title)}" for it in new_relevant],
         "llm_gap_analysis_ran": llm_gap_analysis is not None,
         "digest_path": str(digest_path) if digest_path else None,
         "feed_errors": feed_errors,

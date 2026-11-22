@@ -22,9 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Cisco ASA & FTD syslog: e.g. "2026-11-20T10:00:00Z fw-asa-01 %ASA-6-113005: AAA user authentication Rejected : reason = AAA failure : server = 10.1.1.5 : user = admin : user IP = 198.51.100.10"
+# Cisco ASA & FTD syslog: supports both ISO-8601 and RFC 3164 ("Nov 21 10:00:00") timestamps
+SYSLOG_TS_PAT = r"(?:[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}|\S+)"
 ASA_FTD_RE = re.compile(
-    r"^(?P<ts>\S+)\s+(?P<host>\S+)\s+%(?P<prod>ASA|FTD)-(?P<sev>\d)-(?P<msgid>\d+):\s*(?P<msg>.*)$"
+    rf"^(?P<ts>{SYSLOG_TS_PAT})\s+(?P<host>\S+)\s+%(?P<prod>ASA|FTD)-(?P<sev>\d)-(?P<msgid>\d+):\s*(?P<msg>.*)$"
 )
 ASA_USER_RE = re.compile(r"(?:user|Username)\s*[=:]\s*['\"]?(?P<user>[^\s:,;'\"]+)", re.IGNORECASE)
 ASA_IP_RE = re.compile(
@@ -34,7 +35,7 @@ ASA_URI_RE = re.compile(r"(?P<uri>/(?:\+CSCOE\+|\+webvpn\+|CSCOE|admin|api)[^\s\
 
 # Citrix NetScaler ADC / Gateway syslog
 CITRIX_RE = re.compile(
-    r"^(?P<ts>\S+)\s+(?P<host>\S+)\s+.*?(?:PPE-\d|SSLVPN|AAATM|NS\S*)\s*:\s*(?P<msg>.*)$",
+    rf"^(?P<ts>{SYSLOG_TS_PAT})\s+(?P<host>\S+)\s+.*?(?:PPE-\d|SSLVPN|AAATM|NS\S*)\s*:\s*(?P<msg>.*)$",
     re.IGNORECASE,
 )
 CITRIX_USER_RE = re.compile(r"User\s+(?P<user>[^\s-]+)", re.IGNORECASE)
@@ -43,7 +44,7 @@ CITRIX_URI_RE = re.compile(r"(?P<uri>/(?:vpn|nf|logon|p/u|cgi|nitro)[^\s\"']*)",
 
 # F5 BIG-IP APM / LTM / ASM syslog
 F5_RE = re.compile(
-    r"^(?P<ts>\S+)\s+(?P<host>\S+)\s+(?:err|warning|notice|info)?\s*(?P<daemon>apmd|tmm|httpd|restjavad|asm)\[\d+\]:\s*(?P<msg>.*)$",
+    rf"^(?P<ts>{SYSLOG_TS_PAT})\s+(?P<host>\S+)\s+(?:err|warning|notice|info)?\s*(?P<daemon>apmd|tmm|httpd|restjavad|asm)\[\d+\]:\s*(?P<msg>.*)$",
     re.IGNORECASE,
 )
 F5_URI_RE = re.compile(r"(?P<uri>/(?:my\.policy|tmui|mgmt/tm|renderer|sam|api)[^\s\"']*)", re.IGNORECASE)
@@ -86,15 +87,19 @@ def parse_timestamp(value: Any) -> datetime:
             "%Y/%m/%d %H:%M:%S",
             "%Y-%m-%d %H:%M:%S.%f",
             "%Y-%m-%d %H:%M:%S",
-            "%b %d %H:%M:%S",
         ):
             try:
                 dt = datetime.strptime(text, fmt)
-                if dt.year == 1900:
-                    dt = dt.replace(year=datetime.now(timezone.utc).year)
                 return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
+        # RFC 3164 syslog ("Nov 21 10:00:00") — prepend current UTC year to avoid Python 3.15 leap-day warning
+        try:
+            cur_year = datetime.now(timezone.utc).year
+            dt = datetime.strptime(f"{cur_year} {text}", "%Y %b %d %H:%M:%S")
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
     raise ValueError(f"Unsupported timestamp value: {value!r}")
 
 
@@ -119,7 +124,7 @@ def _infer_surface(
     et = event_type.lower()
     if et in {"vpn", "edge_auth", "edge_appliance", "firewall"}:
         return "edge_appliance"
-    if et in {"cloud_iam", "entra_id", "cloudtrail", "iam"} or "serviceprincipal" in action.lower():
+    if et in {"cloud_iam", "entra_id", "cloudtrail", "iam"} or et.endswith(".amazonaws.com") or "serviceprincipal" in action.lower():
         return "cloud_iam"
     if et in {"process", "sysmon", "edr", "endpoint", "file"} or process:
         return "endpoint"
@@ -292,11 +297,17 @@ def _normalize_entra_record(record: dict[str, Any]) -> dict[str, Any]:
         record.get("isInteractive") is False
     )
 
-    if err_code is not None:
-        code_int = int(err_code)
-        status_code = 200 if code_int == 0 else 401
-        prefix = "entra_sp" if is_sp else "entra_signin"
-        action = f"{prefix}_success" if code_int == 0 else f"{prefix}_err_{code_int}"
+    if err_code is not None and str(err_code).strip() != "":
+        try:
+            code_int = int(err_code)
+            status_code = 200 if code_int == 0 else 401
+            prefix = "entra_sp" if is_sp else "entra_signin"
+            action = f"{prefix}_success" if code_int == 0 else f"{prefix}_err_{code_int}"
+        except (ValueError, TypeError):
+            code_str = str(err_code).strip()
+            status_code = 200 if code_str in {"0", "success", "Success"} else 401
+            prefix = "entra_sp" if is_sp else "entra_signin"
+            action = f"{prefix}_success" if status_code == 200 else f"{prefix}_{code_str[:40]}"
         if failure_reason:
             action = f"{action}:{failure_reason[:60]}"
     elif op_name:
@@ -477,8 +488,92 @@ def _normalize_google_workspace_record(record: dict[str, Any]) -> dict[str, Any]
     )
 
 
+def _flatten_cloudtrail_params(params: Any, *, max_len: int = 500) -> str:
+    """Flatten nested AWS CloudTrail requestParameters into a compact key=value string."""
+    if not isinstance(params, dict):
+        return str(params)[:max_len] if params else ""
+    parts: list[str] = []
+    for k, v in params.items():
+        if isinstance(v, dict):
+            parts.append(f"{k}={json.dumps(v, ensure_ascii=False)}")
+        elif isinstance(v, list):
+            parts.append(f"{k}={','.join(str(x) for x in v[:10])}")
+        elif v is not None:
+            parts.append(f"{k}={v}")
+    return " ".join(parts)[:max_len]
+
+
+def _normalize_cloudtrail_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Normalize native AWS CloudTrail JSON records (nested userIdentity, requestParameters, camelCase userAgent)."""
+    ts_raw = _extract_first(record, ("eventTime", "timestamp", "time"))
+    if ts_raw is None:
+        raise ValueError("CloudTrail record missing eventTime")
+    ts = parse_timestamp(ts_raw)
+
+    ui = record.get("userIdentity") if isinstance(record.get("userIdentity"), dict) else {}
+    session_issuer = ((ui.get("sessionContext") or {}).get("sessionIssuer") or {}) if isinstance(ui.get("sessionContext"), dict) else {}
+
+    src_ip = str(record.get("sourceIPAddress") or "cloudtrail")
+    actor = str(
+        ui.get("arn")
+        or session_issuer.get("arn")
+        or ui.get("userName")
+        or ui.get("principalId")
+        or src_ip
+    )
+    event_source = str(record.get("eventSource") or "amazonaws.com")
+    event_name = str(record.get("eventName") or "")
+    ua = str(record.get("userAgent") or "")
+    err_code = str(record.get("errorCode") or "")
+    err_msg = str(record.get("errorMessage") or "")
+    vpc_ep = str(record.get("vpcEndpointId") or "")
+
+    cmd_parts = [_flatten_cloudtrail_params(record.get("requestParameters"))]
+    if err_code:
+        cmd_parts.append(f"errorCode={err_code}")
+    if err_msg:
+        cmd_parts.append(err_msg[:120])
+    if vpc_ep:
+        cmd_parts.append(f"vpcEndpointId={vpc_ep}")
+    cmd_line = " ".join(p for p in cmd_parts if p).strip()
+
+    if err_code:
+        err_low = err_code.lower()
+        status_code = 401 if any(t in err_low for t in ("invalidclienttoken", "expiredtoken", "unauthorized")) else 403
+    else:
+        status_code = 200
+
+    return _make_event(
+        ts=ts,
+        source_host=src_ip,
+        actor=actor,
+        event_type="cloudtrail",
+        surface="cloud_iam",
+        appliance="aws_cloudtrail",
+        command_line=cmd_line,
+        dest_host=event_source,
+        dest_port=443,
+        http_method="POST",
+        user_agent=ua,
+        status_code=status_code,
+        action=event_name,
+        raw=record,
+    )
+
+
 def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
     """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
+    # Detect native AWS CloudTrail JSON (eventSource + eventName + userIdentity / *.amazonaws.com)
+    if (
+        "eventName" in record
+        and "eventSource" in record
+        and (
+            str(record.get("eventSource", "")).lower().endswith(".amazonaws.com")
+            or isinstance(record.get("userIdentity"), dict)
+        )
+    ):
+        return _normalize_cloudtrail_record(record)
+
     # Detect native Okta System Log JSON
     if "published" in record and "eventType" in record and ("outcome" in record or "client" in record):
         return _normalize_okta_record(record)
@@ -634,7 +729,7 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
     if not http_method and record.get("httpGet"):
         http_method = "GET"
     http_path = str(_extract_first(record, ("http_path", "httpGet", "httpRequest", "url", "uri", "path"), ""))
-    user_agent = str(_extract_first(record, ("user_agent", "httpUserAgent", "useragent", "UserAgent", "ua"), ""))
+    user_agent = str(_extract_first(record, ("user_agent", "userAgent", "httpUserAgent", "useragent", "UserAgent", "ua"), ""))
     ja4 = str(_extract_first(record, ("ja4", "tls.ja4", "JA4"), ""))
     ja4h = str(_extract_first(record, ("ja4h", "http.ja4h", "JA4H"), ""))
     bytes_out_raw = _extract_first(
@@ -650,13 +745,28 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
         record, ("status_code", "httpResponse", "status", "http_status", "responsecode", "errorCode")
     )
     status_code: int | None = None
-    if isinstance(status_raw, int):
+    if isinstance(status_raw, bool):
+        status_code = None
+    elif isinstance(status_raw, int):
         status_code = status_raw
     elif isinstance(status_raw, str) and status_raw.isdigit():
         status_code = int(status_raw)
-    elif isinstance(status_raw, str) and status_raw:
-        m_code = re.match(r"^\s*(\d{3})\b", status_raw)
-        status_code = int(m_code.group(1)) if m_code else 403
+    elif isinstance(status_raw, str) and status_raw.strip():
+        s_clean = status_raw.strip()
+        m_code = re.match(r"^(\d{3})\b", s_clean)
+        if m_code:
+            status_code = int(m_code.group(1))
+        else:
+            s_low = s_clean.lower()
+            if s_low in {"ok", "success", "succeeded", "allow", "allowed", "accept", "accepted", "pass", "passed"}:
+                status_code = 200
+            elif any(
+                tok in s_low
+                for tok in ("fail", "deny", "denied", "error", "block", "reject", "forbid", "unauth", "accessdenied")
+            ):
+                status_code = 403
+            else:
+                status_code = None
 
     action = str(_extract_first(record, ("action", "eventName", "operation", "ActionType"), ""))
     if not action and is_ipfix and record.get("silkAppLabel") is not None:
@@ -701,7 +811,10 @@ def parse_cisco_asa_ftd_syslog(lines: list[str]) -> list[dict[str, Any]]:
         m = ASA_FTD_RE.match(line)
         if not m:
             continue
-        ts = parse_timestamp(m.group("ts"))
+        try:
+            ts = parse_timestamp(m.group("ts"))
+        except ValueError:
+            continue
         host = m.group("host")
         prod = m.group("prod")
         msgid = m.group("msgid")
@@ -749,7 +862,10 @@ def parse_citrix_netscaler_log(lines: list[str]) -> list[dict[str, Any]]:
         m = CITRIX_RE.match(line)
         if not m:
             continue
-        ts = parse_timestamp(m.group("ts"))
+        try:
+            ts = parse_timestamp(m.group("ts"))
+        except ValueError:
+            continue
         host = m.group("host")
         msg = m.group("msg")
 
@@ -794,32 +910,38 @@ def parse_panos_log(lines: list[str]) -> list[dict[str, Any]]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        row = next(csv.reader(io.StringIO(line)))
+        try:
+            row = next(csv.reader(io.StringIO(line)))
+        except (csv.Error, StopIteration):
+            continue
         if len(row) < 6:
             continue
         # Expect common PAN-OS CSV format: receive_time,serial,type,subtype,src_ip,dst_host,user,status/action,uri_or_detail
         # Also support full PAN-OS syslog CSV where row[3] is TRAFFIC/THREAT/GLOBALPROTECT
-        if row[2].upper() in {"TRAFFIC", "THREAT", "GLOBALPROTECT", "SYSTEM"}:
-            ts = parse_timestamp(row[0])
-            log_type = row[2].upper()
-            subtype = row[3]
-            src_ip = row[4]
-            dest_host = row[5]
-            actor = row[6] if len(row) > 6 and row[6] else src_ip
-            outcome = row[7] if len(row) > 7 else ""
-            uri = row[8] if len(row) > 8 else ""
-            ua = row[9] if len(row) > 9 else ""
-        elif len(row) >= 15 and row[3].upper() in {"TRAFFIC", "THREAT", "GLOBALPROTECT"}:
-            ts = parse_timestamp(row[1])
-            log_type = row[3].upper()
-            subtype = row[4]
-            src_ip = row[7]
-            dest_host = row[8]
-            actor = row[12] or src_ip
-            outcome = row[14]
-            uri = row[15] if len(row) > 15 else ""
-            ua = ""
-        else:
+        try:
+            if row[2].upper() in {"TRAFFIC", "THREAT", "GLOBALPROTECT", "SYSTEM"}:
+                ts = parse_timestamp(row[0])
+                log_type = row[2].upper()
+                subtype = row[3]
+                src_ip = row[4]
+                dest_host = row[5]
+                actor = row[6] if len(row) > 6 and row[6] else src_ip
+                outcome = row[7] if len(row) > 7 else ""
+                uri = row[8] if len(row) > 8 else ""
+                ua = row[9] if len(row) > 9 else ""
+            elif len(row) >= 15 and row[3].upper() in {"TRAFFIC", "THREAT", "GLOBALPROTECT"}:
+                ts = parse_timestamp(row[1])
+                log_type = row[3].upper()
+                subtype = row[4]
+                src_ip = row[7]
+                dest_host = row[8]
+                actor = row[12] or src_ip
+                outcome = row[14]
+                uri = row[15] if len(row) > 15 else ""
+                ua = ""
+            else:
+                continue
+        except (ValueError, IndexError):
             continue
 
         out_low = outcome.lower()
@@ -854,7 +976,10 @@ def parse_f5_bigip_log(lines: list[str]) -> list[dict[str, Any]]:
         m = F5_RE.match(line)
         if not m:
             continue
-        ts = parse_timestamp(m.group("ts"))
+        try:
+            ts = parse_timestamp(m.group("ts"))
+        except ValueError:
+            continue
         host = m.group("host")
         daemon = m.group("daemon").lower()
         msg = m.group("msg")
@@ -904,7 +1029,10 @@ def parse_web_access_log(lines: list[str]) -> list[dict[str, Any]]:
         m = NGINX_COMBINED_RE.match(line)
         if not m:
             continue
-        ts = parse_timestamp(m.group("ts"))
+        try:
+            ts = parse_timestamp(m.group("ts"))
+        except ValueError:
+            continue
         ip = m.group("ip")
         user = m.group("user")
         actor = ip if user in {"-", ""} else user
@@ -989,16 +1117,17 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
     if chosen == "web_access":
         return parse_web_access_log(lines)
 
-    # Default: JSONL (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail)
+    # Default: JSONL (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail, IdPs)
+    # Resilient per-line parsing: skip individual malformed/truncated lines instead of aborting the whole file.
     events: list[dict[str, Any]] = []
-    for line_no, raw_line in enumerate(lines, start=1):
+    for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
         try:
             record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON on line {line_no} of {path}: {exc}") from exc
-        if isinstance(record, dict):
-            events.append(normalize_json_record(record))
+            if isinstance(record, dict):
+                events.append(normalize_json_record(record))
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            continue
     return events

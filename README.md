@@ -6,7 +6,7 @@ Offline detection engineering, log triage, and hunting rules for **ARTEX** (`Aut
 
 Static strings from early advisories (`ArtexProbe`, realm headers, canary paths) are useful for retrohunting and passive infrastructure pivoting, but forks strip them within days. This repository pairs static retrohunt indicators with **Zero-IOC behavioral detections**—timing cadence, error-handling calibration, TLS/JA4 stack whiplash and recording-proxy TLS collapse, sub-3-hour kill-chain compression, and 30-day dormant-gap correlation—scored via Risk-Based Alerting (`risk_score` 0–100).
 
-*Scope note: All detectors, schemas, and thresholds are derived from public reporting and synthetic/blind-tested baselines. Schema alignment and threshold tuning will be required for production environments.*
+*Scope note: This repository is an **offline detection-engineering workbench and single-case triage kit**. In live SOC environments, deploy the compiled SIEM/XDR/network rules with per-entity rolling baselines rather than piping production firehoses through a standalone CLI/LLM. All detectors, schemas, and thresholds are derived from public reporting and synthetic/blind-tested baselines; live schema alignment and threshold tuning will be required.*
 
 > [!WARNING]
 > **Operational Safety (Zero Bare-Metal Exposure):** Never browse, curl, or pull raw attacker directories (`SimpleHTTP`), exposed operator consoles, or suspect C2 infrastructure from a bare-metal workstation. Use passive intelligence platforms (Censys, Shodan, Hunt.io, GTI, GreyNoise, URLScan.io, Silent Push, Validin, Team Cymru, FOFA) to triage infrastructure, inspect artifacts only inside an isolated snapshotted VM, and sanitize untrusted logs offline via `./scripts/sandbox-scan.sh`. See [docs/quarantine_sop.md](docs/quarantine_sop.md).
@@ -72,7 +72,7 @@ python3 -m venv .venv
 <summary><strong>Offline Docker Sandbox, Air-Gapped KVM Lab & Watchtower</strong></summary>
 
 ```bash
-# Re-compile all 19 Sigma rules across 7 SIEM/XDR formats
+# Re-compile Sigma rules across 8 SIEM/XDR target packs (full-pack ES|QL/Lucene/KQL/CQL/SPL + Windows-endpoint MDE/ASIM/S1QL)
 .venv/bin/artex-hunt sigma-compile --export-dir rules/queries/compiled_sigma
 
 # Offline Docker container scan & TaskID transcript analysis (--network=none, --read-only, --cap-drop=ALL)

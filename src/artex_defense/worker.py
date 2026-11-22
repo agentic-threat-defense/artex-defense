@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 
@@ -13,10 +14,26 @@ from .schemas import CandidateWindow, IntelExtraction, TriageVerdict
 
 DEFAULT_OLLAMA_URL = os.environ.get("ARTEX_OLLAMA_URL", "http://127.0.0.1:11434")
 DEFAULT_OLLAMA_MODEL = os.environ.get("ARTEX_OLLAMA_MODEL", "gemma4-hunter")
+LOCALHOST_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 class GemmaWorkerError(RuntimeError):
     """Raised when the local Ollama / Gemma 4 worker fails or returns invalid output."""
+
+
+def _validate_ollama_url(url: str) -> str:
+    """Enforce localhost-only Ollama connections unless ARTEX_ALLOW_REMOTE_OLLAMA=1 is explicitly set."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"Unsupported Ollama URL scheme '{parsed.scheme}': {url}")
+    host = (parsed.hostname or "").lower()
+    allow_remote = os.environ.get("ARTEX_ALLOW_REMOTE_OLLAMA", "").strip() == "1"
+    if not allow_remote and host not in LOCALHOST_HOSTS:
+        raise ValueError(
+            f"Refusing non-localhost Ollama URL '{url}'. "
+            "Set ARTEX_ALLOW_REMOTE_OLLAMA=1 explicitly if routing to a remote host."
+        )
+    return url.rstrip("/")
 
 
 class GemmaWorker:
@@ -28,8 +45,9 @@ class GemmaWorker:
         model: str | None = None,
         timeout: float = 180.0,
     ) -> None:
-        self.base_url = (base_url or DEFAULT_OLLAMA_URL).rstrip("/")
-        self.model = model or DEFAULT_OLLAMA_MODEL
+        raw_url = base_url or os.environ.get("ARTEX_OLLAMA_URL", DEFAULT_OLLAMA_URL)
+        self.base_url = _validate_ollama_url(raw_url)
+        self.model = model or os.environ.get("ARTEX_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
         self.timeout = timeout
 
     def health_check(self) -> dict[str, Any]:

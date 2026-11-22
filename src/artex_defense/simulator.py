@@ -469,7 +469,7 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
                 "event_type": "edge_auth",
                 "surface": "edge_appliance",
                 "appliance": "citrix_netscaler",
-                "dest_host": "adc-gw-01.corp.local",
+                "dest_host": "app-citrix-01",
                 "dest_port": 443,
                 "http_method": "POST",
                 "http_path": path,
@@ -583,7 +583,7 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
         zscaler_attack.append(
             {
                 "timestamp": _iso(cur),
-                "source_host": "entra-audit",
+                "source_host": "10.20.4.19",
                 "actor": "sp-portal-automation",
                 "event_type": "cloud_iam",
                 "surface": "cloud_iam",
@@ -764,33 +764,33 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
         ],
     }
 
-    # Scenario 8: ThreatDefence AWS CloudWatch Secret Search + DryRun Burst + Multi-UA 404 Rotation
+    # Scenario 8: ThreatDefence AWS CloudWatch Secret Search + DryRun Burst (native CloudTrail) + Multi-UA 404 Rotation
     aws_ua_attack: list[dict[str, Any]] = []
     cur = t0 + timedelta(hours=8)
     aws_ua_attack.append(
         {
-            "timestamp": _iso(cur),
-            "source_host": "cloudtrail",
-            "actor": "arn:aws:iam::111122223333:user/leaked-ci",
-            "event_type": "cloud_iam",
-            "surface": "cloud_iam",
-            "action": "FilterLogEvents",
-            "command_line": "filterPattern=password OR AKIA OR secret limit=1000",
-            "status_code": 200,
+            "eventVersion": "1.09",
+            "eventTime": _iso(cur),
+            "eventSource": "logs.amazonaws.com",
+            "eventName": "FilterLogEvents",
+            "sourceIPAddress": "203.0.113.99",
+            "userAgent": "aws-cli/2.17.0",
+            "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/leaked-ci"},
+            "requestParameters": {"filterPattern": "password OR AKIA OR secret", "limit": 1000},
         }
     )
     for i in range(4):
         cur += timedelta(seconds=1.2)
         aws_ua_attack.append(
             {
-                "timestamp": _iso(cur),
-                "source_host": "cloudtrail",
-                "actor": "arn:aws:iam::111122223333:user/leaked-ci",
-                "event_type": "cloud_iam",
-                "surface": "cloud_iam",
-                "action": "RunInstancesDryRun",
-                "command_line": "Client.DryRunOperation",
-                "status_code": 403,
+                "eventVersion": "1.09",
+                "eventTime": _iso(cur),
+                "eventSource": "ec2.amazonaws.com",
+                "eventName": "RunInstancesDryRun",
+                "sourceIPAddress": "203.0.113.99",
+                "userAgent": "aws-cli/2.17.0",
+                "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/leaked-ci"},
+                "errorCode": "Client.DryRunOperation",
             }
         )
     # Multi-UA 404 rotation against web portal from one source IP
@@ -1317,20 +1317,23 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
         ],
     }
 
-    # Baseline 16: Benign single SSM GetParameter by Terraform automation (0 FPs)
+    # Baseline 16: Benign single SSM GetParameter by Terraform automation in NATIVE AWS CloudTrail JSON (0 FPs)
     cur = t0 + timedelta(hours=20)
     aws_ssm_benign: list[dict[str, Any]] = [
         {
-            "timestamp": _iso(cur),
-            "source_host": "10.30.1.5",
-            "actor": "arn:aws:iam::111122223333:role/terraform-ci",
-            "event_type": "cloudtrail",
-            "surface": "cloud_iam",
-            "dest_host": "ssm.amazonaws.com",
-            "user_agent": "HashiCorp Terraform/1.9.5",
-            "status_code": 200,
-            "action": "GetParameter",
-            "command_line": "name=/app/prod/region",
+            "eventVersion": "1.09",
+            "eventTime": _iso(cur),
+            "eventSource": "ssm.amazonaws.com",
+            "eventName": "GetParameter",
+            "awsRegion": "us-east-1",
+            "sourceIPAddress": "10.30.1.5",
+            "userAgent": "HashiCorp Terraform/1.9.5 (+https://www.terraform.io)",
+            "vpcEndpointId": "vpce-0123456789abcdef0",
+            "userIdentity": {
+                "type": "AssumedRole",
+                "arn": "arn:aws:sts::111122223333:assumed-role/terraform-ci/plan-run",
+            },
+            "requestParameters": {"name": "/app/prod/region", "withDecryption": False},
         }
     ]
     p = _write_jsonl(base_dir / "baseline_aws_ssm_terraform_normal.jsonl", aws_ssm_benign)
@@ -1342,48 +1345,54 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
         "expected_reasons": [],
     }
 
-    # Scenario 18: Elastic CyberStrikeAI CloudTrail Intrusion (sub-second EC2 userData burst, SSM SendCommand,
-    # external EC2 instance-role replay, & 3 distinct stolen AWS identities from 1 external IP)
+    # Scenario 18: Elastic CyberStrikeAI CloudTrail Intrusion in NATIVE AWS CloudTrail JSON
+    # (nested userIdentity.arn, camelCase userAgent, nested requestParameters)
     cur = t0 + timedelta(hours=21)
     cs_ip = "203.0.113.241"
     cyberstrike_aws: list[dict[str, Any]] = [
         {
-            "timestamp": _iso(cur + timedelta(milliseconds=i * 20)),
-            "source_host": cs_ip,
-            "actor": "arn:aws:sts::111122223333:assumed-role/WebServerRole/i-0a1b2c3d4e5f67890",
-            "event_type": "cloudtrail",
-            "surface": "cloud_iam",
-            "dest_host": "ec2.amazonaws.com",
-            "user_agent": "Boto3/1.35.0 Python/3.12",
-            "status_code": 200,
-            "action": "DescribeInstanceAttribute",
-            "command_line": f"attribute=userData instanceId=i-0000{i:04x} assumed-role/WebServerRole",
+            "eventVersion": "1.09",
+            "eventTime": _iso(cur + timedelta(milliseconds=i * 20)),
+            "eventSource": "ec2.amazonaws.com",
+            "eventName": "DescribeInstanceAttribute",
+            "awsRegion": "us-east-1",
+            "sourceIPAddress": cs_ip,
+            "userAgent": "Boto3/1.35.0 Python/3.12",
+            "userIdentity": {
+                "type": "AssumedRole",
+                "arn": "arn:aws:sts::111122223333:assumed-role/WebServerRole/i-0a1b2c3d4e5f67890",
+            },
+            "requestParameters": {"attribute": "userData", "instanceId": f"i-0000{i:04x}"},
         }
         for i in range(4)
     ] + [
         {
-            "timestamp": _iso(cur + timedelta(seconds=2)),
-            "source_host": cs_ip,
-            "actor": "arn:aws:iam::111122223333:user/svc-deploy",
-            "event_type": "cloudtrail",
-            "surface": "cloud_iam",
-            "dest_host": "ssm.amazonaws.com",
-            "user_agent": "Boto3/1.35.0 Python/3.12",
-            "status_code": 200,
-            "action": "GetParametersByPath",
-            "command_line": "Path=/prod/ WithDecryption=true",
+            "eventVersion": "1.09",
+            "eventTime": _iso(cur + timedelta(seconds=2)),
+            "eventSource": "ssm.amazonaws.com",
+            "eventName": "GetParametersByPath",
+            "awsRegion": "us-east-1",
+            "sourceIPAddress": cs_ip,
+            "userAgent": "Boto3/1.35.0 Python/3.12",
+            "userIdentity": {
+                "type": "IAMUser",
+                "arn": "arn:aws:iam::111122223333:user/svc-deploy",
+            },
+            "requestParameters": {"path": "/prod/", "withDecryption": True},
         },
         {
-            "timestamp": _iso(cur + timedelta(seconds=4)),
-            "source_host": cs_ip,
-            "actor": "arn:aws:iam::111122223333:user/svc-backup",
-            "event_type": "cloudtrail",
-            "surface": "cloud_iam",
-            "dest_host": "ssm.amazonaws.com",
-            "user_agent": "Boto3/1.35.0 Python/3.12",
-            "status_code": 200,
-            "action": "SendCommand",
-            "command_line": "DocumentName=AWS-RunShellScript WithDecryption=true",
+            "eventVersion": "1.09",
+            "eventTime": _iso(cur + timedelta(seconds=4)),
+            "eventSource": "ssm.amazonaws.com",
+            "eventName": "SendCommand",
+            "awsRegion": "us-east-1",
+            "sourceIPAddress": cs_ip,
+            "userAgent": "Boto3/1.35.0 Python/3.12",
+            "userIdentity": {
+                "type": "IAMUser",
+                "arn": "arn:aws:iam::111122223333:user/svc-backup",
+            },
+            "requestParameters": {"documentName": "AWS-RunShellScript", "withDecryption": True},
         },
     ]
     p = _write_jsonl(base_dir / "scenario_cyberstrikeai_aws_userdata_ssm_multi_id.jsonl", cyberstrike_aws)

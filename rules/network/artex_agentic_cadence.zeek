@@ -5,6 +5,7 @@
 # ============================================================================
 
 @load base/frameworks/notice
+@load base/frameworks/sumstats
 @load base/protocols/conn
 @load base/protocols/http
 @load base/protocols/ssl
@@ -16,13 +17,14 @@ export {
         Agentic_Default_Port,
         Anomalous_LLM_API_Egress,
         Webhook_Exfil_Traffic,
-        Agentic_Harness_UserAgent
+        Agentic_Harness_UserAgent,
+        Agentic_HTTP_Error_Burst
     };
 
-    const agentic_ports: set[port] = { 8787/tcp, 8788/tcp, 8790/tcp } &redef;
+    const agentic_ports: set[port] = { 8787/tcp, 8788/tcp, 8790/tcp, 8890/tcp } &redef;
 
     const llm_api_suffixes: pattern =
-        /(^|\.)(api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|open\.bigmodel\.cn|api\.x\.ai|api\.moonshot\.cn|xcai\.com|xcai\.pro|lanmao666\.com|lanmao666\.xyz)$/i &redef;
+        /(^|\.)(api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|open\.bigmodel\.cn|api\.x\.ai|api\.moonshot\.cn|openrouter\.ai|generativelanguage\.googleapis\.com|api\.groq\.com|api\.together\.xyz|api\.fireworks\.ai|dashscope\.aliyuncs\.com|ark\.cn-beijing\.volces\.com|xcai\.com|xcai\.pro|lanmao666\.com|lanmao666\.xyz|artex\.lol|nginxmysql\.com|vietnam852\.com)$/i &redef;
 
     const webhook_exfil_suffixes: pattern =
         /(^|\.)(webhook\.site|oast\.live|oast\.fun|oast\.me|interact\.sh|dnslog\.cn)$/i &redef;
@@ -33,7 +35,37 @@ export {
 
     # Populate with corporate user-workstation & approved AI gateway subnets so LLM alerts focus on Server/DMZ tiers
     const approved_llm_sources: set[subnet] = {} &redef;
+    const error_burst_threshold: double = 20.0 &redef;
+    const error_burst_window: interval = 60sec &redef;
 }
+
+event zeek_init()
+    {
+    local r1 = SumStats::Reducer($stream="artex.http_4xx_errors", $apply=set(SumStats::SUM));
+    SumStats::create([$name="artex-http-error-burst",
+                      $epoch=error_burst_window,
+                      $reducers=set(r1),
+                      $threshold_val(key: SumStats::Key, result: SumStats::Result) =
+                          {
+                          return result["artex.http_4xx_errors"]$sum;
+                          },
+                      $threshold=error_burst_threshold,
+                      $threshold_crossed(key: SumStats::Key, result: SumStats::Result) =
+                          {
+                          NOTICE([$note=Agentic_HTTP_Error_Burst,
+                                  $src=key$host,
+                                  $msg=fmt("Rapid HTTP 4xx/5xx error burst from %s (%.0f errors in %s)", key$host, result["artex.http_4xx_errors"]$sum, error_burst_window),
+                                  $identifier=cat(key$host, "http_err_burst")]);
+                          }]);
+    }
+
+event http_reply(c: connection, version: string, code: count, reason: string)
+    {
+    if ( code >= 400 && ! (c$id$orig_h in approved_llm_sources) )
+        {
+        SumStats::observe("artex.http_4xx_errors", [$host=c$id$orig_h], [$num=1]);
+        }
+    }
 
 event connection_established(c: connection)
     {

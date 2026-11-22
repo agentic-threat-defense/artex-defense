@@ -68,3 +68,37 @@ def test_parse_panos_and_f5_and_web_access(tmp_path: Path) -> None:
     assert parsed[0]["appliance"] == "f5_bigip"
     assert parsed[0]["surface"] == "edge_appliance"
     assert parsed[0]["user_agent"] == "HeadlessChrome/130"
+
+
+def test_wave1_native_cloudtrail_rfc3164_citrix_status_success_and_malformed_line_resilience(tmp_path: Path) -> None:
+    # 1. Native AWS CloudTrail JSON (nested userIdentity.arn, camelCase userAgent, requestParameters)
+    ct_file = tmp_path / "cloudtrail.jsonl"
+    ct_file.write_text(
+        '{"eventTime":"2026-11-21T12:00:00Z","eventSource":"ec2.amazonaws.com","eventName":"DescribeInstanceAttribute",'
+        '"sourceIPAddress":"203.0.113.241","userAgent":"Boto3/1.35.0","userIdentity":{"arn":"arn:aws:sts::111122223333:assumed-role/WebRole/i-0abc1234567890"},'
+        '"requestParameters":{"attribute":"userData","instanceId":"i-0001"}}\n'
+        '{malformed truncated json line\n'
+        '{"timestamp":"2026-11-21T12:00:05Z","source_host":"10.1.1.5","status":"success","userAgent":"CustomApp/1.0"}\n',
+        encoding="utf-8",
+    )
+    events = parse_auto(ct_file)
+    assert len(events) == 2
+    assert events[0]["surface"] == "cloud_iam"
+    assert events[0]["appliance"] == "aws_cloudtrail"
+    assert events[0]["actor"].startswith("arn:aws:sts::")
+    assert events[0]["user_agent"] == "Boto3/1.35.0"
+    assert "userData" in events[0]["command_line"]
+    assert events[0]["status_code"] == 200
+    # "status": "success" MUST map to 200 (never 403!)
+    assert events[1]["status_code"] == 200
+    assert events[1]["user_agent"] == "CustomApp/1.0"
+
+    # 2. RFC 3164 Citrix NetScaler syslog + malformed line skipped cleanly
+    citrix_lines = [
+        "Nov 21 10:00:00 ns01 11/21/2026:10:00:00 GMT ns01 0-PPE-0 : SSLVPN LOGIN_FAILED : User extuser - Client_ip 203.0.113.20 - /vpn/index.html",
+        "BADTS host PPE-0 : SSLVPN garbage line",
+    ]
+    citrix_ev = parse_citrix_netscaler_log(citrix_lines)
+    assert len(citrix_ev) == 1
+    assert citrix_ev[0]["appliance"] == "citrix_netscaler"
+    assert citrix_ev[0]["status_code"] == 401
