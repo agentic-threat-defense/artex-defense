@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .sanitizer import fence_untrusted_text
+from .sanitizer import fence_untrusted_text, sanitize_payload
 from .schemas import CandidateWindow, IntelExtraction, TriageVerdict
 
 DEFAULT_OLLAMA_URL = os.environ.get("ARTEX_OLLAMA_URL", "http://127.0.0.1:11434")
@@ -167,11 +167,15 @@ class GemmaWorker:
         rule_format: Literal["sigma", "yara", "kql", "zeek"] = "sigma",
     ) -> str:
         """Draft a defensive detection rule from a structured finding."""
+        fenced = fence_untrusted_text(
+            json.dumps(sanitize_payload(finding), indent=2, ensure_ascii=False),
+            label="VALIDATED_FINDING",
+        )
         prompt = (
             f"Draft a clean, production-minded defensive {rule_format.upper()} detection rule "
             "based on this validated finding. Include clear metadata, false-positive notes, "
             "and MITRE ATT&CK tags where appropriate. Return only the rule content.\n\n"
-            f"Finding JSON:\n{json.dumps(finding, indent=2)}"
+            f"{fenced}"
         )
         return self._chat(prompt, temperature=0.15)
 

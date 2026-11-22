@@ -530,3 +530,64 @@ def test_cto_gate_all_6_release_blockers_fixed(tmp_path: Path, monkeypatch: pyte
     assert d_clean["x-artx-key"] == "[REDACTED_SECRET]"
     assert d_clean["token"] == "[REDACTED_SECRET]"
     assert d_clean["authorization"] == "[REDACTED_SECRET]"
+
+
+def test_mcp_extract_intel_and_delegate_preserve_single_sanitizer_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from artex_defense.mcp_server import gemma4_extract_intel
+    from artex_defense.schemas import IntelExtraction
+    from artex_defense.worker import GemmaWorker
+
+    monkeypatch.setenv("ARTEX_MCP_ALLOWED_ROOT", str(tmp_path))
+    monkeypatch.delenv("ARTEX_MCP_ALLOW_UNSANITIZED", raising=False)
+
+    advisory = tmp_path / "intel_1.1.1.1.txt"
+    advisory.write_text(
+        "Primary relay 1.1.1.1 pivoted to 8.8.8.8 with operator alice@example.com.\n",
+        encoding="utf-8",
+    )
+
+    seen_inputs: list[tuple[str, str]] = []
+
+    def fake_extract(self: GemmaWorker, text: str, *, source_name: str = "document") -> IntelExtraction:
+        seen_inputs.append((source_name, text))
+        # Simulate model echoing pseudonymized IP from input AND emitting a raw second/third IP
+        return IntelExtraction(
+            title="Consistent Context Test",
+            summary="Observed [IP_PUB_01] talking to 8.8.8.8 and new host 9.9.9.9 via alice@example.com",
+            iocs=["[IP_PUB_01]", "8.8.8.8", "9.9.9.9"],
+            behavioral_signatures=["1s loop"],
+            mitre_techniques=["T1102"],
+            detection_ideas=["Alert on egress"],
+            hardening_actions=["Block relay"],
+        )
+
+    monkeypatch.setattr(GemmaWorker, "extract_intel", fake_extract)
+    out = json.loads(gemma4_extract_intel(str(advisory)))
+    assert len(seen_inputs) == 1
+    src_name, sanitized_input = seen_inputs[0]
+    # 1.1.1.1 -> [IP_PUB_01], 8.8.8.8 -> [IP_PUB_02], alice@example.com -> [EMAIL_01]
+    assert "[IP_PUB_01]" in src_name
+    assert "[IP_PUB_01]" in sanitized_input
+    assert "[IP_PUB_02]" in sanitized_input
+    assert "[EMAIL_01]" in sanitized_input
+
+    # Output must reuse the SAME SanitizerContext: 8.8.8.8 MUST remain [IP_PUB_02] (not reset to [IP_PUB_01]),
+    # and the new IP 9.9.9.9 MUST get [IP_PUB_03], while alice@example.com remains [EMAIL_01].
+    extraction = out["extraction"]
+    assert extraction["iocs"] == ["[IP_PUB_01]", "[IP_PUB_02]", "[IP_PUB_03]"]
+    assert "[IP_PUB_02]" in extraction["summary"]
+    assert "[IP_PUB_03]" in extraction["summary"]
+    assert "[EMAIL_01]" in extraction["summary"]
+
+    # Same single-context guarantee for gemma4_delegate()
+    def fake_delegate(self: GemmaWorker, task: str, *, context: str | None = None) -> str:
+        assert context is not None
+        assert "[IP_PUB_01]" in context
+        assert "[IP_PUB_02]" in context
+        return "Summary: [IP_PUB_01] contacted 8.8.8.8 and 9.9.9.9"
+
+    monkeypatch.setattr(GemmaWorker, "delegate", fake_delegate)
+    delegated = gemma4_delegate("Summarize relays", file_path=str(advisory))
+    assert "[IP_PUB_01] contacted [IP_PUB_02] and [IP_PUB_03]" in delegated

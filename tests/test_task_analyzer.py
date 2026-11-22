@@ -56,3 +56,62 @@ def test_analyze_task_artifacts_recognizes_artex_intent_ids(tmp_path: Path) -> N
     assert result["unique_task_ids"] == 1
     assert result["retry_mutation_chains"][0]["task_id"] == "i12345"
     assert result["retry_mutation_chains"][0]["resolved"] is True
+
+
+def test_analyze_task_artifacts_plain_text_tool_and_cross_intent_retry_chains(tmp_path: Path) -> None:
+    plain_log = tmp_path / "plain_intents.log"
+    plain_log.write_text(
+        "\n".join(
+            [
+                '2026-11-22T12:00:01Z intent=i104 tool=nuclei cmd="nuclei -u hxxp://target.local" status=403',
+                '2026-11-22T12:00:05Z intent=i105 tool=curl cmd="curl hxxp://target.local/admin" status=200',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    res = analyze_task_artifacts(plain_log, sanitize=False)
+    assert res["total_task_events"] == 2
+    assert res["sample_tasks"][0]["tool"] == "nuclei"
+    assert res["sample_tasks"][0]["command"] == "nuclei -u hxxp://target.local"
+    assert res["sample_tasks"][1]["tool"] == "curl"
+    assert res["sample_tasks"][1]["command"] == "curl hxxp://target.local/admin"
+    assert len(res["retry_mutation_chains"]) == 1
+    chain = res["retry_mutation_chains"][0]
+    assert chain["task_id"] == "i104->i105"
+    assert chain["attempts"] == 2
+    assert chain["resolved"] is True
+
+    # Interleaved cross-intent retries across two different targets must BOTH be detected cleanly
+    interleaved = tmp_path / "interleaved.log"
+    interleaved.write_text(
+        "\n".join(
+            [
+                '2026-11-22T12:01:01Z intent=i301 tool=nuclei cmd="nuclei -u https://alpha.corp.local" status=403',
+                '2026-11-22T12:01:02Z intent=i401 tool=nuclei cmd="nuclei -u https://beta.corp.local" status=403',
+                '2026-11-22T12:01:03Z intent=i302 tool=curl cmd="curl https://alpha.corp.local/admin" status=200',
+                '2026-11-22T12:01:04Z intent=i402 tool=curl cmd="curl https://beta.corp.local/admin" status=200',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ires = analyze_task_artifacts(interleaved, sanitize=False)
+    chain_ids = {c["task_id"] for c in ires["retry_mutation_chains"]}
+    assert chain_ids == {"i301->i302", "i401->i402"}
+    assert all(c["resolved"] is True for c in ires["retry_mutation_chains"])
+
+    # Negative check: sequential events on DIFFERENT targets (even with same tool) must NOT falsely merge
+    unrelated = tmp_path / "unrelated.log"
+    unrelated.write_text(
+        "\n".join(
+            [
+                '2026-11-22T12:02:01Z intent=i501 tool=curl cmd="curl https://host-a.corp.local/login" status=403',
+                '2026-11-22T12:02:04Z intent=i502 tool=curl cmd="curl https://host-b.corp.local/health" status=200',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ures = analyze_task_artifacts(unrelated, sanitize=False)
+    assert ures["retry_mutation_chains"] == []

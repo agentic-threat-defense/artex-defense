@@ -25,8 +25,16 @@ TASK_ID_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 INTENT_FILENAME_RE = re.compile(r"^(i\d{1,8})\b", re.IGNORECASE)
+TOOL_LINE_RE = re.compile(
+    r"\b(?:tool|agent|worker)\s*[:=]\s*['\"]?(?P<tool>[A-Za-z0-9_.\-/]+)",
+    re.IGNORECASE,
+)
 CMD_LINE_RE = re.compile(
-    r"(?:cmd|command|exec|tool)\s*[:=]\s*['\"]?(?P<cmd>.+?)(?:['\"]?(?:\s+(?:status|exit|result)=|$))",
+    r"\b(?:cmd|command|exec)\s*[:=]\s*(?:\"([^\r\n\"]+)\"|'([^\r\n']+)'|(?P<cmd>.+?)(?:\s+(?:status|exit|result|tool|agent|worker|intent|task[_-]?id)=|$))",
+    re.IGNORECASE,
+)
+TARGET_TOKEN_RE = re.compile(
+    r"(?:hxxps?|https?)://([A-Za-z0-9.\[\]\-:]+)|\b(?:\d{1,3}\.){3}\d{1,3}\b",
     re.IGNORECASE,
 )
 FAIL_RE = re.compile(r"\b(fail|failed|error|denied|401|403|404|timeout|blocked|rejected)\b", re.IGNORECASE)
@@ -153,19 +161,23 @@ def analyze_task_artifacts(
                 tid = (
                     (tid_m.group("tid") or tid_m.group("intent")) if tid_m else file_intent
                 ) or f"task-{idx:04d}"
+                tool_m = TOOL_LINE_RE.search(line)
                 cmd_m = CMD_LINE_RE.search(line)
+                parsed_cmd = ""
+                if cmd_m:
+                    parsed_cmd = (cmd_m.group(1) or cmd_m.group(2) or cmd_m.group("cmd") or "").strip()
                 outcome = "failed" if FAIL_RE.search(line) else ("succeeded" if SUCCESS_RE.search(line) else "unknown")
                 tasks.append(
                     {
                         "task_id": tid,
-                        "tool": "",
-                        "command": cmd_m.group("cmd").strip()[:240] if cmd_m else line[:240],
+                        "tool": tool_m.group("tool").strip()[:80] if tool_m else "",
+                        "command": (parsed_cmd or line)[:240],
                         "outcome": outcome,
                         "snippet": line[:200],
                     }
                 )
 
-    # Identify failure -> retry/success mutation chains on the same TaskID or adjacent tasks
+    # Identify failure -> retry/success mutation chains on the same TaskID or adjacent sequential intents
     retry_chains: list[dict[str, Any]] = []
     by_task: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
@@ -176,9 +188,11 @@ def analyze_task_artifacts(
                 tool_counts[tok.strip()] += 1
         by_task.setdefault(t["task_id"], []).append(t)
 
+    grouped_tids: set[str] = set()
     for tid, entries in by_task.items():
         outcomes = [e["outcome"] for e in entries]
         if "failed" in outcomes and len(entries) >= 2:
+            grouped_tids.add(tid)
             retry_chains.append(
                 {
                     "task_id": tid,
@@ -186,6 +200,68 @@ def analyze_task_artifacts(
                     "resolved": "succeeded" in outcomes,
                     "sequence": [
                         {"outcome": e["outcome"], "command": e["command"]} for e in entries[:8]
+                    ],
+                }
+            )
+
+    def _task_targets(entry: dict[str, Any]) -> set[str]:
+        blob = f"{entry.get('command', '')} {entry.get('snippet', '')}"
+        out: set[str] = set()
+        for m in TARGET_TOKEN_RE.finditer(blob):
+            tok = (m.group(1) or m.group(0)).lower().replace("[.]", ".")
+            if tok:
+                out.add(tok)
+        return out
+
+    def _task_tool_family(entry: dict[str, Any]) -> set[str]:
+        blob = f"{entry.get('tool', '')} {entry.get('command', '')}".lower()
+        return {tok.strip() for tok in TOOL_TOKENS if tok in blob}
+
+    # Secondary sliding-window detector for sequential cross-intent mutations (e.g. i104 failed -> i105 retry)
+    consumed_indices: set[int] = set()
+    for i, cur in enumerate(tasks):
+        if i in consumed_indices or cur["outcome"] != "failed" or cur["task_id"] in grouped_tids:
+            continue
+        cur_targets = _task_targets(cur)
+        cur_tools = _task_tool_family(cur)
+        chain = [cur]
+        chain_indices = [i]
+        last_matched_idx = i
+        j = i + 1
+        while j < len(tasks) and (j - last_matched_idx) <= 2 and len(chain) < 8:
+            if j in consumed_indices:
+                j += 1
+                continue
+            nxt = tasks[j]
+            if nxt["task_id"] == cur["task_id"] or nxt["task_id"] in grouped_tids:
+                j += 1
+                continue
+            nxt_targets = _task_targets(nxt)
+            nxt_tools = _task_tool_family(nxt)
+            if cur_targets and nxt_targets:
+                related = bool(cur_targets & nxt_targets)
+            else:
+                related = bool(cur_tools and (cur_tools & nxt_tools))
+            if related:
+                chain.append(nxt)
+                chain_indices.append(j)
+                last_matched_idx = j
+                if nxt["outcome"] == "succeeded":
+                    break
+            j += 1
+        if len(chain) >= 2:
+            chain_id = f"{chain[0]['task_id']}->{chain[-1]['task_id']}"
+            for idx_item in chain_indices:
+                consumed_indices.add(idx_item)
+            for c_item in chain:
+                grouped_tids.add(c_item["task_id"])
+            retry_chains.append(
+                {
+                    "task_id": chain_id,
+                    "attempts": len(chain),
+                    "resolved": any(c_item["outcome"] == "succeeded" for c_item in chain),
+                    "sequence": [
+                        {"outcome": c_item["outcome"], "command": c_item["command"]} for c_item in chain[:8]
                     ],
                 }
             )

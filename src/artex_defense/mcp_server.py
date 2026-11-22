@@ -18,7 +18,7 @@ except ImportError:  # mcp 1.x compatibility
     from mcp.server.fastmcp import FastMCP as MCPServer  # type: ignore[no-redef]
 
 from .detectors import correlate_kill_chains, scan_telemetry_file
-from .sanitizer import SanitizerContext, sanitize_payload, sanitize_text
+from .sanitizer import SanitizerContext
 from .worker import GemmaWorker
 
 mcp = MCPServer("artex-gemma4")
@@ -148,14 +148,15 @@ def gemma4_extract_intel(file_path: str, sanitize: bool = True) -> str:
     """Summarize a local threat-intel report/advisory via local Gemma 4 and extract structured IOCs, TTPs, and detection ideas."""
     safe_path = _resolve_safe_mcp_path(file_path, max_bytes=MAX_MCP_TEXT_BYTES)
     do_sanitize = _effective_sanitize(sanitize)
+    ctx = SanitizerContext() if do_sanitize else None
     text = safe_path.read_text(encoding="utf-8", errors="replace")
-    src_name = sanitize_text(safe_path.name) if do_sanitize else safe_path.name
-    if do_sanitize:
-        text = sanitize_text(text)
+    src_name = ctx.sanitize_str(safe_path.name) if ctx else safe_path.name
+    if ctx:
+        text = ctx.sanitize_str(text)
     worker = GemmaWorker()
     extraction = worker.extract_intel(text, source_name=src_name).model_dump(mode="json")
-    if do_sanitize:
-        extraction = sanitize_payload(extraction)
+    if ctx:
+        extraction = ctx.sanitize_obj(extraction)
     return json.dumps(
         {
             "security_notice": UNTRUSTED_OUTPUT_NOTE,
@@ -174,15 +175,16 @@ def gemma4_delegate(
 ) -> str:
     """Delegate a bounded local defensive analysis, log summarization, or rule-drafting task to local Gemma 4."""
     do_sanitize = _effective_sanitize(sanitize)
+    ctx = SanitizerContext() if do_sanitize else None
     context: str | None = None
     if file_path:
         safe_path = _resolve_safe_mcp_path(file_path, max_bytes=MAX_MCP_TEXT_BYTES)
         raw_ctx = safe_path.read_text(encoding="utf-8", errors="replace")
-        context = sanitize_text(raw_ctx) if do_sanitize else raw_ctx
+        context = ctx.sanitize_str(raw_ctx) if ctx else raw_ctx
     worker = GemmaWorker()
     result = worker.delegate(task, context=context)
-    if do_sanitize:
-        result = sanitize_text(result)
+    if ctx:
+        result = ctx.sanitize_str(result)
     return f"[{UNTRUSTED_OUTPUT_NOTE}]\n\n{result}"
 
 
