@@ -125,3 +125,10 @@ def test_watchtower_dedup_defanging_and_optional_local_llm_gap_analysis(tmp_path
         assert second["llm_gap_analysis_ran"] is False
         assert second["digest_path"] is None
         assert mock_llm.call_count == 1
+
+
+def test_parse_release_atom_category_preserved() -> None:
+    rel_items = parse_feed_xml(SAMPLE_ATOM, source="SigmaHQ/sigma [Releases]", always_relevant=True, category="release")
+    assert len(rel_items) == 1
+    assert rel_items[0].category == "release"
+    assert rel_items[0].always_relevant is True

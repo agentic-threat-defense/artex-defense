@@ -82,19 +82,31 @@ class FeedSpec:
     name: str
     url: str
     always_relevant: bool = False
+    category: str = "advisory"  # "advisory" | "commit" | "release"
 
 
 DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
-    # High-signal ARTEX & Offensive-AI Detection Repos (always_relevant=True)
-    FeedSpec("ThreatDefence/agentic-attack-detections", "https://github.com/ThreatDefence/agentic-attack-detections/commits/main.atom", True),
-    FeedSpec("theori-io/aipt-detections", "https://github.com/theori-io/aipt-detections/commits/main.atom", True),
-    FeedSpec("jiwoochris/artex-global", "https://github.com/jiwoochris/artex-global/commits/main.atom", True),
-    FeedSpec("ja1sh/artex-defense", "https://github.com/ja1sh/artex-defense/commits/main.atom", True),
-    FeedSpec("logsexe/artex-detection-as-code", "https://github.com/logsexe/artex-detection-as-code/commits/main.atom", True),
-    # Filtered Upstream Detection & Independent Researcher Feeds
-    FeedSpec("SigmaHQ/sigma (master)", "https://github.com/SigmaHQ/sigma/commits/master.atom", False),
+    # High-signal ARTEX & Offensive-AI Detection Repos (commits, always_relevant=True)
+    FeedSpec("ThreatDefence/agentic-attack-detections", "https://github.com/ThreatDefence/agentic-attack-detections/commits/main.atom", True, "commit"),
+    FeedSpec("theori-io/aipt-detections", "https://github.com/theori-io/aipt-detections/commits/main.atom", True, "commit"),
+    FeedSpec("jiwoochris/artex-global", "https://github.com/jiwoochris/artex-global/commits/main.atom", True, "commit"),
+    FeedSpec("ja1sh/artex-defense", "https://github.com/ja1sh/artex-defense/commits/main.atom", True, "commit"),
+    FeedSpec("logsexe/artex-detection-as-code", "https://github.com/logsexe/artex-detection-as-code/commits/main.atom", True, "commit"),
+    # Filtered AI-Agent & Community Detection Repos (commits, gated by WATCHTOWER_RELEVANCE_RE)
+    FeedSpec("Agent-Threat-Rule/agent-threat-rules", "https://github.com/Agent-Threat-Rule/agent-threat-rules/commits/main.atom", False, "commit"),
+    FeedSpec("agentshield-ai/sigma-ai", "https://github.com/agentshield-ai/sigma-ai/commits/main.atom", False, "commit"),
+    FeedSpec("SigmaHQ/sigma (master)", "https://github.com/SigmaHQ/sigma/commits/master.atom", False, "commit"),
+    # Major Detection Rule-Pack Releases (highlighted in their own digest section)
+    FeedSpec("SigmaHQ/sigma [Releases]", "https://github.com/SigmaHQ/sigma/releases.atom", True, "release"),
+    FeedSpec("ThreatDefence/agentic-attack-detections [Releases]", "https://github.com/ThreatDefence/agentic-attack-detections/releases.atom", True, "release"),
+    FeedSpec("theori-io/aipt-detections [Releases]", "https://github.com/theori-io/aipt-detections/releases.atom", True, "release"),
+    FeedSpec("jiwoochris/artex-global [Releases]", "https://github.com/jiwoochris/artex-global/releases.atom", True, "release"),
+    FeedSpec("ja1sh/artex-defense [Releases]", "https://github.com/ja1sh/artex-defense/releases.atom", True, "release"),
+    FeedSpec("logsexe/artex-detection-as-code [Releases]", "https://github.com/logsexe/artex-detection-as-code/releases.atom", True, "release"),
+    FeedSpec("Agent-Threat-Rule/agent-threat-rules [Releases]", "https://github.com/Agent-Threat-Rule/agent-threat-rules/releases.atom", True, "release"),
+    FeedSpec("agentshield-ai/sigma-ai [Releases]", "https://github.com/agentshield-ai/sigma-ai/releases.atom", True, "release"),
+    # Independent Researchers & Vendor / Cloud / Identity Threat Intelligence
     FeedSpec("Andrea Palmieri (andpalmier.com)", "https://andpalmier.com/index.xml", False),
-    # Vendor, Cloud, Identity & Offensive-AI Research
     FeedSpec("Unit 42", "https://unit42.paloaltonetworks.com/feed/"),
     FeedSpec("Cisco Talos", "https://blog.talosintelligence.com/rss/"),
     FeedSpec("Cloudflare Security", "https://blog.cloudflare.com/tag/security/rss/"),
@@ -156,6 +168,7 @@ class FeedItem:
     published: str
     summary: str
     always_relevant: bool = False
+    category: str = "advisory"
 
 
 def validate_feed_url(url: str) -> None:
@@ -186,7 +199,13 @@ def _local_tag(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower() if "}" in tag else tag.lower()
 
 
-def parse_feed_xml(xml_text: str, *, source: str, always_relevant: bool = False) -> list[FeedItem]:
+def parse_feed_xml(
+    xml_text: str,
+    *,
+    source: str,
+    always_relevant: bool = False,
+    category: str = "advisory",
+) -> list[FeedItem]:
     """Parse RSS 2.0 or Atom XML into normalized FeedItem entries with DTD/entity & size guards."""
     if len(xml_text.encode("utf-8", errors="ignore")) > MAX_FEED_XML_BYTES:
         raise ValueError(f"Watchtower rejected oversized XML feed from {source} (>{MAX_FEED_XML_BYTES} bytes)")
@@ -222,7 +241,7 @@ def parse_feed_xml(xml_text: str, *, source: str, always_relevant: bool = False)
                     summary = _strip_html(child.text)
             if title or link:
                 fid = hashlib.sha256(f"{source}|{link}|{title}".encode("utf-8")).hexdigest()[:24]
-                items.append(FeedItem(fid, source, title, link, published, summary, always_relevant))
+                items.append(FeedItem(fid, source, title, link, published, summary, always_relevant, category))
     else:
         # RSS 2.0 / RDF
         for elem in root.iter():
@@ -244,7 +263,7 @@ def parse_feed_xml(xml_text: str, *, source: str, always_relevant: bool = False)
                     summary = _strip_html(child.text)
             if title or link:
                 fid = hashlib.sha256(f"{source}|{link}|{title}".encode("utf-8")).hexdigest()[:24]
-                items.append(FeedItem(fid, source, title, link, published, summary, always_relevant))
+                items.append(FeedItem(fid, source, title, link, published, summary, always_relevant, category))
     return items
 
 
@@ -355,7 +374,10 @@ def run_watchtower(
                     if len(resp.content) > MAX_FEED_XML_BYTES:
                         raise ValueError(f"Feed response exceeded {MAX_FEED_XML_BYTES} bytes")
                     parsed = parse_feed_xml(
-                        resp.text, source=spec.name, always_relevant=spec.always_relevant
+                        resp.text,
+                        source=spec.name,
+                        always_relevant=spec.always_relevant,
+                        category=spec.category,
                     )[:max_items_per_feed]
                     fetched_items.extend(parsed)
                 except Exception as exc:
@@ -375,14 +397,18 @@ def run_watchtower(
         else:
             new_ignored += 1
 
-    # Prioritize keyword-matched vendor/CERT advisories ahead of raw upstream GitHub commit streams
-    new_relevant.sort(key=lambda it: (1 if it.always_relevant else 0))
+    # Prioritize major rule-pack releases first, then keyword-matched advisories, then raw commits
+    _cat_rank = {"release": 0, "advisory": 1, "commit": 2}
+    new_relevant.sort(key=lambda it: (_cat_rank.get(it.category, 1), 1 if (it.category != "release" and it.always_relevant) else 0))
+
+    new_releases = [it for it in new_relevant if it.category == "release"]
+    new_advisories = [it for it in new_relevant if it.category != "release"]
 
     llm_gap_analysis: str | None = None
     if with_gemma4 and new_relevant:
         coverage_ctx = _inventory_existing_coverage(rules_dir)
         fenced_entries = "\n\n".join(
-            f"- [{it.source}] {it.title} ({it.published})\n  URL: {sanitize_text(it.link)}\n  Summary: {sanitize_text(it.summary)}"
+            f"- [{it.source}] ({it.category}) {it.title} ({it.published})\n  URL: {sanitize_text(it.link)}\n  Summary: {sanitize_text(it.summary)}"
             for it in new_relevant[:max_llm_items]
         )
         prompt = (
@@ -401,6 +427,17 @@ def run_watchtower(
         except GemmaWorkerError as exc:
             feed_errors.append(f"local_gemma4: {exc}")
 
+    def _render_item_block(it: FeedItem) -> list[str]:
+        block = [
+            f"### [{it.source}] {sanitize_text(it.title)}",
+            f"- **Published:** {it.published or 'unknown'}",
+            f"- **Reference (defanged):** `{sanitize_text(it.link)}`",
+        ]
+        if it.summary:
+            block.append(f"- **Excerpt:** {sanitize_text(it.summary)}")
+        block.append("")
+        return block
+
     digest_path: Path | None = None
     if new_relevant:
         ts_slug = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%SZ")
@@ -411,21 +448,21 @@ def run_watchtower(
             "> **Review Required:** Automated public-feed triage only. Never auto-merge detections or browse "
             "suspect attacker infrastructure from bare metal.",
             "",
-            f"- **New Relevant Items:** {len(new_relevant)}",
+            f"- **New Rule-Pack Releases:** {len(new_releases)}",
+            f"- **New Advisories & Commits:** {len(new_advisories)}",
             f"- **Already Seen (Skipped):** {already_seen}",
             f"- **New Unrelated (Filtered):** {new_ignored}",
             f"- **Feed Errors:** {len(feed_errors)}",
             "",
-            "## New Relevant Advisories & Upstream Commits",
-            "",
         ]
-        for it in new_relevant:
-            lines.append(f"### [{it.source}] {sanitize_text(it.title)}")
-            lines.append(f"- **Published:** {it.published or 'unknown'}")
-            lines.append(f"- **Reference (defanged):** `{sanitize_text(it.link)}`")
-            if it.summary:
-                lines.append(f"- **Excerpt:** {sanitize_text(it.summary)}")
-            lines.append("")
+        if new_releases:
+            lines.extend(["## Major Detection Rule-Pack Releases", ""])
+            for it in new_releases:
+                lines.extend(_render_item_block(it))
+        if new_advisories:
+            lines.extend(["## New Relevant Advisories & Upstream Commits", ""])
+            for it in new_advisories:
+                lines.extend(_render_item_block(it))
         if llm_gap_analysis:
             lines.extend(["---", "", "## Local LLM Coverage Gap Analysis", "", llm_gap_analysis, ""])
         if feed_errors:
@@ -438,6 +475,7 @@ def run_watchtower(
         "total_fetched": len(fetched_items),
         "already_seen": already_seen,
         "new_ignored": new_ignored,
+        "new_releases_count": len(new_releases),
         "new_relevant_count": len(new_relevant),
         "new_relevant_titles": [f"[{it.source}] {it.title}" for it in new_relevant],
         "llm_gap_analysis_ran": llm_gap_analysis is not None,
