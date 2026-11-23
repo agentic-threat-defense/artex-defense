@@ -52,5 +52,9 @@ alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"ARTEX-DEFENSE Outbound TLS to
 # 12. Rapid Automated Nuclei / HeadlessChrome / Norma Probing Against Edge VPN/Gateway URIs
 alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Rapid Automated Nuclei/HeadlessChrome/Norma Probing Against Edge VPN/Gateway URI"; flow:to_server,established; http.uri; content:"/"; pcre:"/^\/(?:\+CSCOE\+\/|\+webvpn\+\/|vpn\/|nf\/auth\/|logon\/LogonPoint\/|p\/u\/|nitro\/v1|global-protect\/|ssl-vpn\/|my\.policy|tmui\/|mgmt\/tm\/)/i"; http.user_agent; pcre:"/(?:Nuclei|HeadlessChrome|norma\/[0-9]|norma-agent)/i"; detection_filter:track by_src, count 5, seconds 30; classtype:web-application-attack; sid:9100005; rev:2;)
 
-# 13. SOAP OSExecute Remote Command Execution Request Envelope (SAPControl / Management SOAP Abuse)
+# 13. SOAP OSExecute & SAPControl Sensitive Read Envelopes + Apache .htaccess PHP Re-Activation Upload
 alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE SOAP OSExecute Remote Command Execution Request"; flow:to_server,established; http.request_body; content:"OSExecute"; nocase; pcre:"/<(?:[a-z0-9_-]+\x3a)?OSExecute(?:\s|>|\/)/i"; classtype:web-application-attack; sid:9100018; rev:1;)
+
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE SAPControl SOAP Credential/Config Read Probe (GetEnvironment/ReadConfigFile/ReadLogFile)"; flow:to_server,established; http.request_body; content:"Envelope"; nocase; pcre:"/<(?:[a-z0-9_-]+\x3a)?(?:GetEnvironment|ReadConfigFile|ReadLogFile)(?:\s|>|\/)/i"; classtype:attempted-recon; sid:9100019; rev:1;)
+
+alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Apache .htaccess PHP Execution Re-Activation Upload"; flow:to_server,established; http.request_body; content:"x-httpd-php"; nocase; pcre:"/(?:SetHandler|AddType)\s+application\/x-httpd-php/i"; classtype:web-application-attack; sid:9100020; rev:1;)

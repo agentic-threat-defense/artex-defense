@@ -93,13 +93,16 @@ SYSTEMD_UNIT_RELPATHS: tuple[str, ...] = (
 )
 SYSTEMD_EXECSTART_RE = re.compile(r"^\s*ExecStart\s*=\s*[-+@!:]*\s*(.+)$", re.IGNORECASE)
 SYSTEMD_LINE_CONT_RE = re.compile(r"\\\r?\n[ \t]*")
+# Case-sensitive `-R` with explicit port-forward bind target (avoids FPs on remote `ssh host "chmod -R / cp -r"`),
+# while matching quoted ssh binaries (`"/usr/bin/ssh"`), compact `-fNR8080:127.0.0.1:22`, and `-oRemoteForward=`.
 SYSTEMD_SSH_REVERSE_RE = re.compile(
-    r"(?:^|[/\s\"'])ssh(?=\s|$).*(?:\s-[A-Za-z0-9]*R(?=\s|$|\d|:)|(?:^|[\s\"']|-o\s*)RemoteForward(?:\s|=|$))",
-    re.IGNORECASE,
+    r"(?:^|[/\s\"'])ssh[\"']?(?=\s|$).*(?:\s-[A-Za-z0-9]*R(?:\s*(?:\[[^\]]+\]:|[A-Za-z0-9_.*-]*:)?\d{2,5}:)|(?:^|[\s\"']|-o\s*)(?i:RemoteForward)(?:\s|=|$))"
 )
 SYSTEMD_VOLATILE_BIN_RE = re.compile(r"(?:^|[\s\"'=])(?:/tmp/|/var/tmp/|/dev/shm/)", re.IGNORECASE)
+# Scope `socks*` strictly to standalone executables/scripts (never `--socks5` CLI flags or `socks5://` proxy URLs)
 SYSTEMD_TUNNEL_TOOL_RE = re.compile(
-    r"\b(?:chisel|ligolo-agent|scopeweaver|antifox|artex-(?:server|worker|agent))\b",
+    r"(?:\b(?:chisel|ligolo-agent|scopeweaver|antifox|artex-(?:server|worker|agent)|sshtun\d*)\b|"
+    r"(?:^|[\s/\"'])(?:socks(?:5|4|proxy|node|srv)\.(?:py|sh|pl|js|bin|exe)|socks(?:node|srv|proxy)|socks[45])(?=\s|$|[\"']))",
     re.IGNORECASE,
 )
 

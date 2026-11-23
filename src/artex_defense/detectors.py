@@ -1189,12 +1189,29 @@ SOAP_OSEXECUTE_RE = re.compile(
     r"<(?:[a-z0-9_-]+:)?OSExecute(?:\s|>|/)|/SAPControl\b.*OSExecute|SOAPAction[\"':=\s]+[^\s\"']*OSExecute",
     re.IGNORECASE,
 )
+SOAP_SAPCONTROL_SENSITIVE_READ_RE = re.compile(
+    r"(?:<(?:[a-z0-9_-]+:)?Envelope\b|/SAPControl\b)[\s\S]{0,1200}<(?:[a-z0-9_-]+:)?(?:GetEnvironment|ReadConfigFile|ReadLogFile)(?:\s|>|/)",
+    re.IGNORECASE,
+)
+HTACCESS_PHP_REACTIVATION_RE = re.compile(
+    r"(?:php_flag\s+engine\s+on|(?:SetHandler|AddType)\s+application/x-httpd-php)",
+    re.IGNORECASE,
+)
+# Strictly match the Kubernetes ServiceAccount bearer token itself (never public /ca.crt or /namespace)
+K8S_SA_TOKEN_READ_RE = re.compile(
+    r"/var/run/secrets/kubernetes\.io/serviceaccount/token(?=$|[\s\"'|;&\)])",
+    re.IGNORECASE,
+)
+K8S_SA_WEB_CONTEXT_RE = re.compile(
+    r"(?:www-data|apache2?|nginx|httpd|tomcat|php(?:-fpm)?|shell_exec|passthru|system\s*\()",
+    re.IGNORECASE,
+)
 K8S_INLINE_STAGING_PAYLOAD_RE = re.compile(
-    r"(?:\bbase64\s+(?:-d|--decode)\b|\bntlmrelayx\b|\bpetitpotam\b|\befsrpc\b|\bcoercer\b|\bsmbserver\.py\b|\bchisel\s+client\b)",
+    r"(?:\bbase64\s+(?:-d|--decode)\b|\bchroot\s+/|\bnsenter\b|\bxp_dirtree\b|\bxp_subdirs\b|\bxp_cmdshell\b|\bntlmrelayx\b|\bpetitpotam\b|\befsrpc\b|\bcoercer\b|\bsmbserver\.py\b|\bchisel\s+client\b)",
     re.IGNORECASE,
 )
 K8S_OFFENSIVE_TOOL_RE = re.compile(
-    r"(?:\bntlmrelayx\b|\bpetitpotam\b|\befsrpc\b|\bcoercer\b|\bsmbserver\.py\b|\bchisel\s+client\b)",
+    r"(?:\bxp_dirtree\b|\bxp_subdirs\b|\bxp_cmdshell\b|\bntlmrelayx\b|\bpetitpotam\b|\befsrpc\b|\bcoercer\b|\bsmbserver\.py\b|\bchisel\s+client\b)",
     re.IGNORECASE,
 )
 K8S_BENIGN_DAEMONSET_IMAGES: tuple[str, ...] = (
@@ -1523,12 +1540,32 @@ def _inspect_window_signals(
             indicators.add("jwt_alg_none_header")
 
         raw_obj = _parse_raw_dict(ev)
-        soap_blob = searchable + " " + " ".join(
-            str(raw_obj.get(k) or "") for k in ("request_body", "body", "payload", "http_body")
-        )
+        raw_body = " ".join(str(raw_obj.get(k) or "") for k in ("request_body", "body", "payload", "http_body")).strip()
+        soap_blob = searchable + (" " + raw_body if raw_body else "")
         if SOAP_OSEXECUTE_RE.search(soap_blob):
             reasons.add("web_ssrf_or_upload_webshell")
             indicators.add("soap_osexecute_rce")
+        elif SOAP_SAPCONTROL_SENSITIVE_READ_RE.search(soap_blob):
+            reasons.add("web_ssrf_or_upload_webshell")
+            indicators.add("sapcontrol_soap_secret_read")
+        # Scope .htaccess PHP re-activation away from JSON API/docs/ticket prose bodies
+        body_is_json = raw_body.startswith(("{", "["))
+        htaccess_upload_ctx = (
+            ".htaccess" in ev_path.lower()
+            or "filename=" in raw_body.lower()
+            or (bool(raw_body) and not body_is_json)
+            or (not raw_body and not body_is_json)
+        )
+        if htaccess_upload_ctx and HTACCESS_PHP_REACTIVATION_RE.search(raw_body or searchable):
+            reasons.add("web_ssrf_or_upload_webshell")
+            indicators.add("htaccess_php_handler_injection")
+        if K8S_SA_TOKEN_READ_RE.search(soap_blob):
+            sa_ctx = f"{ev.get('actor', '')} {ev.get('parent_process', '')} {ev.get('process', '')} {raw_body}"
+            if K8S_SA_WEB_CONTEXT_RE.search(sa_ctx):
+                reasons.add("config_and_secret_file_harvest_burst")
+                indicators.add("k8s_serviceaccount_token_access")
+            else:
+                sensitive_files_touched.add("k8s_serviceaccount_token")
 
         k8s_hit = _check_k8s_privileged_pod_staging(ev, raw_obj, searchable)
         if k8s_hit:

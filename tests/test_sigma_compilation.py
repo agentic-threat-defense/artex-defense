@@ -404,3 +404,124 @@ def test_k8s_privileged_pod_staging_scoped_msedge_dll_and_soap_osexecute_with_ze
     # 5. Sigma YAML matches raw K8s audit JSON directly (both containers & initContainers; skips benign DaemonSet)
     k8s_rule = yaml.safe_load((RULES_DIR / "artex_k8s_privileged_pod_staging_and_coercion.yml").read_text(encoding="utf-8"))
     assert evaluate_sigma_rule_on_events(k8s_rule, [benign_k8s_native, k8s_tp_native, k8s_init_event]) == 2
+
+    # 6. Gap-closure regressions: K8s chroot host-escape WITHOUT base64, SAPControl GetEnvironment, .htaccess PHP, & K8s SA token read
+    gap_events = [
+        {
+            "kind": "Event",
+            "apiVersion": "audit.k8s.io/v1",
+            "requestReceivedTimestamp": "2026-11-22T22:08:00.000000Z",
+            "verb": "create",
+            "user": {"username": "ops-pivot"},
+            "sourceIPs": ["198.51.100.79"],
+            "objectRef": {"resource": "pods", "namespace": "default", "name": "chroot-direct"},
+            "requestObject": {
+                "kind": "Pod",
+                "metadata": {"name": "chroot-direct"},
+                "spec": {
+                    "hostPID": True,
+                    "volumes": [{"name": "r", "hostPath": {"path": "/"}}],
+                    "containers": [
+                        {
+                            "name": "esc",
+                            "image": "alpine:3.20",
+                            "securityContext": {"privileged": True},
+                            "command": ["sh", "-c"],
+                            "args": ["chroot /host /bin/sh -c 'id'"],
+                        }
+                    ],
+                },
+            },
+        },
+        {
+            "timestamp": "2026-11-22T22:08:10.000000+0000",
+            "event_type": "http",
+            "src_ip": "198.51.100.89",
+            "dest_ip": "10.0.0.25",
+            "dest_port": 50013,
+            "http": {
+                "hostname": "sap-app.corp.local",
+                "url": "/SAPControl",
+                "http_method": "POST",
+                "status": 200,
+                "http_request_body_printable": "<SOAP-ENV:Envelope><SOAP-ENV:Body><m:GetEnvironment/></SOAP-ENV:Body></SOAP-ENV:Envelope>",
+            },
+        },
+        {
+            "timestamp": "2026-11-22T22:08:20.000Z",
+            "source_host": "198.51.100.90",
+            "actor": "198.51.100.90",
+            "event_type": "http",
+            "surface": "web_portal",
+            "http_method": "POST",
+            "http_path": "/sites/default/files/sub/.htaccess",
+            "request_body": "php_flag engine on\nSetHandler application/x-httpd-php\n",
+            "status_code": 200,
+        },
+        {
+            "timestamp": "2026-11-22T22:08:25.000Z",
+            "source_host": "web-pod-01",
+            "actor": "www-data",
+            "event_type": "process",
+            "surface": "endpoint",
+            "process": "/bin/sh",
+            "command_line": "cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+            "status_code": 0,
+        },
+    ]
+    gap_path = tmp_path / "gap_closures.jsonl"
+    gap_path.write_text("\n".join(json.dumps(e) for e in gap_events) + "\n", encoding="utf-8")
+    gap_cands = scan_telemetry_file(gap_path)
+    gap_reasons = {r for c in gap_cands for r in c.reasons}
+    assert "k8s_privileged_pod_staging" in gap_reasons
+    assert "web_ssrf_or_upload_webshell" in gap_reasons
+    assert "config_and_secret_file_harvest_burst" in gap_reasons
+    assert evaluate_sigma_rule_on_events(k8s_rule, [gap_events[0]]) == 1
+
+    # 7. Benign enterprise zero-FP regressions for K8s /ca.crt, /namespace, Prometheus, and JSON docs mentioning .htaccess
+    benign_gap_fps = [
+        {
+            "timestamp": "2026-11-22T22:09:00.000Z",
+            "source_host": "app-pod-01",
+            "actor": "appuser",
+            "event_type": "process",
+            "surface": "endpoint",
+            "process": "/bin/sh",
+            "command_line": "curl --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt https://kubernetes.default.svc/healthz",
+            "status_code": 0,
+        },
+        {
+            "timestamp": "2026-11-22T22:09:05.000Z",
+            "source_host": "app-pod-02",
+            "actor": "appuser",
+            "event_type": "process",
+            "surface": "endpoint",
+            "process": "/bin/sh",
+            "command_line": "NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)",
+            "status_code": 0,
+        },
+        {
+            "timestamp": "2026-11-22T22:09:10.000Z",
+            "source_host": "mon-pod-01",
+            "actor": "prometheus",
+            "event_type": "process",
+            "surface": "endpoint",
+            "process": "/bin/prometheus",
+            "command_line": "/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --web.ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+            "status_code": 0,
+        },
+        {
+            "timestamp": "2026-11-22T22:09:15.000Z",
+            "source_host": "198.51.100.20",
+            "actor": "doc_editor",
+            "event_type": "http",
+            "surface": "web_portal",
+            "http_method": "POST",
+            "http_path": "/api/docs/articles",
+            "request_body": '{"title":"Legacy Apache Fix","body":"Remove php_flag engine on or SetHandler application/x-httpd-php from .htaccess"}',
+            "status_code": 200,
+        },
+    ]
+    benign_gap_path = tmp_path / "benign_gap_fps.jsonl"
+    benign_gap_path.write_text("\n".join(json.dumps(e) for e in benign_gap_fps) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(benign_gap_path) == []

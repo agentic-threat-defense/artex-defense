@@ -588,7 +588,9 @@ def _flatten_suricata_eve_record(record: dict[str, Any]) -> tuple[dict[str, Any]
             flat["status_code"] = http_obj["status"]
         if http_obj.get("ja4h") and not flat.get("ja4h"):
             flat["ja4h"] = http_obj["ja4h"]
-        if http_obj.get("http_request_body") and not flat.get("request_body"):
+        if http_obj.get("http_request_body_printable") and not flat.get("request_body"):
+            flat["request_body"] = http_obj["http_request_body_printable"]
+        elif http_obj.get("http_request_body") and not flat.get("request_body"):
             flat["request_body"] = http_obj["http_request_body"]
     if record.get("payload_printable") and not flat.get("request_body"):
         flat["request_body"] = record["payload_printable"]

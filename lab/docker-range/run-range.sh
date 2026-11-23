@@ -120,7 +120,7 @@ def zeek_notes(path: Path) -> set[str]:
 base_sids = suri_sids(out / "suricata_base/eve.json")
 atk_sids = suri_sids(out / "suricata_atk/eve.json")
 assert len(base_sids) == 0, f"Suricata baseline FP alerts: {sorted(base_sids)}"
-assert len(atk_sids) == 18, f"Expected 18/18 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
+assert len(atk_sids) == 20, f"Expected 20/20 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
 
 base_notes = zeek_notes(out / "zeek_base/notice.log")
 atk_notes = zeek_notes(out / "zeek_atk/notice.log")
@@ -179,7 +179,7 @@ assert suri_tls_ja3_counts and suri_tls_ja3_counts.issubset(py_ja4_counts), (
 try:
     from artex_defense.detectors import scan_telemetry_file
 except ImportError:
-    print("PASS: Suricata 18/18, Zeek 6/6, YARA 0 FP / seeded OK, Wire JA4 verified (install artex-defense to also assert artex-hunt)")
+    print("PASS: Suricata 20/20, Zeek 6/6, YARA 0 FP / seeded OK, Wire JA4 verified (install artex-defense to also assert artex-hunt)")
     sys.exit(0)
 
 base_ng = scan_telemetry_file(out / "baseline_nginx.log")
@@ -195,7 +195,7 @@ assert "llm_sawtooth_context_flow" in atk_zk[0].reasons, f"Sawtooth missing on r
 assert "ja4_client_stack_whiplash" in atk_zk[0].reasons, f"Real-wire JA4 whiplash missing on Zeek+PCAP: {atk_zk[0].reasons}"
 
 print(
-    f"PASS: Suricata 0 FP / {len(atk_sids)}/18 SIDs | "
+    f"PASS: Suricata 0 FP / {len(atk_sids)}/20 SIDs | "
     f"Zeek 0 FP / {len(atk_notes)}/6 notices | "
     f"Wire JA4 1 baseline / {len(atk_ja4s)} attack stacks (cross-validated vs Suricata 7.0.3) | "
     f"YARA 0 FP / {len(yara_seeded)} seeded hits | "
