@@ -4,7 +4,7 @@
 > **DO NOT BLOCK ON STATIC JA4 OR JA4H HASHES ALONE.**
 > No public advisory or lab capture has identified an "ARTEX-only" static `JA4` fingerprint. ARTEX, ScopeWeaver, and adjacent agentic frameworks are compiled in **Go** (`crypto/tls`, `net/http`) and orchestrate standard CLI/SDK stacks (**`curl`**, **Python `urllib` / `httpx` / `requests`**, **`nuclei`**, headless browsers). Every static Go, OpenSSL, or `curl` `JA4` hash matches millions of benign services (Kubernetes, Terraform, Docker, Prometheus, CI runners, cloud SDKs) and drifts across compiler/OpenSSL upgrades. Treat static runtime `JA4`/`JA4H` hashes strictly as **stack-classification and correlation pivots**, never as standalone firewall/WAF deny-lists.
 
-This standalone guide is written for detection engineers and threat hunters who want actionable **FoxIO `JA4` / `JA4H` / `JA4S` / `JA4X`** hunting patterns for ARTEX and autonomous LLM agents—without needing to deploy the full `artex-defense` workbench.
+This standalone guide is written for detection engineers and threat hunters who want actionable **FoxIO `JA4` / `JA4H` / `JA4S` / `JA4X`** hunting patterns for ARTEX and autonomous LLM agents—without needing to deploy the full `artex-defense` workbench. A printable 3-page illustrated briefing snapshot (diagrams + live-measured reference tables) is also available at [docs/ja4_agentic_detection_nuances.pdf](ja4_agentic_detection_nuances.pdf).
 
 ---
 
