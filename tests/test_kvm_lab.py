@@ -1191,5 +1191,100 @@ def test_canary_deception_tripwires_and_trusted_proxy_ingress(tmp_path: Path) ->
     assert len(saved) == 2 and all("canary_deception_tripwire" in w["reasons"] for w in saved)
 
 
+def test_watchtower_interpreter_tools_folder_fp_and_new_framework_canaries(tmp_path: Path) -> None:
+    """Watchtower v2.9.1/v2.9.3/v2.10.0 regressions: interpreter-wrapped tools, Responder/Coercer folder FP guard, tunnels, & canaries."""
+    # 1. TPs: AI agent CLI spawning Python/Ruby/Perl offensive scripts & Agent Zero reverse tunnels
+    tp_cases = [
+        ("claude", "/usr/bin/python3", "python3 /opt/sqlmap/sqlmap.py -u http://192.0.2.10/login"),
+        ("claude", "/usr/bin/python3", "python3 -u -m nxc smb 192.0.2.10"),
+        ("codex", "/usr/bin/ruby", "ruby /opt/wpscan/wpscan.rb --url http://192.0.2.10"),
+        ("opencode", "/usr/bin/perl", "perl /opt/nikto/nikto.pl -h 192.0.2.10"),
+        ("claude", "/usr/bin/python3", "python3 /opt/Responder/Responder.py -I eth0"),
+        ("claude", "/usr/bin/python3", "python3 /opt/Coercer/coercer.py coerce -t 192.0.2.10"),
+        ("agent-zero", "/usr/bin/bash", "bash -c cloudflared tunnel --url http://127.0.0.1:8080"),
+        ("agent-zero", "/usr/bin/bash", "bash -c devtunnel host -p 8080"),
+        ("agent-zero", "/usr/local/bin/cloudflared", "cloudflared tunnel --url http://127.0.0.1:8080"),
+        ("claude", "/usr/local/bin/devtunnel", "devtunnel host -p 8080"),
+        ("claude", "/usr/bin/python3", "python3 -O -m sqlmap -u http://192.0.2.10/login"),
+    ]
+    for idx, (parent, proc, cmd) in enumerate(tp_cases):
+        p = tmp_path / f"wt_tp_{idx}.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-11-23T08:00:00.000Z",
+                    "source_host": f"dev-box-{idx}",
+                    "actor": "dev",
+                    "event_type": "process",
+                    "surface": "endpoint",
+                    "parent_process": f"/usr/local/bin/{parent}",
+                    "process": proc,
+                    "command_line": cmd,
+                    "status_code": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cands = scan_telemetry_file(p)
+        assert cands and "ai_agent_spawns_offensive_tool" in cands[0].reasons, f"Missed TP: {cmd}"
+
+    # 2. FP Guards (ThreatDefence v2.9.3 exact look-alike folder & benign dev/flag cases -> 0 FP!)
+    fp_cases = [
+        ("claude", "/usr/bin/python3", "python3 autoresponder/responder.py --check"),
+        ("claude", "/usr/bin/python3", "python3 mycoercer/coercer.py --help"),
+        ("claude", "/usr/bin/python3", "python3 tests/test_sqlmap_parser.py"),
+        ("claude", "/usr/bin/bash", "bash -c cd /work/responder && pytest -q"),
+        ("claude", "/usr/bin/bash", "bash -c cloudflared --version"),
+        ("claude", "/usr/bin/bash", "bash -c devtunnel --help"),
+        ("claude", "/usr/local/bin/cloudflared", "cloudflared --version"),
+        ("agent-zero", "/usr/local/bin/devtunnel", "devtunnel --help"),
+    ]
+    for idx, (parent, proc, cmd) in enumerate(fp_cases):
+        p = tmp_path / f"wt_fp_{idx}.jsonl"
+        p.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-11-23T08:05:00.000Z",
+                    "source_host": f"dev-fp-{idx}",
+                    "actor": "dev",
+                    "event_type": "process",
+                    "surface": "endpoint",
+                    "parent_process": f"/usr/local/bin/{parent}",
+                    "process": proc,
+                    "command_line": cmd,
+                    "status_code": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert scan_telemetry_file(p) == [], f"Unexpected FP on benign dev command: {cmd}"
+
+    # 3. Proactive RedAmon / Xalgorix / Pentest Swarm AI high-confidence UA & canary markers
+    fw_log = tmp_path / "new_frameworks.jsonl"
+    fw_log.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T08:10:00.000Z", "source_host": "198.51.100.31", "actor": "198.51.100.31", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/v1/models", "user_agent": "RedAmon-AISurfaceRecon/1.0", "status_code": 200},
+                {"timestamp": "2026-11-23T08:11:00.000Z", "source_host": "198.51.100.32", "actor": "198.51.100.32", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/search?q=rEdAm0n1337XsS", "status_code": 200},
+                {"timestamp": "2026-11-23T08:12:00.000Z", "source_host": "198.51.100.33", "actor": "198.51.100.33", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/xalgorix-xxe-check", "status_code": 404},
+                {"timestamp": "2026-11-23T08:13:00.000Z", "source_host": "198.51.100.34", "actor": "198.51.100.34", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/check?host=evil.pentestswarm.invalid", "status_code": 400},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fw_cands = scan_telemetry_file(fw_log)
+    assert len(fw_cands) == 4
+    by_host = {c.source_host: c.reasons for c in fw_cands}
+    assert "agentic_user_agent_burst" in by_host["198.51.100.31"]
+    assert "unit42_agentic_canary_probe" in by_host["198.51.100.32"]
+    assert "unit42_agentic_canary_probe" in by_host["198.51.100.33"]
+    assert "unit42_agentic_canary_probe" in by_host["198.51.100.34"]
+
+
+
 
 

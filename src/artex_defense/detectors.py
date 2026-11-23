@@ -75,7 +75,8 @@ KNOWN_ARTIFACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"(zz_no_such_user|zzq\.nonexistent|precheck\.not-a-user|zzzrandom\d+|"
             r"nonexistent-i\d+|zz-no-such-key|zz-notexist-|artex_control_marker|"
             r"artex_write_probe|artex-probe-\d+|artex_persist_ok|x-artx-key|"
-            r"illegal_redirect_uri_enhanced|[?&]artex=)",
+            r"illegal_redirect_uri_enhanced|rEdAm0n1337XsS|redamon-poc\.invalid|"
+            r"xalgorix-(?:nonexistent|missing|xxe)-|evil\.pentestswarm\.invalid|[?&]artex=)",
             re.IGNORECASE,
         ),
     ),
@@ -318,6 +319,7 @@ AGENTIC_USER_AGENTS: tuple[str, ...] = (
     "kimi-cli/",
     "opencode/",
     "hermes-agent/",
+    "redamon-aisurfacerecon/",
     "fuzz faster u fool",
     "artexprobe",
     "artex-probe",
@@ -362,6 +364,7 @@ EXPLICIT_FRAMEWORK_UAS: tuple[str, ...] = (
     "kimi-cli/",
     "opencode/",
     "hermes-agent/",
+    "redamon-aisurfacerecon/",
 )
 
 # Token-bounded Dragos/CloudTrail ARTEX UAs (avoids unanchored `smartex-agent` / `smartex-judge-*` FPs)
@@ -624,11 +627,12 @@ AI_MCP_DISCOVERY_PATH_RE = re.compile(
     r"(^|/)(?:mcp(?:/|$)|mcp-rest/|sse(?:/|$)|\.well-known/agent\.json|v1/models|api/tags|api/ps|gradio_api|v1/assistants)",
     re.IGNORECASE,
 )
-# Behavioral process-tree signal (ThreatDefence v2.7.0): AI agent / coding harness shell spawning
-# explicit offensive pentest/exploitation tools (benign dev tools like git/grep/pytest/npm/curl are never flagged)
+# Behavioral process-tree signal (ThreatDefence v2.7.0 / v2.9.1 / v2.9.3): AI agent / coding harness shell spawning
+# explicit offensive pentest/exploitation tools (including Python/Ruby/Perl script tools & agent reverse tunnels,
+# while staying 0 FP on benign dev tools and look-alike project folders such as `autoresponder/responder.py`).
 AI_AGENT_PARENT_RE = re.compile(
     r"(?:^|[/\\])(?:claude(?:\.exe)?|codex(?:\.exe)?|opencode(?:\.exe)?|qwen-code(?:\.exe)?|"
-    r"kimi-cli(?:\.exe)?|hermes-agent(?:\.exe)?)$|shell-snapshots|claude_code_shell_launcher_script",
+    r"kimi-cli(?:\.exe)?|hermes-agent(?:\.exe)?|agent[-_]zero(?:\.exe)?)$|shell-snapshots|claude_code_shell_launcher_script",
     re.IGNORECASE,
 )
 AI_AGENT_CMD_WRAPPER_RE = re.compile(
@@ -636,20 +640,50 @@ AI_AGENT_CMD_WRAPPER_RE = re.compile(
     re.IGNORECASE,
 )
 AI_AGENT_SHELL_PROC_RE = re.compile(
-    r"(?:^|[/\\])(?:sh|bash|zsh|dash|fish|cmd\.exe|powershell\.exe|pwsh(?:\.exe)?|python(?:\d+(?:\.\d+)?)?(?:\.exe)?)$",
+    r"(?:^|[/\\])(?:sh|bash|zsh|dash|fish|cmd\.exe|powershell\.exe|pwsh(?:\.exe)?|"
+    r"python(?:\d+(?:\.\d+)?)?(?:\.exe)?|ruby(?:\.exe)?|perl(?:\.exe)?)$",
     re.IGNORECASE,
 )
+AI_AGENT_TUNNEL_PROC_RE = re.compile(r"(?:^|[/\\])(?:cloudflared|devtunnel)(?:\.exe)?$", re.IGNORECASE)
 OFFENSIVE_TOOL_PROC_RE = re.compile(
     r"(?:^|[/\\])(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
-    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump)(?:\.exe)?$",
+    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump|"
+    r"wpscan|nikto|msfconsole|coercer)(?:\.exe)?$",
     re.IGNORECASE,
 )
 OFFENSIVE_TOOL_CMD_HEAD_RE = re.compile(
     r"(?:^|(?:&&|\|\||[;|]|-c\s+['\"]?|\bsudo\s+|\beval\s+))\s*(?:[^\s;|&'\"]*[/\\])?"
-    r"(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
-    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump)(?:\.exe)?(?=$|[\s\"';|&])",
+    r"(?:(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|chisel|ntlmrelayx|"
+    r"netexec|nxc|evil-winrm|certipy|hydra|bloodhound|sharphound|rubeus|secretsdump|"
+    r"wpscan|nikto|msfconsole|coercer)(?:\.exe)?|"
+    r"cloudflared(?:\.exe)?\s+tunnel|devtunnel(?:\.exe)?\s+host)(?=$|[\s\"';|&])",
     re.IGNORECASE,
 )
+# Matches Python/Ruby/Perl interpreters executing offensive scripts or `-m` modules as their target script,
+# scoping Responder/Coercer to bare script names or their own exact folder (zero FP on `autoresponder/responder.py`).
+OFFENSIVE_INTERPRETER_TOOL_RE = re.compile(
+    r"(?:^|(?:&&|\|\||[;|]|-c\s+['\"]?|\bsudo\s+))\s*(?:[^\s;|&'\"]*[/\\])?"
+    r"(?:python(?:\d+(?:\.\d+)?)?|ruby|perl)(?:\.exe)?"
+    r"(?:\s+(?:-[uBEsSIO]+|-W\s+\S+))*\s+"
+    r"(?:"
+    r"-m\s+(?:sqlmap|nxc|netexec|certipy|coercer|impacket\.[a-z0-9_]+)|"
+    r"['\"]?(?:[^\s;|&'\"]*[/\\])?(?:sqlmap(?:\.py)?|ntlmrelayx(?:\.py)?|secretsdump(?:\.py)?|"
+    r"wpscan(?:\.rb)?|nikto(?:\.pl)?|netexec|nxc|certipy|impacket-[a-z0-9_-]+|msfconsole)['\"]?|"
+    r"['\"]?(?:(?:[^\s;|&'\"]*[/\\])?(?:Responder[/\\]Responder\.py|Coercer[/\\]coercer\.py)|Responder\.py|coercer\.py)['\"]?"
+    r")(?=$|[\s\"';|&])",
+    re.IGNORECASE,
+)
+
+
+def _is_offensive_agent_child(proc_raw: str, cmd_raw: str) -> bool:
+    """Return True if a child process/command under an AI agent parent executes an explicit offensive tool."""
+    if proc_raw and OFFENSIVE_TOOL_PROC_RE.search(proc_raw):
+        return True
+    if not cmd_raw:
+        return False
+    if proc_raw and not (AI_AGENT_SHELL_PROC_RE.search(proc_raw) or AI_AGENT_TUNNEL_PROC_RE.search(proc_raw)):
+        return False
+    return bool(OFFENSIVE_TOOL_CMD_HEAD_RE.search(cmd_raw) or OFFENSIVE_INTERPRETER_TOOL_RE.search(cmd_raw))
 SENSITIVE_CONFIG_FILE_RE = re.compile(
     r"((?:^|[\s/\\'\";|])\.env(?:\.[a-z0-9_-]+)?(?=$|[\s'\"|;])|\bweb\.config\b|\.git/config\b|"
     r"\.aws/credentials\b|\.aws/config\b|\.kube/config\b|\.ssh/id_[a-z0-9_]+\b|"
@@ -875,7 +909,8 @@ SIDELOAD_CONFIG_OR_DLL_RE = re.compile(
 
 # Internal AD NTLM capture/relay, EPA probing, Kerberos/LDAP enum, SAMR/SRVSVC RPC, & offline Impacket wheel staging
 AD_NTLM_RELAY_OR_ENUM_RE = re.compile(
-    r"(\bntlmrelayx\b|\bsmbserver\.py\b|\bsecretsdump\b|\bpetitpotam\b|\bcoercer\b|\bcertipy\b|"
+    r"(\bntlmrelayx\b|\bsmbserver\.py\b|\bsecretsdump\b|\bpetitpotam\b|"
+    r"(?:^|[\s/\\])coercer(?:\.py)?\s+(?:coerce|scan|fuzz)\b|(?<![a-z0-9_-])coercer[/\\]coercer\.py\b|\bcertipy\b|"
     r"\bkerbrute\b|\bbloodhound\b|\bldapdomaindump\b|ntlm[-_ ]?(?:relay|epa|capture|coerce)|"
     r"ldapsearch\s+[^|;\n]*-x\b.*(?:-b\s|namingcontexts|rootdse|samaccountname)|"
     r"(?:samr|srvsvc|lsarpc)[-_ ]?(?:probe|enum|dump)|"
@@ -2135,14 +2170,7 @@ def _inspect_window_signals(
             (parent_raw and AI_AGENT_PARENT_RE.search(parent_raw))
             or (cmd_raw and AI_AGENT_CMD_WRAPPER_RE.search(cmd_raw))
         )
-        is_offensive_child = bool(
-            (proc_raw and OFFENSIVE_TOOL_PROC_RE.search(proc_raw))
-            or (
-                cmd_raw
-                and (not proc_raw or AI_AGENT_SHELL_PROC_RE.search(proc_raw))
-                and OFFENSIVE_TOOL_CMD_HEAD_RE.search(cmd_raw)
-            )
-        )
+        is_offensive_child = _is_offensive_agent_child(proc_raw, cmd_raw)
         if ev.get("surface") == "endpoint" and is_ai_agent_parent and is_offensive_child:
             reasons.add("ai_agent_spawns_offensive_tool")
             indicators.add(f"ai_agent_tool:{parent_raw or 'shell'}->{proc_raw or cmd_raw[:50]}")

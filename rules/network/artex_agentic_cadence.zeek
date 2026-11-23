@@ -49,13 +49,13 @@ export {
     const imds_wildcard_dns_pattern: pattern =
         /(^|[.\-])(169[.\-]254[.\-](169[.\-]254|170[.\-]2)|a9fea9fe)\.(sslip\.io|nip\.io|xip\.io|traefik\.me)$/i &redef;
 
-    # High-confidence ARTEX / BLOODALCHEMY HTTP control-plane & canary probe URIs
+    # High-confidence ARTEX / BLOODALCHEMY / RedAmon / Xalgorix / Pentest Swarm AI control-plane & canary URIs
     const controlplane_uri_pattern: pattern =
-        /(\/Inform\/logger\/|\/api\/exploration\/|\/api\/sync\/scopesentry|[?&]artex=|zz_no_such_user|zzq\.nonexistent|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK)/i &redef;
+        /(\/Inform\/logger\/|\/api\/exploration\/|\/api\/sync\/scopesentry|[?&]artex=|zz_no_such_user|zzq\.nonexistent|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK|rEdAm0n1337XsS|redamon-poc\.invalid|xalgorix-(nonexistent|missing|xxe)-|evil\.pentestswarm\.invalid)/i &redef;
 
     # Tightened to avoid FP hits on benign strings ("normal", "smartex") or standalone QA HeadlessChrome
     const agentic_ua_pattern: pattern =
-        /(norma\/[0-9]|norma-agent|artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|(^|[^a-zA-Z0-9_])artex-(agent($|[^a-zA-Z0-9_])|judge-[a-zA-Z0-9_-]+)|artex-selfupdate|ArtExVerify\/|ArtEx\/1\.0|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|ScopeWeaver|hermes-agent\/|strix\/|Nuclei)/i &redef;
+        /(norma\/[0-9]|norma-agent|artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|(^|[^a-zA-Z0-9_])artex-(agent($|[^a-zA-Z0-9_])|judge-[a-zA-Z0-9_-]+)|artex-selfupdate|ArtExVerify\/|ArtEx\/1\.0|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|ScopeWeaver|hermes-agent\/|strix\/|RedAmon-AISurfaceRecon\/|Nuclei)/i &redef;
 
     const static_asset_uri_pattern: pattern =
         /(\/favicon\.ico|\.(png|jpe?g|gif|svg|ico|webp|avif|css|m?js|map|woff2?|ttf|eot|otf|webmanifest)(\?|$))/i &redef;

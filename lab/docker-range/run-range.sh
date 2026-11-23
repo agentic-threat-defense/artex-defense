@@ -55,7 +55,7 @@ docker run --rm --network=none \
   -v "${OUT_DIR}:/out" \
   artex-range-sensor:local \
   bash -euo pipefail -c '
-    suricata -T -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" -l /out/suricata_base
+    suricata -T --init-errors-fatal -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" -l /out/suricata_base
     suricata -r /out/baseline.pcap -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" --set app-layer.protocols.tls.ja3-fingerprints=yes -k none -l /out/suricata_base
     suricata -r /out/attack.pcap -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" --set app-layer.protocols.tls.ja3-fingerprints=yes -k none -l /out/suricata_atk
   '
