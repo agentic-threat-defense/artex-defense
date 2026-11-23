@@ -81,6 +81,11 @@ def test_zeek_script_decouples_c2_relays_and_bounds_notice_identifiers() -> None
     assert "code < 500" in text
     assert "static_asset_uri_pattern" in text
     assert "artex.http_4xx_uris" in text
+    assert 'to_upper(name) == "USER-AGENT"' in text, "HTTP/2 header names may be lowercase"
+    assert "zscaler_zen_subnets" in text and "18899/tcp" in text
+    assert "imds_wildcard_dns_pattern" in text
+    assert "Agentic_ControlPlane_Or_Canary_URI" in text
+    assert "commercial_llm_api_suffixes in query" in text, "DNS commercial LLM check covers TLS 1.3 ECH"
 
 
 def _tier1_query_code(text: str) -> str:

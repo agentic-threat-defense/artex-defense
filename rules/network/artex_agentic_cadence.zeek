@@ -2,11 +2,12 @@
 # ARTEX / Autonomous Agentic Offensive Framework — Starter Zeek 6/7 Script
 # Detects:
 #   - High-confidence ARTEX/BLOODALCHEMY C2 & LLM relay SNI/DNS (NEVER allowlisted)
-#   - Commercial LLM API egress from non-approved server/DMZ hosts
-#   - Webhook/OAST exfiltration domains (TLS SNI & DNS)
-#   - ARTEX/Norma/self-proclaimed-authorized User-Agents (bounded suppression key)
+#   - Commercial LLM API egress (TLS SNI & DNS for ECH coverage) from non-approved server/DMZ hosts
+#   - Webhook/OAST exfiltration & IMDS wildcard-DNS evasion (TLS SNI & DNS)
+#   - ARTEX/BLOODALCHEMY control-plane & canary HTTP URIs (bounded suppression key)
+#   - ARTEX/Norma/self-proclaimed-authorized User-Agents (HTTP/1.x + HTTP/2, bounded suppression key)
 #   - HTTP 4xx rapid error bursts across distinct non-asset URIs
-#   - External TCP connections to default ARTEX console ports (8787/8788/8790/8890)
+#   - External TCP connections to default ARTEX console ports (8787/8788/8790/8890/18899; Zscaler 8890 tunable)
 # ============================================================================
 
 @load base/frameworks/notice
@@ -26,10 +27,12 @@ export {
         Anomalous_LLM_API_Egress,
         Webhook_Exfil_Traffic,
         Agentic_Harness_UserAgent,
-        Agentic_HTTP_Error_Burst
+        Agentic_HTTP_Error_Burst,
+        Agentic_ControlPlane_Or_Canary_URI
     };
 
-    const agentic_ports: set[port] = { 8787/tcp, 8788/tcp, 8790/tcp, 8890/tcp } &redef;
+    # Optional CyberStrikeAI ports (5001/tcp, 5002/tcp, 5003/tcp, 8082/tcp) can be appended via redef after baselining dev/proxy apps
+    const agentic_ports: set[port] = { 8787/tcp, 8788/tcp, 8790/tcp, 8890/tcp, 18899/tcp } &redef;
 
     # High-confidence ARTEX / BLOODALCHEMY relay & C2 domains — NEVER suppressed by approved_llm_sources
     const malicious_llm_relay_suffixes: pattern =
@@ -40,20 +43,30 @@ export {
         /(^|\.)(api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|open\.bigmodel\.cn|api\.x\.ai|api\.moonshot\.cn|api\.moonshot\.ai|api\.siliconflow\.cn|openrouter\.ai|generativelanguage\.googleapis\.com|api\.groq\.com|api\.together\.xyz|api\.fireworks\.ai|dashscope\.aliyuncs\.com|ark\.cn-beijing\.volces\.com)$/i &redef;
 
     const webhook_exfil_suffixes: pattern =
-        /(^|\.)(webhook\.site|oast\.live|oast\.fun|oast\.me|interact\.sh|dnslog\.cn)$/i &redef;
+        /(^|\.)(webhook\.site|oast\.(live|fun|me|pro|site|online)|interact\.sh|dnslog\.cn)$/i &redef;
+
+    # IMDS-only wildcard IP-reflecting DNS (zero dev k3s/Rancher FPs while catching 169-254-* / a9fea9fe SSRF evasion)
+    const imds_wildcard_dns_pattern: pattern =
+        /(^|[.\-])(169[.\-]254[.\-](169[.\-]254|170[.\-]2)|a9fea9fe)\.(sslip\.io|nip\.io|xip\.io|traefik\.me)$/i &redef;
+
+    # High-confidence ARTEX / BLOODALCHEMY HTTP control-plane & canary probe URIs
+    const controlplane_uri_pattern: pattern =
+        /(\/Inform\/logger\/|\/api\/exploration\/|\/api\/sync\/scopesentry|[?&]artex=|zz_no_such_user|zzq\.nonexistent|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK)/i &redef;
 
     # Tightened to avoid FP hits on benign strings ("normal", "smartex") or standalone QA HeadlessChrome
     const agentic_ua_pattern: pattern =
         /(norma\/[0-9]|norma-agent|artex-enrich\/|rex_enrich|artex-readonly\/|ARTEX-worker\/|(^|[^a-zA-Z0-9_])artex-(agent($|[^a-zA-Z0-9_])|judge-[a-zA-Z0-9_-]+)|artex-selfupdate|ArtExVerify\/|ArtEx\/1\.0|Mozilla\/5\.0 \(ARTEX\)|security-testing; authorized|LLMLeak-RedTeam\/|authorized-security-research\/|authorized-exposure-audit\/|authori[sz]ed[-_ ;\/]+(scan|audit|pentest|exposure|security|recon|research)|vulnerability-disclosure-policy-review|recon-audit|Fuzz Faster U Fool|ArtexProbe|artex-probe|ScopeWeaver|hermes-agent\/|strix\/|Nuclei)/i &redef;
 
     const static_asset_uri_pattern: pattern =
-        /(\/favicon\.ico|\.(png|jpe?g|gif|svg|ico|css|js|map|woff2?|ttf)(\?|$))/i &redef;
+        /(\/favicon\.ico|\.(png|jpe?g|gif|svg|ico|webp|avif|css|m?js|map|woff2?|ttf|eot|otf|webmanifest)(\?|$))/i &redef;
 
     # Populate with corporate user-workstation & approved AI gateway subnets so commercial LLM alerts focus on Server/DMZ
     const approved_llm_sources: set[subnet] = {} &redef;
+    # Populate with Zscaler Cloud Enforcement Node (ZEN) subnets to suppress benign ZSATunnel TCP/8890 traffic
+    const zscaler_zen_subnets: set[subnet] = {} &redef;
     # Separate allowlist for authorized web/vuln scanners exempt from HTTP 4xx burst notices
     const http_error_ignore_sources: set[subnet] = {} &redef;
-    # Ignore purely internal RFC1918/Site::local_nets traffic on ports 8787-8890 (e.g., internal RStudio Server)
+    # Ignore purely internal RFC1918/Site::local_nets traffic on ports 8787-8890/18899 (e.g., internal RStudio Server)
     const ignore_internal_default_ports: bool = T &redef;
     const error_burst_threshold: double = 20.0 &redef;
     const error_burst_unique_uris: count = 5 &redef;
@@ -113,6 +126,8 @@ event connection_established(c: connection)
         {
         if ( ignore_internal_default_ports && Site::is_local_addr(c$id$resp_h) )
             return;
+        if ( c$id$resp_p == 8890/tcp && c$id$resp_h in zscaler_zen_subnets )
+            return;
         NOTICE([$note=Agentic_Default_Port,
                 $conn=c,
                 $msg=fmt("External connection to ARTEX/agentic default console port %s", c$id$resp_p),
@@ -136,11 +151,11 @@ event ssl_extension_server_name(c: connection, is_orig: bool, names: string_vec)
                     $identifier=fmt("%s|c2|%s", c$id$orig_h, sni),
                     $suppress_for=15mins]);
             }
-        else if ( webhook_exfil_suffixes in sni )
+        else if ( webhook_exfil_suffixes in sni || imds_wildcard_dns_pattern in sni )
             {
             NOTICE([$note=Webhook_Exfil_Traffic,
                     $conn=c,
-                    $msg=fmt("Host %s connected to webhook/OAST exfil domain %s", c$id$orig_h, sni),
+                    $msg=fmt("Host %s connected to webhook/OAST or IMDS wildcard-DNS domain %s", c$id$orig_h, sni),
                     $identifier=fmt("%s|oast|%s", c$id$orig_h, sni),
                     $suppress_for=15mins]);
             }
@@ -165,12 +180,34 @@ event dns_request(c: connection, msg: dns_msg, query: string, qtype: count, qcla
                 $identifier=fmt("%s|dns_c2|%s", c$id$orig_h, query),
                 $suppress_for=15mins]);
         }
-    else if ( webhook_exfil_suffixes in query )
+    else if ( webhook_exfil_suffixes in query || imds_wildcard_dns_pattern in query )
         {
         NOTICE([$note=Webhook_Exfil_Traffic,
                 $conn=c,
-                $msg=fmt("Host %s resolved webhook/OAST exfil domain %s", c$id$orig_h, query),
+                $msg=fmt("Host %s resolved webhook/OAST or IMDS wildcard-DNS domain %s", c$id$orig_h, query),
                 $identifier=fmt("%s|dns_oast|%s", c$id$orig_h, query),
+                $suppress_for=15mins]);
+        }
+    else if ( commercial_llm_api_suffixes in query && ! (c$id$orig_h in approved_llm_sources) )
+        {
+        # Catches commercial LLM API lookups even when TLS 1.3 ECH conceals the SNI
+        NOTICE([$note=Anomalous_LLM_API_Egress,
+                $conn=c,
+                $msg=fmt("Unapproved host %s resolved commercial LLM API domain %s", c$id$orig_h, query),
+                $identifier=fmt("%s|dns_llm|%s", c$id$orig_h, query),
+                $suppress_for=30mins]);
+        }
+    }
+
+event http_request(c: connection, method: string, original_URI: string, unescaped_URI: string, version: string)
+    {
+    if ( controlplane_uri_pattern in original_URI || controlplane_uri_pattern in unescaped_URI )
+        {
+        # Bounded suppression key (never embed attacker-controlled URI into $identifier)
+        NOTICE([$note=Agentic_ControlPlane_Or_Canary_URI,
+                $conn=c,
+                $msg=fmt("ARTEX/BLOODALCHEMY control-plane or canary HTTP URI from %s: %s", c$id$orig_h, original_URI),
+                $identifier=fmt("%s|artex_uri", c$id$orig_h),
                 $suppress_for=15mins]);
         }
     }
@@ -179,7 +216,7 @@ event http_header(c: connection, is_orig: bool, name: string, value: string)
     {
     if ( ! is_orig )
         return;
-    if ( name == "USER-AGENT" && agentic_ua_pattern in value )
+    if ( to_upper(name) == "USER-AGENT" && agentic_ua_pattern in value )
         {
         # Bounded suppression key (never embed raw attacker-controlled UA value into $identifier)
         NOTICE([$note=Agentic_Harness_UserAgent,
