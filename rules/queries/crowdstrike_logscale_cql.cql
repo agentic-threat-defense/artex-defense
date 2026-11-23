@@ -21,40 +21,50 @@
 // ============================================================================
 
 // T1-A. Confirmed ARTEX / BLOODALCHEMY C2 & Relay Domains (ALL Hosts — Any Hit = Escalate)
-#event_simpleName=DnsRequest
+in(#event_simpleName, values=["DnsRequest", "DnsLookup"])
 | DomainName=/(?:^|\.)(xcai\.(com|pro)|lanmao666\.(com|xyz)|artex\.lol|nginxmysql\.com|vietnam852\.com|zhzy999\.net|sqlserver-sqlite\.com|artex\.noog2infra\.site|artex\.ok7777\.eu\.cc|artex\.tokena2b\.top)\.?$/i
 | default(field=[ContextBaseFileName], value="-")
 | groupBy([ComputerName, ContextBaseFileName, DomainName], function=[count(as=hits), min(@timestamp, as=first_seen), max(@timestamp, as=last_seen)])
 | sort(hits, order=desc)
 
 // T1-B. Explicit ARTEX / BLOODALCHEMY / ScopeWeaver Artifacts, EDR Sensor Enumeration, & Follow-On C2
-//       (Note: DLL/config files like graphics-hook-filter64.dll also appear in PeFileWritten / ImageLoad)
+//       (Covers both Windows backslashes and Linux forward slashes; excludes read-only local repo/grep tools on artex-defense)
 #event_simpleName=ProcessRollup2
+| not (ImageFileName=/[\/\\](git|rg|grep|egrep|fgrep|less|cat|vim|nvim|code|pytest|python3?)(\.exe)?$/i AND CommandLine=/artex[-_]defense/i)
 | (CommandLine=/(?i)(sc(\.exe)?\s+query|get-service|tasklist|systemctl\s+status|pgrep)/ AND CommandLine=/(?i)(csfalcon|falcon-sensor|crowdstrike|sentinelagent|windefend|cbdefense|sysmon)/)
-  OR ImageFileName=/(?i)(\\ProgramData\\artx5v\\|ScopeWeaver|artex-server|artex-worker|\\vshell\.exe$|\\wisp\.exe$)/
-  OR CommandLine=/(?i)(artx5v|ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|guanlan\s*sec|tomicdd\/artex|congdonglinux\/artex|norma-agent|norma\/[0-9]|artex-enrich\/|artex-readonly\/|ARTEX-worker\/|artex-selfupdate|LLMLeak-RedTeam\/|authorized-exposure-audit|authorized-security-research|ArtexProbe|graphics-hook-filter64\.dll|graphics-hook_config\.bin|artex_config\.json|artex\.yaml|mitmproxy-ca-cert\.pem|traffic\/_index\/index\.sqlite|\/Inform\/logger\/|(?:^|[\s\/:"'])xcai\.(com|pro)\b|lsadump::|sekurlsa::|adaptixc2|\bwisp[-_]?c2\b|ligolo-agent|\bntlmrelayx\b)/
+  OR ImageFileName=/([\/\\]ProgramData[\/\\]artx5v[\/\\]|[\/\\]ScopeWeaver(\.exe)?$|[\/\\]artex-(server|worker|pro|mx)(\.exe)?$|[\/\\](vshell|wisp)(\.exe)?$)/i
+  OR CommandLine=/(?i)(artx5v|ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|guanlan\s*sec|tomicdd\/artex|congdonglinux\/artex|norma-agent|norma\/[0-9]|artex-enrich\/|artex-readonly\/|ARTEX-worker\/|artex-selfupdate|LLMLeak-RedTeam\/|authorized-exposure-audit|authorized-security-research|ArtexProbe|CyberStrikeAI|graphics-hook-filter64\.dll|graphics-hook_config\.bin|artex_config\.json|artex\.yaml|mitmproxy-ca-cert\.pem|traffic\/_index\/index\.sqlite|\/Inform\/logger\/|(?:^|[\s\/:"'])xcai\.(com|pro)\b|lsadump::|sekurlsa::|adaptixc2|\bwisp[-_]?c2\b|ligolo-agent|\bntlmrelayx\b)/
   OR (CommandLine=/(?i)\bchisel\b/ AND CommandLine=/(?i)\bclient\b/)
   OR (CommandLine=/(?i)\bvshell\b/ AND NOT CommandLine=/(?i)(VsDevShell|VisualStudio\.DevShell)/)
 | table([@timestamp, ComputerName, ParentBaseFileName, ImageFileName, CommandLine], limit=2000)
+
+// T1-C. BLOODALCHEMY Sideloaded DLL & ARTEX Host Staging Files Written to Disk (ALL Hosts)
+//       (Catches graphics-hook-filter64.dll / graphics-hook_config.bin / artex_config.json / artx5v even when ProcessRollup2 only logs the host binary)
+in(#event_simpleName, values=["PeFileWritten", "NewExecutableWritten", "ElfFileWritten", "FileWritten"])
+| TargetFileName=/([\/\\]graphics-hook-filter64\.dll$|[\/\\]graphics-hook_config\.bin$|[\/\\]artx5v[\/\\]|[\/\\]artex_config\.json$|[\/\\]artex\.yaml$|[\/\\]xcai-effort-shim\.py$|[\/\\]mitmproxy-ca-cert\.pem$)/i
+| default(field=[ContextBaseFileName], value="-")
+| table([@timestamp, ComputerName, #event_simpleName, ContextBaseFileName, TargetFileName], limit=2000)
 
 
 // ============================================================================
 // TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
 // ============================================================================
 
-// T2-A. External Console Ports 8787/8788/8790/8890 (External Non-RFC1918 IPs Only, Excl. Zscaler 8890)
-//       (Drop the `not cidr(...)` line only if hunting for an internal lateral staging server)
+// T2-A. External Console Ports 8787/8788/8790/8890/18899 (External Non-RFC1918 IPs Only, Excl. Zscaler 8890)
+//       (Note: For targeted CyberStrikeAI hunts, optionally append 5001, 5002, 5003, 8082 after baselining dev/proxy apps)
 #event_simpleName=NetworkConnectIP4
-| RemotePort=/^(8787|8788|8790|8890)$/
+| in(RemotePort, values=[8787, 8788, 8790, 8890, 18899])
 | not (RemotePort=8890 AND ContextBaseFileName=/^ZSA/i)
 | not cidr(RemoteAddressIP4, subnet=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"])
 | default(field=[ContextBaseFileName], value="-")
 | groupBy([ComputerName, ContextBaseFileName, RemoteAddressIP4, RemotePort], function=[count(as=hits), min(@timestamp, as=first_seen), max(@timestamp, as=last_seen)])
 | sort(hits, order=asc)
 
-// T2-B. Webhook / OAST Exfiltration DNS (Excludes Interactive Dev Browsers, Postman, MsSense & Zscaler on webhook.site)
-#event_simpleName=DnsRequest
-| DomainName=/(?:^|\.)(webhook\.site|oast\.(live|fun|me)|interact\.sh|dnslog\.cn)\.?$/i
+// T2-B. Webhook / OAST Exfiltration & IMDS Wildcard-DNS Evasion (Excludes Dev Browsers/Postman/MsSense/ZSA on webhook.site)
+//       (Covers full ProjectDiscovery oast.* fleet plus IMDS-only wildcard DNS like 169-254-169-254.sslip.io / a9fea9fe.nip.io)
+in(#event_simpleName, values=["DnsRequest", "DnsLookup"])
+| DomainName=/(?:^|\.)(webhook\.site|oast\.(live|fun|me|pro|site|online)|interact\.sh|dnslog\.cn)\.?$/i
+  OR DomainName=/(?:^|[.\-])(169[.\-]254[.\-](169[.\-]254|170[.\-]2)|a9fea9fe)\.(sslip\.io|nip\.io|xip\.io|traefik\.me)\.?$/i
 | not (DomainName=/webhook\.site/i AND ContextBaseFileName=/^(chrome|msedge|firefox|brave|safari|postman|code|mssense|zsa)/i)
 | default(field=[ContextBaseFileName], value="-")
 | groupBy([ComputerName, ContextBaseFileName, DomainName], function=[count(as=hits), min(@timestamp, as=first_seen), max(@timestamp, as=last_seen)])
@@ -73,18 +83,24 @@
 | groupBy([ParentBaseFileName, ImageFileName, CommandLine], function=[count(as=hits), count(field=ComputerName, distinct=true, as=hosts), min(@timestamp, as=first_seen), max(@timestamp, as=last_seen)])
 | sort(hits, order=asc)
 
-// T2-D. Compressed Endpoint Recon & Cloud-CLI Burst (>= 5 Unique Discovery Cmds in 30s)
-//       (Buckets by [aid, ComputerName] because UserName can be empty on raw ProcessRollup2 events)
+// T2-D1. Compressed Endpoint Recon & Cloud-CLI Burst (>= 5 Unique Discovery Cmds in 30s — Windows + Linux Parity)
+//        (Buckets by [aid, ComputerName] because UserName can be empty on raw ProcessRollup2 events)
 #event_simpleName=ProcessRollup2
-| CommandLine=/(?i)\b(whoami|ipconfig|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b/
+| CommandLine=/(?i)(\b(whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|ps\s+(?:aux|-ef)|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b|\/etc\/passwd)/
 | bucket(span=30s, field=[aid, ComputerName], function=[count(as=cmd_count), count(field=CommandLine, distinct=true, as=unique_cmds), collect([CommandLine], limit=10)])
 | unique_cmds >= 5
 | sort(unique_cmds, order=desc)
 
+// T2-D2. Single-Shell Chained Multi-Recon Evasion (Catches `bash -c "whoami; id; uname -a; ip a; cat /etc/passwd"` in 1 ProcessRollup2 event)
+#event_simpleName=ProcessRollup2
+| CommandLine=/(?i)(\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|nltest|sc\s+query)\b|\/etc\/passwd)[^\r\n]*[;&|]+[^\r\n]*(\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|nltest|sc\s+query)\b|\/etc\/passwd)[^\r\n]*[;&|]+[^\r\n]*(\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|nltest|sc\s+query)\b|\/etc\/passwd)/
+| groupBy([ParentBaseFileName, ImageFileName, CommandLine], function=[count(as=hits), count(field=ComputerName, distinct=true, as=hosts), min(@timestamp, as=first_seen), max(@timestamp, as=last_seen)])
+| sort(hits, order=asc)
+
 // T2-E. Server / DMZ Commercial LLM API & Wildcard-IP DNS Lookups (Baseline Required)
 //       (Recommended: enrich via Falcon aid_master lookup for ProductType="Server" / "Domain Controller"
 //        rather than relying solely on ComputerName prefixes; tune the exclusion regex to your naming scheme)
-#event_simpleName=DnsRequest
+in(#event_simpleName, values=["DnsRequest", "DnsLookup"])
 | DomainName=/(?:^|\.)(api\.anthropic\.com|api\.openai\.com|api\.deepseek\.com|open\.bigmodel\.cn|api\.x\.ai|api\.moonshot\.(cn|ai)|dashscope\.aliyuncs\.com|openrouter\.ai|api\.siliconflow\.cn|sslip\.io|nip\.io|xip\.io|traefik\.me)\.?$/i
 | not ComputerName=/^(DEV-AI-GW-|WKSTN-|LAPTOP-|MACBOOK-|DESKTOP-)/i
 | default(field=[ContextBaseFileName], value="-")

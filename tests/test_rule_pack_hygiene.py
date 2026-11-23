@@ -93,7 +93,9 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert "TIER 1" in cql and "TIER 2" in cql, "CrowdStrike CQL must separate Tier 1 triage from Tier 2 hunts"
     assert "RemotePort IN [" not in cql, "Invalid LogScale CQL `IN [...]` syntax"
     assert "ComputerName!=/" not in cql, "Invalid LogScale CQL `!= /regex/` syntax"
-    assert "RemotePort=/^(8787|8788|8790|8890)$/" in cql
+    assert "in(RemotePort, values=[8787, 8788, 8790, 8890, 18899])" in cql
+    assert 'in(#event_simpleName, values=["DnsRequest", "DnsLookup"])' in cql
+    assert 'in(#event_simpleName, values=["PeFileWritten", "NewExecutableWritten", "ElfFileWritten", "FileWritten"])' in cql
     assert "ContextBaseFileName=/^ZSA/i" in cql, "CrowdStrike CQL must exclude Zscaler Client Connector on TCP 8890"
     assert "metadata\\.google\\.internal" in cql, "CrowdStrike CQL Query T2-C must exclude routine GCP metadata checks"
     assert "sort(hits, order=asc)" in cql, "CrowdStrike CQL hunts must use LFO ascending sort to avoid 200-row cap"
