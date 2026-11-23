@@ -76,7 +76,9 @@ KNOWN_ARTIFACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"nonexistent-i\d+|zz-no-such-key|zz-notexist-|artex_control_marker|"
             r"artex_write_probe|artex-probe-\d+|artex_persist_ok|x-artx-key|"
             r"illegal_redirect_uri_enhanced|rEdAm0n1337XsS|redamon-poc\.invalid|"
-            r"xalgorix-(?:nonexistent|missing|xxe)-|evil\.pentestswarm\.invalid|[?&]artex=)",
+            r"xalgorix-(?:nonexistent|missing|xxe)-|evil\.pentestswarm\.invalid|"
+            r"/_i\d{2,6}_probe(?:_[a-z0-9_-]+)?(?=$|[\s/?&#])|"
+            r"(?:^|[\s/\\_-])i\d{2,6}-probe(?=$|[\s/?&#])|[?&]artex=)",
             re.IGNORECASE,
         ),
     ),
@@ -488,6 +490,13 @@ CLOUD_IAM_HIGH_RISK_ACTIONS: set[str] = {
     "create_service_principal",
     "getsecretvalue",
     "keyvault_secret_get",
+    "setiampolicy",
+    "createserviceaccountkey",
+    "generateaccesstoken",
+    "generateidtoken",
+    "signjwt",
+    "signblob",
+    "impersonateserviceaccount",
 }
 
 CLOUD_SECRET_SEARCH_RE = re.compile(r"(password|akia|secret|token|bearer|limit=1000)", re.IGNORECASE)
@@ -538,13 +547,15 @@ def _is_high_entropy_probe_slug(path: str) -> bool:
     letters = sum(c.isalpha() for c in stem)
     return digits >= 2 and letters >= 2 and len(set(stem.lower())) >= 6
 
-# Cloud IAM / Microsoft Graph / Key Vault & AWS Secrets REST path & CLI escalation patterns
+# Cloud IAM / Microsoft Graph / Key Vault, AWS Secrets, & GCP IAM/Secret Manager REST path & CLI escalation patterns
 CLOUD_IAM_PATH_OR_CMD_RE = re.compile(
     r"(?:/get-secret-value|\bget-secret-value\b|/create-access-key|\bcreate-access-key\b|"
     r"/attach-role-policy|\battach-role-policy\b|/put-role-policy|\bput-role-policy\b|"
     r"/update-assume-role-policy|/addpassword|/addkey|/admin/consent|/approleassignments|"
     r"/oauth2permissiongrants|listaccountsas|\bgetsecret\b|\blistsecrets\b|"
-    r"scm\.azurewebsites\.net|/deployments/validate|cognitoidentitycredentials)",
+    r"scm\.azurewebsites\.net|/deployments/validate|cognitoidentitycredentials|"
+    r"secrets\s+versions\s+access|iam\s+service-accounts\s+keys\s+create|"
+    r"add-iam-policy-binding|impersonate-service-account)",
     re.IGNORECASE,
 )
 
@@ -597,11 +608,24 @@ LLM_API_KEY_HARVEST_RE = re.compile(
 # Fork-agnostic blind-spot pivots: stolen valid cloud keys (0 AccessDenied), GraphQL/MCP discovery,
 # rapid config/credential file harvesting, and custom-domain OOB DNS callbacks after web probing.
 CLOUD_SERVICE_TOKEN_RE = re.compile(
-    r"\b(sts|iam|secretsmanager|s3|ec2|kms|rds|eks|lambda|bedrock|cloudtrail|cognito|ssm|keyvault|graph|arm)\b",
+    r"\b(sts|iam|secretsmanager|secretmanager|cloudresourcemanager|iamcredentials|"
+    r"s3|ec2|kms|rds|eks|lambda|bedrock|cloudtrail|cognito|ssm|keyvault|graph|arm|"
+    r"compute|storage|pubsub|bigquery|container|artifactregistry)\b",
     re.IGNORECASE,
 )
 CLOUD_HIGH_VALUE_SERVICES: frozenset[str] = frozenset(
-    {"iam", "secretsmanager", "kms", "bedrock", "keyvault", "cognito", "ssm"}
+    {
+        "iam",
+        "secretsmanager",
+        "secretmanager",
+        "iamcredentials",
+        "cloudresourcemanager",
+        "kms",
+        "bedrock",
+        "keyvault",
+        "cognito",
+        "ssm",
+    }
 )
 CLOUD_IAC_AUTOMATION_UA_RE = re.compile(
     r"(terraform|ansible|cloudcustodian|aws-config|datadog|wiz\.io|orca-security|prisma-cloud)",
@@ -612,7 +636,12 @@ CLOUD_IAC_AUTOMATION_UA_RE = re.compile(
 CLOUD_IAC_ACTOR_ROLE_RE = re.compile(
     r"(?:^|[:/_-])(?:terraform(?:[-_][a-z0-9]+)?|ansible(?:[-_][a-z0-9]+)?|cloudcustodian|aws-config|"
     r"datadog[-_](?:cspm|integration|scanner)|wiz[-_](?:scanner|sensor|cspm|role)|"
-    r"orca[-_](?:scanner|security)|prisma[-_]cloud)(?:$|[:/_-])",
+    r"orca[-_](?:scanner|security)|prisma[-_]cloud)(?:$|[:/_@-])",
+    re.IGNORECASE,
+)
+# Google-managed platform service agents (never excludes user-managed *.iam.gserviceaccount.com or default compute@developer SAs)
+GCP_MANAGED_SERVICE_AGENT_RE = re.compile(
+    r"(?:@gcp-sa-[a-z0-9.-]+\.iam\.gserviceaccount\.com|@cloudservices\.gserviceaccount\.com|-system@[a-z0-9.-]+\.gserviceaccount\.com)$",
     re.IGNORECASE,
 )
 # Elastic Security Labs ("56 AWS API calls in 141ms" / CyberStrikeAI CloudTrail):
@@ -734,7 +763,7 @@ def _is_oob_high_entropy_dns_fqdn(fqdn: str) -> bool:
         return True
     return False
 CLOUD_VAULT_OR_SAS_RE = re.compile(
-    r"(\.vault\.azure\.net|/secrets(?:/|\?|$)|restype=sas|listaccountsas|secretsmanager\.|get-secret-value)",
+    r"(\.vault\.azure\.net|/secrets(?:/|\?|$)|restype=sas|listaccountsas|secretsmanager\.|secretmanager\.googleapis\.com|get-secret-value)",
     re.IGNORECASE,
 )
 CLOUD_AUTH_TOKEN_RE = re.compile(
@@ -2292,8 +2321,9 @@ def _inspect_window_signals(
         # Cloud IAM privilege bursts (action, REST http_path, OR CLI command_line), SP fail->vault pivot, & DryRun
         action_raw = ev.get("action", "")
         action_norm = action_raw.lower().replace("-", "").replace(" ", "")
+        action_leaf = action_norm.rsplit(".", 1)[-1]
         cloud_ctx = f"{ev.get('event_type', '')} {ev.get('dest_host', '')} {ev_path} {ev.get('command_line', '')}"
-        if action_norm in CLOUD_IAM_HIGH_RISK_ACTIONS:
+        if action_norm in CLOUD_IAM_HIGH_RISK_ACTIONS or action_leaf in CLOUD_IAM_HIGH_RISK_ACTIONS:
             iam_hits += 1
             indicators.add(f"iam_action:{action_raw}")
         else:
@@ -2308,15 +2338,24 @@ def _inspect_window_signals(
             indicators.add(f"cloudwatch_secret_search:{ev.get('command_line', '')[:60]}")
         if "dryrun" in action_norm or "dryrunoperation" in searchable.lower():
             cloud_dryrun_hits += 1
-        # AntiFox / Arctic Wolf pattern: high-velocity AWS AccessDenied sweep across >=5 distinct APIs/services
-        # PLUS stolen valid cloud-key multi-service enumeration (0 AccessDenied) & CyberStrikeAI CloudTrail TTPs
+        # AntiFox / Arctic Wolf / Bitrise GCP pattern: high-velocity AWS AccessDenied or GCP PERMISSION_DENIED sweep
+        # PLUS stolen valid cloud-key multi-service enumeration (0 denials) & CyberStrikeAI CloudTrail TTPs
         if ev.get("surface") == "cloud_iam":
             cloud_api_event_count += 1
             actor_str = str(ev.get("actor", ""))
-            # Require verified IaC/CSPM role identity (NEVER suppress on attacker-spoofable User-Agent alone)
-            if CLOUD_IAC_ACTOR_ROLE_RE.search(actor_str) and not EC2_INSTANCE_ROLE_ACTOR_RE.search(actor_str):
+            # Require verified IaC/CSPM role or Google-managed service-agent identity (NEVER suppress on spoofable UA alone)
+            if (
+                CLOUD_IAC_ACTOR_ROLE_RE.search(actor_str)
+                or GCP_MANAGED_SERVICE_AGENT_RE.search(actor_str)
+            ) and not EC2_INSTANCE_ROLE_ACTOR_RE.search(actor_str):
                 cloud_is_iac_automation = True
-            for sm in CLOUD_SERVICE_TOKEN_RE.finditer(f"{ev.get('event_type', '')} {ev.get('dest_host', '')} {action_raw} {ev_path} {cmd_raw}"):
+            # For structured cloud audit logs (CloudTrail/GCP Audit), extract service names only from authoritative
+            # service/action fields (never free-form resourceName paths/bucket names that contain common nouns).
+            if ev.get("event_type") in {"gcp_audit", "cloudtrail"}:
+                svc_haystack = f"{ev.get('event_type', '')} {ev.get('dest_host', '')} {action_raw}"
+            else:
+                svc_haystack = f"{ev.get('event_type', '')} {ev.get('dest_host', '')} {action_raw} {ev_path} {cmd_raw}"
+            for sm in CLOUD_SERVICE_TOKEN_RE.finditer(svc_haystack):
                 cloud_services_seen.add(sm.group(1).lower())
             cloud_action_blob = f"{action_raw} {ev_path} {cmd_raw}"
             if EC2_USERDATA_ACTION_RE.search(cloud_action_blob) or (
@@ -2360,7 +2399,8 @@ def _inspect_window_signals(
                     cloud_ec2_role_external_sensitive = True
                     indicators.add(f"ec2_role_external_replay:{ev.get('actor', '')[:70]}")
             if status in {403, 401} or any(
-                tok in searchable.lower() for tok in ("accessdenied", "unauthorizedoperation")
+                tok in searchable.lower()
+                for tok in ("accessdenied", "unauthorizedoperation", "permission_denied", "permissiondenied")
             ):
                 denied_key = action_norm or ev_path or ev.get("dest_host", "")
                 if denied_key:
@@ -2369,6 +2409,7 @@ def _inspect_window_signals(
                 "getsecretvalue" in action_norm
                 or "get-secret-value" in cloud_ctx.lower()
                 or "getsecret" in action_norm
+                or "accesssecretversion" in action_norm
             ):
                 saw_cloud_secret_read_200 = True
 
@@ -2435,7 +2476,7 @@ def _inspect_window_signals(
 
     if edr_hits >= 1:
         reasons.add("edr_sensor_enumeration")
-    if iam_hits >= 2:
+    if iam_hits >= 2 and not cloud_is_iac_automation:
         reasons.add("cloud_iam_privilege_burst")
     if saw_vault_or_sas_after_auth:
         reasons.add("cloud_sp_fail_to_vault_pivot")
@@ -2464,6 +2505,7 @@ def _inspect_window_signals(
         reasons.add("llm_api_key_harvesting")
     if (
         len(cloud_services_seen) >= 5
+        and cloud_api_event_count >= 5
         and span_seconds <= 120.0
         and bool(cloud_services_seen & CLOUD_HIGH_VALUE_SERVICES)
         and not cloud_is_iac_automation
@@ -3851,26 +3893,34 @@ def scan_telemetry_file(
             )
         )
 
-    # Ninth pass: Single Source IP Operating Multiple Distinct Stolen Cloud Identities (200 OK)
-    # Catches Elastic's CyberStrikeAI pattern (single IP operating >=3 distinct IAM users / EC2 instance roles across accounts)
+    # Ninth pass: Single Source IP Operating Multiple Distinct Stolen Cloud Identities (AWS IAM/Roles, Azure SPs, & GCP Service Accounts)
+    # Catches Elastic's CyberStrikeAI pattern (200 OK multi-role) AND Bitrise's ARTEX GCP pattern (single IP operating
+    # >=3 distinct *.gserviceaccount.com keys including authenticated 403 PERMISSION_DENIED permission mapping).
+    # Excludes human emails, IaC/CSPM roles, and Google-managed platform service agents (@gcp-sa-*, @cloudservices, *-system@).
     multi_id_rows = con.execute(
         """
         SELECT
             source_host,
             COUNT(*) AS ev_cnt,
+            SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS err_cnt,
             COUNT(DISTINCT actor) AS distinct_identities,
             MIN(ts_epoch) AS min_ts,
             MAX(ts_epoch) AS max_ts,
-            STRING_AGG(DISTINCT actor, ',') AS actors_csv
+            STRING_AGG(DISTINCT actor, ',') AS actors_csv,
+            CASE
+                WHEN MAX(CASE WHEN LOWER(actor) LIKE '%.gserviceaccount.com' THEN 1 ELSE 0 END) = 1 THEN 'gcp_audit'
+                ELSE COALESCE(MAX(NULLIF(appliance, '')), 'aws_cloudtrail')
+            END AS det_appliance
         FROM events
         WHERE surface = 'cloud_iam'
           AND actor <> ''
           AND actor <> source_host
-          AND (status_code IS NULL OR (status_code >= 200 AND status_code < 300))
+          AND (status_code IS NULL OR (status_code >= 200 AND status_code < 300) OR status_code = 403)
           AND (
             LOWER(actor) LIKE 'arn:aws:%'
             OR LOWER(actor) LIKE '%assumed-role/%'
             OR LOWER(actor) LIKE '%serviceprincipal%'
+            OR LOWER(actor) LIKE '%.gserviceaccount.com'
             OR LOWER(event_type) LIKE '%cloudtrail%'
             OR LOWER(dest_host) LIKE '%.amazonaws.com'
           )
@@ -3881,6 +3931,9 @@ def scan_telemetry_file(
             OR LOWER(actor) LIKE '%wiz%'
             OR LOWER(actor) LIKE '%prisma%'
             OR LOWER(actor) LIKE '%cspm%'
+            OR LOWER(actor) LIKE '%@gcp-sa-%'
+            OR LOWER(actor) LIKE '%@cloudservices.gserviceaccount.com'
+            OR LOWER(actor) LIKE '%-system@%'
           )
         GROUP BY source_host
         HAVING COUNT(DISTINCT actor) >= 3
@@ -3889,8 +3942,8 @@ def scan_telemetry_file(
     ).fetchall()
 
     for mi_idx, mirow in enumerate(multi_id_rows, start=1):
-        mi_host, mi_cnt, mi_ids, mi_min, mi_max, mi_actors = mirow
-        # Require a valid IP address (excludes AWS service principals like cloudformation.amazonaws.com / AWS Internal)
+        mi_host, mi_cnt, mi_err_cnt, mi_ids, mi_min, mi_max, mi_actors, mi_app = mirow
+        # Require a valid IP address (excludes AWS service principals like cloudformation.amazonaws.com / AWS Internal / GCP "private")
         try:
             ipaddress.ip_address(str(mi_host).strip())
         except ValueError:
@@ -3898,6 +3951,7 @@ def scan_telemetry_file(
         if _is_allowlisted_scanner_ip(mi_host, authorized_scanner_ips):
             continue
         mi_span = max(float(mi_max - mi_min), 1.0)
+        mi_err_int = int(mi_err_cnt or 0)
         mi_reasons = ["cloud_multi_identity_from_single_ip"]
         mi_risk, mi_tier = compute_risk_score(mi_reasons)
         candidates.append(
@@ -3906,7 +3960,7 @@ def scan_telemetry_file(
                 source_host=mi_host,
                 actor=f"{mi_ids}_stolen_cloud_identities",
                 surface="cloud_iam",
-                appliance="aws_cloudtrail",
+                appliance=str(mi_app or "aws_cloudtrail"),
                 start_time=datetime.fromtimestamp(mi_min, tz=timezone.utc),
                 end_time=datetime.fromtimestamp(mi_max, tz=timezone.utc),
                 reasons=mi_reasons,
@@ -3920,8 +3974,8 @@ def scan_telemetry_file(
                     event_count=int(mi_cnt),
                     window_seconds=round(mi_span, 2),
                     events_per_minute=round((mi_cnt / mi_span) * 60.0, 2),
-                    error_count=0,
-                    error_ratio=0.0,
+                    error_count=mi_err_int,
+                    error_ratio=round(mi_err_int / max(int(mi_cnt), 1), 3),
                     unique_targets=int(mi_ids),
                 ),
                 sample_events=[],

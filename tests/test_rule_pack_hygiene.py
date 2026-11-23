@@ -86,6 +86,10 @@ def test_suricata_rules_have_valid_classtypes_buffers_sids_and_no_fp_traps() -> 
     assert "charset=" in sid21_line and r"\xdf{4,}" in sid21_line, (
         "sid:9100021 must require BOTH legacy charset header AND >=4 consecutive 0xDF bytes (0 FP on German 'Straße')"
     )
+    sid09_line = next(ln for ln in rule_lines if "sid:9100009;" in ln)
+    assert r"_i\d{2,6}_probe" in sid09_line and r"i\d{2,6}-probe" in sid09_line, (
+        "sid:9100009 must include Bitrise ARTEX task-iteration probe patterns (_i<N>_probe / i<N>-probe)"
+    )
     assert r"O=ARTEX(?:,|$)" in text, "sid:9100013 must enforce exact RDN boundary on O=ARTEX"
     assert "oast\\.(?:live|fun|me|pro|site|online)" in text, "sid:9100011 must include full Interactsh oast.* TLDs"
     assert "[8787,8788,8790,8890,18899]" in text, "sid:9100002 must include MCP port 18899"

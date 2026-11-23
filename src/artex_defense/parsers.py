@@ -561,6 +561,114 @@ def _normalize_cloudtrail_record(record: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _normalize_gcp_audit_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Normalize native Google Cloud Audit Logs JSON (`protoPayload` AuditLog)."""
+    ts_raw = _extract_first(record, ("timestamp", "receiveTimestamp", "time"))
+    if ts_raw is None:
+        raise ValueError("GCP Cloud Audit record missing timestamp")
+    ts = parse_timestamp(ts_raw)
+
+    pp = record.get("protoPayload") if isinstance(record.get("protoPayload"), dict) else {}
+    auth = pp.get("authenticationInfo") if isinstance(pp.get("authenticationInfo"), dict) else {}
+    meta = pp.get("requestMetadata") if isinstance(pp.get("requestMetadata"), dict) else {}
+    status_obj = pp.get("status") if isinstance(pp.get("status"), dict) else {}
+
+    src_ip = str(meta.get("callerIp") or "gcp-audit").strip() or "gcp-audit"
+    actor = str(
+        auth.get("principalEmail")
+        or auth.get("principalSubject")
+        or src_ip
+    )
+    service_name = str(pp.get("serviceName") or "googleapis.com")
+    method_name = str(pp.get("methodName") or "")
+    resource_name = str(pp.get("resourceName") or "")
+    ua = str(meta.get("callerSuppliedUserAgent") or "")
+
+    grpc_code_raw = status_obj.get("code")
+    status_msg = str(status_obj.get("message") or "")
+    msg_low = status_msg.lower()
+    grpc_label = ""
+    grpc_code: int | None = None
+    if isinstance(grpc_code_raw, int) and not isinstance(grpc_code_raw, bool):
+        grpc_code = grpc_code_raw
+    elif isinstance(grpc_code_raw, str):
+        code_str = grpc_code_raw.strip().upper()
+        if code_str.isdigit():
+            grpc_code = int(code_str)
+        else:
+            grpc_str_map = {
+                "OK": 0,
+                "INVALID_ARGUMENT": 3,
+                "NOT_FOUND": 5,
+                "PERMISSION_DENIED": 7,
+                "RESOURCE_EXHAUSTED": 8,
+                "FAILED_PRECONDITION": 9,
+                "UNAUTHENTICATED": 16,
+            }
+            grpc_code = grpc_str_map.get(code_str)
+
+    if grpc_code is not None:
+        if grpc_code == 0:
+            status_code = 200
+        elif grpc_code == 7:
+            status_code = 403
+            grpc_label = "PERMISSION_DENIED"
+        elif grpc_code == 16:
+            status_code = 401
+            grpc_label = "UNAUTHENTICATED"
+        elif grpc_code == 5:
+            status_code = 404
+            grpc_label = "NOT_FOUND"
+        elif grpc_code == 8:
+            status_code = 429
+            grpc_label = "RESOURCE_EXHAUSTED"
+        elif grpc_code in (3, 9):
+            status_code = 400
+        else:
+            status_code = 403 if ("permission" in msg_low and "denied" in msg_low) else 400
+    elif "permission_denied" in msg_low or ("permission" in msg_low and "denied" in msg_low):
+        status_code = 403
+        grpc_label = "PERMISSION_DENIED"
+    elif "unauthenticated" in msg_low:
+        status_code = 401
+        grpc_label = "UNAUTHENTICATED"
+    else:
+        status_code = 200
+
+    cmd_parts: list[str] = []
+    if resource_name:
+        cmd_parts.append(f"resource={resource_name[:200]}")
+    if grpc_label:
+        cmd_parts.append(f"status={grpc_label}")
+    if status_msg:
+        cmd_parts.append(status_msg[:160])
+    delegation = auth.get("serviceAccountDelegationInfo")
+    if isinstance(delegation, list) and delegation:
+        cmd_parts.append(f"delegation={json.dumps(delegation[:3], ensure_ascii=False)[:180]}")
+    req_params = pp.get("request")
+    if isinstance(req_params, dict) and req_params:
+        cmd_parts.append(_flatten_cloudtrail_params(req_params, max_len=240))
+    cmd_line = " ".join(p for p in cmd_parts if p).strip()[:500]
+
+    return _make_event(
+        ts=ts,
+        source_host=src_ip,
+        actor=actor,
+        event_type="gcp_audit",
+        surface="cloud_iam",
+        appliance="gcp_audit",
+        command_line=cmd_line,
+        dest_host=service_name,
+        dest_port=443,
+        http_method="POST",
+        http_path=resource_name,
+        user_agent=ua,
+        status_code=status_code,
+        action=method_name,
+        raw=record,
+    )
+
+
 def _is_multicast_or_mdns_eve(record: dict[str, Any]) -> bool:
     """Return True if a Suricata EVE record represents local mDNS/LLMNR/multicast chatter."""
     dport = record.get("dest_port")
@@ -730,6 +838,14 @@ def normalize_json_record(
         )
     ):
         return _normalize_cloudtrail_record(record)
+
+    # Detect native Google Cloud Audit Logs JSON (protoPayload AuditLog)
+    proto_payload = record.get("protoPayload")
+    if isinstance(proto_payload, dict) and (
+        "auditlog" in str(proto_payload.get("@type", "")).lower()
+        or ("methodName" in proto_payload and "serviceName" in proto_payload)
+    ):
+        return _normalize_gcp_audit_record(record)
 
     # Detect native Okta System Log JSON
     if "published" in record and "eventType" in record and ("outcome" in record or "client" in record):
@@ -1291,6 +1407,10 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
         if isinstance(whole, dict) and (
             isinstance(whole.get("Records"), list)
             or (
+                isinstance(whole.get("entries"), list)
+                and any(isinstance(rec, dict) and "protoPayload" in rec for rec in whole["entries"])
+            )
+            or (
                 isinstance(whole.get("items"), list)
                 and (
                     whole.get("kind") == "EventList"
@@ -1298,7 +1418,12 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
                 )
             )
         ):
-            batch = whole["Records"] if isinstance(whole.get("Records"), list) else whole["items"]
+            if isinstance(whole.get("Records"), list):
+                batch = whole["Records"]
+            elif isinstance(whole.get("entries"), list):
+                batch = whole["entries"]
+            else:
+                batch = whole["items"]
             parsed_records = [rec for rec in batch if isinstance(rec, dict)]
         elif isinstance(whole, list):
             parsed_records = [rec for rec in whole if isinstance(rec, dict)]
@@ -1318,6 +1443,10 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
             if isinstance(record, dict):
                 if isinstance(record.get("Records"), list):
                     parsed_records.extend(sub for sub in record["Records"] if isinstance(sub, dict))
+                elif isinstance(record.get("entries"), list) and any(
+                    isinstance(sub, dict) and "protoPayload" in sub for sub in record["entries"]
+                ):
+                    parsed_records.extend(sub for sub in record["entries"] if isinstance(sub, dict))
                 elif isinstance(record.get("items"), list) and (
                     record.get("kind") == "EventList"
                     or str(record.get("apiVersion", "")).startswith("audit.k8s.io/")

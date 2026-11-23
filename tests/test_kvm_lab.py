@@ -1732,6 +1732,154 @@ def test_storm0940_preauth_sp_replay_and_server_ephemeral_tunnel_and_responder_z
     assert scan_telemetry_file(p_srv_ok) == []
 
 
+def test_gcp_cloud_audit_tri_cloud_and_bitrise_artex_ttps(tmp_path: Path) -> None:
+    """Native GCP Cloud Audit parser + Bitrise SEV-1 ARTEX TTPs (multi-SA single-IP, PERMISSION_DENIED->SecretManager, task-iteration probes) with 0 FP baselines."""
+
+    def _gcp_entry(
+        ts: str,
+        ip: str,
+        principal: str,
+        service: str,
+        method: str,
+        resource: str = "projects/prod-proj",
+        grpc_code: int | None = 0,
+        status_msg: str = "",
+        ua: str = "google-cloud-sdk gcloud/490.0.0",
+    ) -> dict:
+        pp: dict = {
+            "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+            "authenticationInfo": {"principalEmail": principal},
+            "requestMetadata": {"callerIp": ip, "callerSuppliedUserAgent": ua},
+            "serviceName": service,
+            "methodName": method,
+            "resourceName": resource,
+        }
+        if grpc_code is not None or status_msg:
+            pp["status"] = {}
+            if grpc_code is not None:
+                pp["status"]["code"] = grpc_code
+            if status_msg:
+                pp["status"]["message"] = status_msg
+        return {"timestamp": ts, "protoPayload": pp, "logName": "projects/prod-proj/logs/cloudaudit.googleapis.com%2Fdata_access"}
+
+    # 1. TP A: Bitrise-style native GCP Cloud Audit {"entries": [...]} export — single IP operating 4 distinct SAs
+    #    (incl. default compute@developer SA) + sequential PERMISSION_DENIED (gRPC code 7) -> AccessSecretVersion (200 OK)
+    p_gcp_tp = tmp_path / "gcp_bitrise_attack.json"
+    entries_tp = [
+        _gcp_entry("2026-11-23T08:00:00Z", "198.51.100.77", "ci-worker-01@prod-proj.iam.gserviceaccount.com", "storage.googleapis.com", "storage.buckets.list", grpc_code=7, status_msg="Permission 'storage.buckets.list' denied"),
+        _gcp_entry("2026-11-23T08:00:02Z", "198.51.100.77", "ci-worker-01@prod-proj.iam.gserviceaccount.com", "compute.googleapis.com", "v1.compute.instances.list", grpc_code=7, status_msg="Permission 'compute.instances.list' denied"),
+        _gcp_entry("2026-11-23T08:00:04Z", "198.51.100.77", "ci-worker-01@prod-proj.iam.gserviceaccount.com", "iam.googleapis.com", "google.iam.admin.v1.ListServiceAccounts", grpc_code=7, status_msg="Permission denied"),
+        _gcp_entry("2026-11-23T08:00:06Z", "198.51.100.77", "ci-worker-01@prod-proj.iam.gserviceaccount.com", "secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion", resource="projects/123/secrets/prod-signing-key/versions/latest", grpc_code=0),
+        _gcp_entry("2026-11-23T08:00:30Z", "198.51.100.77", "deploy-bot-02@prod-proj.iam.gserviceaccount.com", "cloudresourcemanager.googleapis.com", "GetIamPolicy", grpc_code=7, status_msg="PERMISSION_DENIED"),
+        _gcp_entry("2026-11-23T08:01:00Z", "198.51.100.77", "artifact-sync-03@prod-proj.iam.gserviceaccount.com", "artifactregistry.googleapis.com", "google.devtools.artifactregistry.v1.ArtifactRegistry.ListRepositories", grpc_code=0),
+        _gcp_entry("2026-11-23T08:01:30Z", "198.51.100.77", "1234567890-compute@developer.gserviceaccount.com", "iamcredentials.googleapis.com", "GenerateAccessToken", grpc_code=0),
+    ]
+    p_gcp_tp.write_text(json.dumps({"entries": entries_tp}), encoding="utf-8")
+    c_gcp_tp = scan_telemetry_file(p_gcp_tp)
+    gcp_reasons = {r for c in c_gcp_tp for r in c.reasons}
+    assert "cloud_multi_identity_from_single_ip" in gcp_reasons
+    assert "cloud_secret_search_or_dryrun_burst" in gcp_reasons
+    multi_cand = next(c for c in c_gcp_tp if "cloud_multi_identity_from_single_ip" in c.reasons)
+    assert multi_cand.appliance == "gcp_audit"
+    assert multi_cand.risk_score >= 90 and multi_cand.alert_tier == "alert"
+
+    # 2. TP B: 100%-200 OK stolen GCP key multi-service recon across 5 services in < 20s
+    p_gcp_enum = tmp_path / "gcp_stolen_key_enum.jsonl"
+    enum_entries = [
+        _gcp_entry("2026-11-23T08:10:00Z", "203.0.113.88", "build-runner@prod-proj.iam.gserviceaccount.com", "cloudresourcemanager.googleapis.com", "GetProject", grpc_code=0),
+        _gcp_entry("2026-11-23T08:10:03Z", "203.0.113.88", "build-runner@prod-proj.iam.gserviceaccount.com", "iam.googleapis.com", "google.iam.admin.v1.ListServiceAccounts", grpc_code=0),
+        _gcp_entry("2026-11-23T08:10:06Z", "203.0.113.88", "build-runner@prod-proj.iam.gserviceaccount.com", "secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.ListSecrets", grpc_code=0),
+        _gcp_entry("2026-11-23T08:10:09Z", "203.0.113.88", "build-runner@prod-proj.iam.gserviceaccount.com", "compute.googleapis.com", "v1.compute.instances.list", grpc_code=0),
+        _gcp_entry("2026-11-23T08:10:12Z", "203.0.113.88", "build-runner@prod-proj.iam.gserviceaccount.com", "storage.googleapis.com", "storage.buckets.list", grpc_code=0),
+    ]
+    p_gcp_enum.write_text("\n".join(json.dumps(e) for e in enum_entries) + "\n", encoding="utf-8")
+    c_gcp_enum = scan_telemetry_file(p_gcp_enum)
+    assert c_gcp_enum and "cloud_stolen_key_multi_service_enum" in c_gcp_enum[0].reasons
+
+    # 3. TN (0 FP): Benign GCP Terraform SA + Google-managed service agents + corporate NAT human engineers + single routine SA
+    p_gcp_ok = tmp_path / "gcp_benign_baselines.jsonl"
+    ok_entries = [
+        # Terraform SA provisioning across 5 services + SetIamPolicy
+        _gcp_entry("2026-11-23T09:00:00Z", "198.51.100.120", "terraform-deploy@prod-proj.iam.gserviceaccount.com", "cloudresourcemanager.googleapis.com", "SetIamPolicy", grpc_code=0, ua="Terraform/1.9.8"),
+        _gcp_entry("2026-11-23T09:00:02Z", "198.51.100.120", "terraform-deploy@prod-proj.iam.gserviceaccount.com", "iam.googleapis.com", "SetIamPolicy", grpc_code=0, ua="Terraform/1.9.8"),
+        _gcp_entry("2026-11-23T09:00:04Z", "198.51.100.120", "terraform-deploy@prod-proj.iam.gserviceaccount.com", "secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.ListSecrets", grpc_code=0, ua="Terraform/1.9.8"),
+        _gcp_entry("2026-11-23T09:00:06Z", "198.51.100.120", "terraform-deploy@prod-proj.iam.gserviceaccount.com", "compute.googleapis.com", "v1.compute.instances.list", grpc_code=0, ua="Terraform/1.9.8"),
+        _gcp_entry("2026-11-23T09:00:08Z", "198.51.100.120", "terraform-deploy@prod-proj.iam.gserviceaccount.com", "storage.googleapis.com", "storage.buckets.list", grpc_code=0, ua="Terraform/1.9.8"),
+        # Google-managed service agents sharing an IP
+        _gcp_entry("2026-11-23T09:01:00Z", "198.51.100.120", "service-123456@gcp-sa-gke.iam.gserviceaccount.com", "compute.googleapis.com", "v1.compute.instances.list", grpc_code=0),
+        _gcp_entry("2026-11-23T09:01:05Z", "198.51.100.120", "123456@cloudservices.gserviceaccount.com", "compute.googleapis.com", "v1.compute.instances.list", grpc_code=0),
+        _gcp_entry("2026-11-23T09:01:10Z", "198.51.100.120", "gke-system@prod-proj.iam.gserviceaccount.com", "container.googleapis.com", "google.container.v1.ClusterManager.GetCluster", grpc_code=0),
+        # Three human engineers behind one corporate office NAT IP running gcloud
+        _gcp_entry("2026-11-23T09:05:00Z", "198.51.100.200", "alice@corp.example", "compute.googleapis.com", "v1.compute.instances.list", grpc_code=0),
+        _gcp_entry("2026-11-23T09:05:10Z", "198.51.100.200", "bob@corp.example", "storage.googleapis.com", "storage.buckets.list", grpc_code=0),
+        _gcp_entry("2026-11-23T09:05:20Z", "198.51.100.200", "carol@corp.example", "bigquery.googleapis.com", "jobservice.list", grpc_code=0),
+        # Single routine application SA doing normal storage/compute reads + startup fetch of 2 runtime secrets
+        _gcp_entry("2026-11-23T09:10:00Z", "203.0.113.15", "app-backend@prod-proj.iam.gserviceaccount.com", "storage.googleapis.com", "storage.objects.get", resource="projects/prod/buckets/arm-compute-container-iam-storage-logs/objects/app.json", grpc_code=0),
+        _gcp_entry("2026-11-23T09:10:05Z", "203.0.113.15", "app-backend@prod-proj.iam.gserviceaccount.com", "secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion", resource="projects/prod/secrets/db-password/versions/latest", grpc_code=0),
+        _gcp_entry("2026-11-23T09:10:06Z", "203.0.113.15", "app-backend@prod-proj.iam.gserviceaccount.com", "secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion", resource="projects/prod/secrets/stripe-key/versions/latest", grpc_code=0),
+        _gcp_entry("2026-11-23T09:10:15Z", "203.0.113.15", "app-backend@prod-proj.iam.gserviceaccount.com", "compute.googleapis.com", "v1.compute.instances.get", grpc_code=0),
+    ]
+    p_gcp_ok.write_text("\n".join(json.dumps(e) for e in ok_entries) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(p_gcp_ok) == []
+
+    # 3b. Cloud Logging {"entries": [...]} bundle with >10 leading textPayload records + stringified gRPC status codes
+    p_gcp_mixed = tmp_path / "gcp_mixed_entries.json"
+    leading_text = [
+        {"timestamp": f"2026-11-23T09:20:{i:02d}Z", "textPayload": f"app log line {i}"}
+        for i in range(12)
+    ]
+    trailing_audit = [
+        {
+            "timestamp": "2026-11-23T09:21:00Z",
+            "protoPayload": {
+                "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+                "authenticationInfo": {"principalEmail": "ci-worker-09@prod-proj.iam.gserviceaccount.com"},
+                "requestMetadata": {"callerIp": "198.51.100.78"},
+                "serviceName": "storage.googleapis.com",
+                "methodName": f"storage.buckets.test_{i}",
+                "status": {"code": "PERMISSION_DENIED" if i % 2 == 0 else "7"},
+            },
+        }
+        for i in range(5)
+    ]
+    p_gcp_mixed.write_text(json.dumps({"entries": leading_text + trailing_audit}), encoding="utf-8")
+    c_gcp_mixed = scan_telemetry_file(p_gcp_mixed)
+    assert c_gcp_mixed and "cloud_secret_search_or_dryrun_burst" in c_gcp_mixed[0].reasons
+
+    # 4. TP + TN: Bitrise ARTEX task-iteration canary probes (`/_i6084_probe_missing`, `/api/v1/i871-probe`)
+    p_probe_tp = tmp_path / "bitrise_probes_tp.jsonl"
+    p_probe_tp.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T10:00:00Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/_i6084_probe_missing", "status_code": 404},
+                {"timestamp": "2026-11-23T10:00:05Z", "source_host": "198.51.100.92", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/api/v1/i871-probe", "status_code": 404},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_probe_tp = scan_telemetry_file(p_probe_tp)
+    assert len(c_probe_tp) == 2
+    assert all("unit42_agentic_canary_probe" in c.reasons and c.risk_score >= 80 for c in c_probe_tp)
+
+    p_probe_ok = tmp_path / "bitrise_probes_tn.jsonl"
+    p_probe_ok.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T10:05:00Z", "source_host": "198.51.100.93", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/api/v1/items/123", "status_code": 200},
+                {"timestamp": "2026-11-23T10:05:10Z", "source_host": "198.51.100.93", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/multi-probe", "status_code": 404},
+                {"timestamp": "2026-11-23T10:05:20Z", "source_host": "198.51.100.93", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/ci-probe", "status_code": 404},
+                {"timestamp": "2026-11-23T10:05:30Z", "source_host": "198.51.100.93", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/i1-probe", "status_code": 404},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(p_probe_ok) == []
+
+
 
 
 
