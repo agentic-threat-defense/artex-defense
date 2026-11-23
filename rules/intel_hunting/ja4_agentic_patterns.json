@@ -1,0 +1,251 @@
+{
+  "schema_version": "1.0",
+  "title": "JA4+ Runtime Reference & Structural Hunting Patterns for ARTEX and Agentic AI",
+  "generated_date": "2026-11-23",
+  "operational_warning": "DO NOT BLOCK ON STATIC JA4 OR JA4H HASHES ALONE. All static runtime fingerprints below belong to standard Go, OpenSSL, Python, and curl stacks shared by millions of benign services and drift across compiler/library releases. Use strictly for enrichment, stack classification, and correlation with UA mismatch, 4xx probing, or behavioral signals.",
+  "runtime_reference_fingerprints": [
+    {
+      "id": "go_1_22_default_h2_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d1411h2_cbb2034c60b8_e7c285222651",
+      "runtime": "go1.22.12",
+      "stack": "Go net/http (HTTP/2 enabled, SNI)",
+      "client_hello_bytes": 274,
+      "blocklist_safe": false,
+      "notes": "Baseline Go 1.22 crypto/tls handshake. Shares ja4_c e7c285222651 with Go 1.23/1.24."
+    },
+    {
+      "id": "go_1_22_http1_no_alpn_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d141000_cbb2034c60b8_e7c285222651",
+      "runtime": "go1.22.12",
+      "stack": "Go net/http (HTTP/1.1 forced, no ALPN, SNI)",
+      "client_hello_bytes": 256,
+      "blocklist_safe": false,
+      "notes": "Missing ALPN (00) triggers non-browser JA4 check when paired with browser UA."
+    },
+    {
+      "id": "go_1_22_default_h2_raw_ip",
+      "fingerprint_type": "ja4",
+      "value": "t13i1410h2_cbb2034c60b8_e7c285222651",
+      "runtime": "go1.22.12",
+      "stack": "Go net/http (HTTP/2 enabled, raw IP / no SNI)",
+      "client_hello_bytes": 251,
+      "blocklist_safe": false,
+      "notes": "Raw-IP TLS indicator (t13i)."
+    },
+    {
+      "id": "go_1_22_tls12_sni",
+      "fingerprint_type": "ja4",
+      "value": "t12d1110h2_cba83a0ed4ae_824bd91ab3e2",
+      "runtime": "go1.22.12",
+      "stack": "Go net/http (TLS 1.2 max, SNI)",
+      "client_hello_bytes": 224,
+      "blocklist_safe": false,
+      "notes": "TLS 1.2 fallback triggers non-browser JA4 check when paired with modern browser UA."
+    },
+    {
+      "id": "go_1_23_1_24_default_h2_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d1311h2_f57a46bbacb6_e7c285222651",
+      "runtime": "go1.23.12 / go1.24.13",
+      "stack": "Go net/http (HTTP/2 enabled, PQ keyshare, SNI)",
+      "client_hello_bytes": 1494,
+      "blocklist_safe": false,
+      "notes": "Demonstrates JA4_a/JA4_b drift from Go 1.22 (14->13 ciphers) while JA4_c (e7c285222651) remains invariant. Pair with JA4H when browser UA is spoofed."
+    },
+    {
+      "id": "go_1_23_1_24_http1_no_alpn_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d131000_f57a46bbacb6_e7c285222651",
+      "runtime": "go1.23.12 / go1.24.13",
+      "stack": "Go net/http (HTTP/1.1 forced, no ALPN, SNI)",
+      "client_hello_bytes": 1476,
+      "blocklist_safe": false,
+      "notes": "Missing ALPN (00) triggers non-browser JA4 check when paired with browser UA."
+    },
+    {
+      "id": "go_1_23_1_24_default_h2_raw_ip",
+      "fingerprint_type": "ja4",
+      "value": "t13i1310h2_f57a46bbacb6_e7c285222651",
+      "runtime": "go1.23.12 / go1.24.13",
+      "stack": "Go net/http (HTTP/2 enabled, raw IP / no SNI)",
+      "client_hello_bytes": 1471,
+      "blocklist_safe": false,
+      "notes": "Raw-IP TLS indicator (t13i)."
+    },
+    {
+      "id": "go_1_23_1_24_tls12_sni",
+      "fingerprint_type": "ja4",
+      "value": "t12d1010h2_a8cf61a50a39_824bd91ab3e2",
+      "runtime": "go1.23.12 / go1.24.13",
+      "stack": "Go net/http (TLS 1.2 max, SNI)",
+      "client_hello_bytes": 222,
+      "blocklist_safe": false,
+      "notes": "TLS 1.2 fallback."
+    },
+    {
+      "id": "python_3_11_openssl_3_0_urllib_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d311100_e8f1e7e78f70_d41ae481755e",
+      "runtime": "Python 3.11 / OpenSSL 3.0 (Debian 12)",
+      "stack": "Python urllib / http.client (SNI)",
+      "blocklist_safe": false,
+      "notes": "Bloated OpenSSL cipher list (31 ciphers) + missing ALPN (00)."
+    },
+    {
+      "id": "python_3_11_openssl_3_0_raw_ip",
+      "fingerprint_type": "ja4",
+      "value": "t13i311000_e8f1e7e78f70_d41ae481755e",
+      "runtime": "Python 3.11 / OpenSSL 3.0 (Debian 12)",
+      "stack": "Python urllib / ssl (raw IP / no SNI)",
+      "blocklist_safe": false,
+      "notes": "Raw-IP TLS (t13i) + 31 ciphers + missing ALPN (00)."
+    },
+    {
+      "id": "python_3_11_openssl_3_0_alpn_h2",
+      "fingerprint_type": "ja4",
+      "value": "t13d3112h2_e8f1e7e78f70_d41ae481755e",
+      "runtime": "Python 3.11 / OpenSSL 3.0 (Debian 12)",
+      "stack": "Python ssl (ALPN h2, SNI)",
+      "blocklist_safe": false,
+      "notes": "Bloated OpenSSL cipher list (31 ciphers >= 26) even when HTTP/2 ALPN is enabled."
+    },
+    {
+      "id": "python_3_11_openssl_3_0_alpn_h1",
+      "fingerprint_type": "ja4",
+      "value": "t13d3112h1_e8f1e7e78f70_d41ae481755e",
+      "runtime": "Python 3.11 / OpenSSL 3.0 (Debian 12)",
+      "stack": "Python ssl (ALPN http/1.1, SNI)",
+      "blocklist_safe": false,
+      "notes": "Bloated OpenSSL cipher list (31 ciphers >= 26) with explicit http/1.1 ALPN."
+    },
+    {
+      "id": "python_openssl_tls12_fallback_sni",
+      "fingerprint_type": "ja4",
+      "value": "t12d280700_d943125447b4_e7e480e5a997",
+      "runtime": "Python 3.11 / OpenSSL 3.0 (Debian 12)",
+      "stack": "Python ssl (TLS 1.2 max, SNI)",
+      "blocklist_safe": false,
+      "notes": "TLS 1.2 fallback + 28 ciphers + 7 extensions + missing ALPN (00)."
+    },
+    {
+      "id": "python_3_14_openssl_3_6_urllib_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d171200_ab0a1bf427ad_ecd0401ec68b",
+      "runtime": "Python 3.14.8 / OpenSSL 3.6.5",
+      "stack": "Python urllib / ssl (SNI)",
+      "blocklist_safe": false,
+      "notes": "Demonstrates OpenSSL 3.0->3.6 cipher-list drift (31->17); missing ALPN (00) remains a reliable non-browser structural cue."
+    },
+    {
+      "id": "curl_8_23_openssl_3_6_sni",
+      "fingerprint_type": "ja4",
+      "value": "t13d3013h2_1d37bd780c83_8537cf56674e",
+      "runtime": "curl 8.23.0 / OpenSSL 3.6.5",
+      "stack": "libcurl HTTP/2 (SNI)",
+      "blocklist_safe": false,
+      "notes": "Bloated OpenSSL cipher list (30 ciphers >= 26) impossible for modern Chrome/Firefox/Edge."
+    },
+    {
+      "id": "curl_8_23_openssl_3_6_raw_ip",
+      "fingerprint_type": "ja4",
+      "value": "t13i3012h2_1d37bd780c83_8537cf56674e",
+      "runtime": "curl 8.23.0 / OpenSSL 3.6.5",
+      "stack": "libcurl HTTP/2 (raw IP / no SNI)",
+      "blocklist_safe": false,
+      "notes": "Raw-IP TLS (t13i) + 30 ciphers."
+    },
+    {
+      "id": "go_net_http_get_ja4h",
+      "fingerprint_type": "ja4h",
+      "value": "ge11nn030000_cd680697de12_000000000000_000000000000",
+      "runtime": "Go 1.22 / 1.23 / 1.24 net/http",
+      "stack": "Go HTTP/1.1 GET (default or Chrome-UA spoofed)",
+      "blocklist_safe": false,
+      "notes": "Invariant across Go 1.22-1.24; 3 headers and lang=0000 even when User-Agent spoofs Chrome."
+    },
+    {
+      "id": "go_net_http_post_json_ja4h",
+      "fingerprint_type": "ja4h",
+      "value": "po11nn050000_a9e6c43a0296_000000000000_000000000000",
+      "runtime": "Go 1.22 / 1.23 / 1.24 net/http",
+      "stack": "Go HTTP/1.1 POST application/json",
+      "blocklist_safe": false,
+      "notes": "5 headers, lang=0000."
+    },
+    {
+      "id": "curl_8_get_ja4h",
+      "fingerprint_type": "ja4h",
+      "value": "ge11nn030000_fe444ad14866_000000000000_000000000000",
+      "runtime": "curl 8.x",
+      "stack": "curl HTTP/1.1 GET",
+      "blocklist_safe": false,
+      "notes": "3 headers, lang=0000."
+    },
+    {
+      "id": "python_urllib_get_ja4h",
+      "fingerprint_type": "ja4h",
+      "value": "ge11nn040000_5b1e8b5f4d2d_000000000000_000000000000",
+      "runtime": "Python 3.11-3.14 urllib",
+      "stack": "Python urllib HTTP/1.1 GET",
+      "blocklist_safe": false,
+      "notes": "4 headers, lang=0000."
+    },
+    {
+      "id": "python_httpx_get_ja4h",
+      "fingerprint_type": "ja4h",
+      "value": "ge11nn050000_be0d0b335e46_000000000000_000000000000",
+      "runtime": "Python httpx 0.28.1",
+      "stack": "Python httpx HTTP/1.1 GET",
+      "blocklist_safe": false,
+      "notes": "5 headers, lang=0000; common in LLM/MCP Python toolchains."
+    }
+  ],
+  "structural_hunting_patterns": [
+    {
+      "id": "browser_ua_vs_non_browser_ja4",
+      "signal_type": "ja4_impersonation",
+      "description": "Modern Chrome/Firefox/Edge 90+ User-Agent (excluding honest automation/WebView) paired with TLS<=1.2, missing ALPN (00), cipher count >=26, or extension count <=8.",
+      "ja4_regex_any": [
+        "^t(10|11|12)[di]",
+        "^t[0-9]{2}[di][0-9]{4}00_",
+        "^t13[di](2[6-9]|[3-9][0-9])[0-9]{2}",
+        "^t13[di][0-9]{2}0[0-8]"
+      ],
+      "caveat": "Skip TLS JA4 evaluation on traffic arriving from trusted L7 TLS-reoriginating reverse proxies."
+    },
+    {
+      "id": "browser_ua_vs_stripped_cli_ja4h",
+      "signal_type": "ja4h_impersonation",
+      "description": "Modern Chrome/Firefox/Edge 90+ User-Agent paired with stripped CLI HTTP headers (<=5 headers and lang=0000; excluding OPTIONS op* and CONNECT co*).",
+      "ja4h_regex": "^(?!op|co)[a-z]{2}[0-9]{2}[cn][rn]0[0-5]0000_",
+      "caveat": "Survives L7 TLS-terminating reverse proxies; exclude health/metrics endpoints. Note: uses PCRE negative lookahead (valid in Python re / Splunk PCRE); for RE2/LogScale/Go engines, match ^[a-z]{2}[0-9]{2}[cn][rn]0[0-5]0000_ and exclude prefixes op/co separately."
+    },
+    {
+      "id": "raw_ip_tls_no_sni",
+      "signal_type": "raw_ip_tls",
+      "description": "TLS ClientHello without SNI (4th character of JA4_a is 'i').",
+      "ja4_regex": "^t1[23]i[0-9]{4}[a-z0-9]{2}_",
+      "caveat": "Enrich with destination port, bytes_out, and non-asset error counts to exclude internal IP-based monitoring."
+    },
+    {
+      "id": "ja4_client_stack_whiplash",
+      "signal_type": "behavioral_whiplash",
+      "description": "Single source IP emits >=3 distinct JA4 or JA4H stacks against the same target with a single spoofed UA, >=3 non-asset 4xx errors, or >=2 edge auth failures (proxy-OFF mode).",
+      "caveat": "Require error/spoofed-UA corroboration to prevent false positives on corporate NAT gateways."
+    },
+    {
+      "id": "ja4_proxy_collapse_multi_ua",
+      "signal_type": "behavioral_proxy_collapse",
+      "description": "Single source IP emits exactly 1 constant JA4 while rotating >=3 distinct client UA families (curl, python, browser, etc.) during non-asset 4xx/edge probing (ARTEX Go recording-proxy ON mode).",
+      "caveat": "Exclude corporate SWGs using browser-version grouping rather than raw UA strings."
+    },
+    {
+      "id": "self_signed_console_ja4x_ja4s",
+      "signal_type": "infrastructure_clustering",
+      "description": "Self-signed certificate structure (ja4x_a == ja4x_b), excluding top public CAs, clustered by (ja4x_c, ja4s) on console/relay ports (8787, 8788, 8790, 8890, 8443).",
+      "caveat": "Pair with ASN/hosting-provider enrichment to separate dev lab boxes from active attacker infrastructure."
+    }
+  ]
+}

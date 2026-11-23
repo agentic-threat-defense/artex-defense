@@ -18,7 +18,7 @@ Static strings from early advisories (`ArtexProbe`, realm headers, canary paths)
 - **Detection Engineers:** 21 validated Sigma rules in [rules/sigma/](rules/sigma/), pre-compiled SIEM/XDR packs in [rules/queries/compiled_sigma/](rules/queries/compiled_sigma/) (Elastic ES|QL & Lucene, Microsoft KQL/MDE/Sentinel ASIM, CrowdStrike LogScale CQL, Splunk SPL, SentinelOne S1QL), plus Zeek/Suricata in [rules/network/](rules/network/) and YARA in [rules/yara/](rules/yara/).
 - **Incident Responders:** Read-only Linux/offline-image operator host triage (`artex-hunt host-triage`) and `--network=none --read-only` Docker log/transcript wrappers ([scripts/sandbox-scan.sh](scripts/sandbox-scan.sh), [scripts/sandbox-analyze-tasks.sh](scripts/sandbox-analyze-tasks.sh)).
 - **Tabletop & Purple Teams:** Follow the [Live-Lab & Purple-Team Evaluation Guide](docs/LAB_EVALUATION_GUIDE.md) to test against an isolated lab range, or run `artex-hunt simulate` / `artex-hunt eval` for 36 self-contained synthetic datasets (19 multi-surface agentic scenarios + 17 benign baselines).
-- **Threat Hunters & Researchers:** Blind out-of-distribution stress-test logs ([docs/blind_stress_test_log.md](docs/blind_stress_test_log.md)), threat model ([docs/artex_threat_model.md](docs/artex_threat_model.md)), and primary-source references ([docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md)).
+- **Threat Hunters & Researchers:** Standalone JA4+ agentic hunting guide ([docs/ja4_agentic_hunting_guide.md](docs/ja4_agentic_hunting_guide.md) & [ja4_agentic_patterns.json](rules/intel_hunting/ja4_agentic_patterns.json)), blind out-of-distribution stress-test logs ([docs/blind_stress_test_log.md](docs/blind_stress_test_log.md)), threat model ([docs/artex_threat_model.md](docs/artex_threat_model.md)), and primary-source references ([docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md)).
 
 ---
 
@@ -99,6 +99,7 @@ bash lab/docker-range/run-range.sh
 - [docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md) — Upstream researchers, repositories, and advisories
 - [docs/soc_siem_validation_playbook.md](docs/soc_siem_validation_playbook.md) — Positive-control schema checks and 7-day shadow-mode tuning
 - [docs/production_adaptation_pack.md](docs/production_adaptation_pack.md) — YAF IPFIX, JA4X/JA4S, and Spark SQL query templates
+- [docs/ja4_agentic_hunting_guide.md](docs/ja4_agentic_hunting_guide.md) — Standalone FoxIO JA4/JA4H/JA4X hunting guide, live-measured Go 1.22–1.24 / Python / `curl` reference tables, and anti-blocklist caveats ([rules/intel_hunting/ja4_agentic_patterns.json](rules/intel_hunting/ja4_agentic_patterns.json))
 - [docs/blind_stress_test_log.md](docs/blind_stress_test_log.md) — Multi-round blind out-of-distribution stress-test findings
 - [docs/ADVERSARIAL_REVIEW_BOARD.md](docs/ADVERSARIAL_REVIEW_BOARD.md) — 5-seat fresh-context Adversarial Review Board & CTO release-gate methodology
 - [docs/artex_threat_model.md](docs/artex_threat_model.md) & [docs/edge_to_endpoint_hardening.md](docs/edge_to_endpoint_hardening.md) — Threat model and hardening controls

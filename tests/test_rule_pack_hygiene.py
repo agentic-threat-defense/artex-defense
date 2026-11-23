@@ -278,3 +278,61 @@ def test_sigma_rules_avoid_known_critical_fp_and_drift_regressions() -> None:
     assert r"ParentBaseFileName=/\/pip$/i" not in compiled_cql
     assert "ParentBaseFileName=/^dpkg$/i" in compiled_cql
     assert "ParentBaseFileName=/^pip$/i" in compiled_cql
+
+
+def test_ja4_agentic_patterns_json_schema_and_blocklist_safety_guard() -> None:
+    """Ensure standalone JA4+ hunting guide, JSON reference, and DuckDB SQL query enforce FoxIO syntax & safety."""
+    import json
+    import duckdb
+
+    guide = (REPO_ROOT / "docs" / "ja4_agentic_hunting_guide.md").read_text(encoding="utf-8")
+    assert "DO NOT BLOCK ON STATIC JA4" in guide
+    assert "e7c285222651" in guide and "ge11nn030000_cd680697de12_000000000000_000000000000" in guide
+    assert ";\\\\s*wv\\\\)" in guide, "Splunk double-quoted regex must escape backslashes"
+
+    jpath = RULES_ROOT / "intel_hunting" / "ja4_agentic_patterns.json"
+    data = json.loads(jpath.read_text(encoding="utf-8"))
+    assert "DO NOT BLOCK" in data["operational_warning"]
+    refs = data["runtime_reference_fingerprints"]
+    assert len(refs) == 21
+    ja4_re = re.compile(r"^t\d{2}[di]\d{4}[a-z0-9]{2}_[0-9a-f]{12}_[0-9a-f]{12}$")
+    ja4h_re = re.compile(r"^[a-z]{2}\d{2}[cn][rn]\d{2}[a-z0-9]{4}_[0-9a-f]{12}_[0-9a-f]{12}_[0-9a-f]{12}$")
+    for item in refs:
+        assert item["blocklist_safe"] is False, f"Static runtime fingerprint {item['id']} must set blocklist_safe=false"
+        if item["fingerprint_type"] == "ja4":
+            assert ja4_re.match(item["value"]), f"Invalid FoxIO JA4 format: {item['value']}"
+        elif item["fingerprint_type"] == "ja4h":
+            assert ja4h_re.match(item["value"]), f"Invalid FoxIO JA4H format: {item['value']}"
+        else:
+            raise AssertionError(f"Unexpected fingerprint_type: {item['fingerprint_type']}")
+    patterns = data["structural_hunting_patterns"]
+    assert len(patterns) >= 6
+    for pat in patterns:
+        for rx in pat.get("ja4_regex_any", []):
+            re.compile(rx)
+        for key in ("ja4_regex", "ja4h_regex"):
+            if key in pat:
+                re.compile(pat[key])
+
+    # Execute Section 4.2 DuckDB SQL verbatim to verify Proxy-Collapse precedence, empty UA exclusion, and NULL http_path handling
+    m_sql = re.search(r"```sql\n(.*?)\n```", guide, re.DOTALL)
+    assert m_sql, "Expected SQL block in Section 4.2 of ja4_agentic_hunting_guide.md"
+    con = duckdb.connect(":memory:")
+    con.execute(
+        "CREATE TABLE web_tls_telemetry (ts TIMESTAMP, source_host VARCHAR, dest_host VARCHAR, ja4 VARCHAR, ja4h VARCHAR, user_agent VARCHAR, status_code INTEGER, http_path VARCHAR)"
+    )
+    # 1. Proxy-ON case (1 JA4, 3 distinct JA4Hs, 3 UA families, 3x 404 with NULL path on one) -> MUST classify as JA4_PROXY_COLLAPSE
+    con.executemany(
+        "INSERT INTO web_tls_telemetry VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("10.0.0.10", "app.local", "t13d1311h2_f57a46bbacb6_e7c285222651", "ge11nn030000_fe444ad14866_000000000000_000000000000", "curl/8.5.0", 404, "/api/1"),
+            ("10.0.0.10", "app.local", "t13d1311h2_f57a46bbacb6_e7c285222651", "ge11nn050000_be0d0b335e46_000000000000_000000000000", "python-httpx/0.28.1", 403, "/api/2"),
+            ("10.0.0.10", "app.local", "t13d1311h2_f57a46bbacb6_e7c285222651", "ge11nn09enus_5e81b34521f1_000000000000_000000000000", "Mozilla/5.0 Chrome/131.0.0.0", 403, None),
+            # 2. 2 UAs + 1 empty UA string -> must NOT count '' as a 3rd UA family!
+            ("10.0.0.20", "app.local", "t13d1311h2_f57a46bbacb6_e7c285222651", "ge11nn030000_fe444ad14866_000000000000_000000000000", "curl/8.5.0", 404, "/a"),
+            ("10.0.0.20", "app.local", "t13d1311h2_f57a46bbacb6_e7c285222651", "ge11nn050000_be0d0b335e46_000000000000_000000000000", "python-httpx/0.28.1", 404, "/b"),
+            ("10.0.0.20", "app.local", "t13d1311h2_f57a46bbacb6_e7c285222651", "", "", 404, "/c"),
+        ],
+    )
+    rows = con.execute(m_sql.group(1)).fetchall()
+    assert len(rows) == 1 and rows[0][0] == "10.0.0.10" and "JA4_PROXY_COLLAPSE" in rows[0][-1], f"Unexpected SQL rows: {rows}"
