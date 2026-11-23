@@ -42,25 +42,32 @@ def http_req(
 
 
 def tls_req_with_sni(
-    sni: str,
+    sni: str | None,
     path: str = "/sync",
     body_bytes: int = 0,
     *,
     force_tls12: bool = False,
+    alpn: list[str] | None = None,
+    ciphers: str | None = None,
 ) -> None:
-    """Open a real TLS connection to the LOCAL isolated mock target with a synthetic SNI."""
+    """Open a real TLS connection to the LOCAL isolated mock target with optional SNI/TLS version/ALPN/ciphers."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     if force_tls12:
         ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    if alpn:
+        ctx.set_alpn_protocols(alpn)
+    if ciphers:
+        ctx.set_ciphers(ciphers)
     raw = socket.create_connection((TARGET_IP, 443), timeout=5)
+    host_hdr = sni or TARGET_IP
     with ctx.wrap_socket(raw, server_hostname=sni) as tls_sock:
         if body_bytes > 0:
             payload = b"A" * body_bytes
             req = (
                 f"POST {path} HTTP/1.1\r\n"
-                f"Host: {sni}\r\n"
+                f"Host: {host_hdr}\r\n"
                 f"User-Agent: Mozilla/5.0 Chrome/131.0.0.0\r\n"
                 f"Content-Length: {len(payload)}\r\n"
                 f"Connection: close\r\n\r\n"
@@ -68,7 +75,7 @@ def tls_req_with_sni(
         else:
             req = (
                 f"GET {path} HTTP/1.1\r\n"
-                f"Host: {sni}\r\n"
+                f"Host: {host_hdr}\r\n"
                 f"User-Agent: Mozilla/5.0 Chrome/131.0.0.0\r\n"
                 f"Connection: close\r\n\r\n"
             ).encode()
@@ -89,12 +96,16 @@ def run_baseline() -> None:
         ("/.env.example", "Mozilla/5.0 (X11; Linux x86_64) Firefox/132.0", 1.8),
         ("/login", "smartex-agent/1.0", 5.4),
         ("/login", "smartex-judge-prod", 2.3),
-        ("/nonexistent-image.png", "Mozilla/5.0 Chrome/131.0.0.0", 0.0),
+        ("/nonexistent-image.png", "Mozilla/5.0 Chrome/131.0.0.0", 3.8),
     ]
     for path, ua, pause in benign_calls:
         http_req(path, ua=ua)
         if pause > 0:
             time.sleep(pause)
+    # Single consistent benign TLS 1.3 stack -> MUST emit 1 consistent wire JA4 and 0 JA4 FPs!
+    tls_req_with_sni("app.lab.local", path="/dashboard")
+    time.sleep(4.1)
+    tls_req_with_sni("app.lab.local", path="/assets/app.js")
     print("BASELINE_REPLAY_DONE")
 
 
@@ -148,11 +159,25 @@ def run_attack_behaviors() -> None:
         http_req(f"/api/v1/enum-endpoint-{i:02d}", ua="python-httpx/0.28.1")
         time.sleep(0.05)
 
-    # 7. Local isolated TLS SNI & TLS 1.2 cert issuer checks (Suricata sid:9100007, 9100004, 9100011, 9100013, 9100017; Zeek C2/OAST/LLM)
+    # 7. Local isolated TLS SNI, TLS 1.2 cert issuer & REAL multi-stack FoxIO JA4 whiplash + raw-IP TLS (t13i...)
+    #    Produces >=4 genuinely distinct real wire-computed JA4 hashes from 172.30.0.10:
+    #    (a) TLS 1.2 default (`t12d...00`), (b) TLS 1.3 default (`t13d...00`),
+    #    (c) TLS 1.3 + ALPN h2 (`t13d...h2`), (d) TLS 1.2 restricted ciphers (`t12d02...`),
+    #    (e) Raw-IP TLS 1.3 with NO SNI (`t13i...00`).
     tls_req_with_sni("artex.lol", path="/sync", body_bytes=512, force_tls12=True)
     for sni in ("api.xcai.pro", "webhook.site", "abc123.oast.live", "169-254-169-254.sslip.io", "api.anthropic.com"):
         tls_req_with_sni(sni, path="/sync", body_bytes=512)
         time.sleep(0.15)
+    tls_req_with_sni("relay-h2.lab.local", path="/sync", body_bytes=256, alpn=["http/1.1", "h2"])
+    tls_req_with_sni("relay-h2-first.lab.local", path="/sync", body_bytes=256, alpn=["h2", "http/1.1"])
+    tls_req_with_sni(
+        "relay-tls12-min.lab.local",
+        path="/sync",
+        body_bytes=256,
+        force_tls12=True,
+        ciphers="ECDHE-RSA-AES128-GCM-SHA256:AES256-GCM-SHA384",
+    )
+    tls_req_with_sni(None, path="/sync", body_bytes=256)  # Raw-IP TLS (no SNI -> FoxIO JA4 `t13i...`)
 
     # 8. Sawtooth growing-context TLS 1.3 flow (6 sequential turns >=3.2s apart -> Zeek conn.log -> llm_sawtooth_context_flow)
     for size in (4000, 9500, 17500, 29000, 44000, 62000):

@@ -56,8 +56,8 @@ docker run --rm --network=none \
   artex-range-sensor:local \
   bash -euo pipefail -c '
     suricata -T -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" -l /out/suricata_base
-    suricata -r /out/baseline.pcap -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" -k none -l /out/suricata_base
-    suricata -r /out/attack.pcap -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" -k none -l /out/suricata_atk
+    suricata -r /out/baseline.pcap -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" --set app-layer.protocols.tls.ja3-fingerprints=yes -k none -l /out/suricata_base
+    suricata -r /out/attack.pcap -S /rules/artex_edge_and_harness.rules --set vars.address-groups.HOME_NET="[172.30.0.0/24]" --set vars.address-groups.EXTERNAL_NET="any" --set app-layer.protocols.tls.ja3-fingerprints=yes -k none -l /out/suricata_atk
   '
 
 echo "=== [5/7] Validating REAL Zeek LTS (baseline.pcap + attack.pcap) ==="
@@ -91,8 +91,8 @@ docker run --rm --network=none \
 echo "=== [7/7] Asserting Real-Sensor Scorecard (Suricata, Zeek, YARA, artex-hunt) ==="
 PY_BIN="${REPO_ROOT}/.venv/bin/python"
 [[ -x "${PY_BIN}" ]] || PY_BIN="python3"
-"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_base" --out "${OUT_DIR}/zeek_base.jsonl"
-"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_atk"  --out "${OUT_DIR}/zeek_atk.jsonl"
+"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_base" --pcap "${OUT_DIR}/baseline.pcap" --out "${OUT_DIR}/zeek_base.jsonl"
+"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_atk"  --pcap "${OUT_DIR}/attack.pcap" --out "${OUT_DIR}/zeek_atk.jsonl"
 
 "${PY_BIN}" - "${OUT_DIR}" <<'PYEOF'
 import json, sys
@@ -140,10 +140,46 @@ yara_seeded = [ln for ln in (out / "yara_seeded.txt").read_text(encoding="utf-8"
 assert len(yara_benign) == 0, f"YARA benign FP matches: {yara_benign}"
 assert len(yara_seeded) >= 4, f"Expected >=4 YARA seeded matches, got {yara_seeded}"
 
+def jsonl_ja4s(path: Path) -> set[str]:
+    vals: set[str] = set()
+    for ln in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not ln.strip():
+            continue
+        j = json.loads(ln).get("ja4")
+        if j:
+            vals.add(str(j))
+    return vals
+
+base_ja4s = jsonl_ja4s(out / "zeek_base.jsonl")
+atk_ja4s = jsonl_ja4s(out / "zeek_atk.jsonl")
+assert len(base_ja4s) == 1, f"Expected 1 consistent real wire JA4 in baseline, got {sorted(base_ja4s)}"
+assert len(atk_ja4s) >= 4, f"Expected >=4 distinct real wire JA4s in attack, got {sorted(atk_ja4s)}"
+assert any(j.startswith("t13i") for j in atk_ja4s), f"Expected raw-IP TLS (t13i...) JA4, got {sorted(atk_ja4s)}"
+assert any(j.startswith("t13d") and j[8:10] == "h2" for j in atk_ja4s), f"Expected ALPN h2 JA4, got {sorted(atk_ja4s)}"
+assert any(j.startswith("t12d") for j in atk_ja4s), f"Expected TLS 1.2 (t12d...) JA4, got {sorted(atk_ja4s)}"
+
+# Cross-validate cipher/extension counts from pure-Python PCAP JA4 against real Suricata 7.0.3 tls.ja3.string!
+suri_tls_ja3_counts: set[tuple[int, int]] = set()
+for ln in (out / "suricata_atk/eve.json").read_text(encoding="utf-8", errors="ignore").splitlines():
+    if not ln.strip():
+        continue
+    obj = json.loads(ln)
+    if obj.get("event_type") == "tls":
+        ja3_s = obj.get("tls", {}).get("ja3", {}).get("string", "")
+        parts = ja3_s.split(",")
+        if len(parts) >= 3 and parts[1]:
+            cc = len([x for x in parts[1].split("-") if x])
+            ec = len([x for x in parts[2].split("-") if x])
+            suri_tls_ja3_counts.add((min(cc, 99), min(ec, 99)))
+py_ja4_counts = {(int(j[4:6]), int(j[6:8])) for j in atk_ja4s}
+assert suri_tls_ja3_counts and suri_tls_ja3_counts.issubset(py_ja4_counts), (
+    f"PCAP JA4 cipher/ext counts {sorted(py_ja4_counts)} mismatch Suricata 7.0.3 JA3 {sorted(suri_tls_ja3_counts)}"
+)
+
 try:
     from artex_defense.detectors import scan_telemetry_file
 except ImportError:
-    print("PASS: Suricata 17/17, Zeek 6/6, YARA 0 FP / seeded OK (install artex-defense to also assert artex-hunt)")
+    print("PASS: Suricata 17/17, Zeek 6/6, YARA 0 FP / seeded OK, Wire JA4 verified (install artex-defense to also assert artex-hunt)")
     sys.exit(0)
 
 base_ng = scan_telemetry_file(out / "baseline_nginx.log")
@@ -156,12 +192,14 @@ atk_zk = scan_telemetry_file(out / "zeek_atk.jsonl")
 assert atk_ng and atk_ng[0].risk_score == 100 and atk_ng[0].alert_tier == "alert", f"Unexpected attack_nginx: {atk_ng}"
 assert atk_zk and atk_zk[0].risk_score == 100 and atk_zk[0].alert_tier == "alert", f"Unexpected zeek_atk: {atk_zk}"
 assert "llm_sawtooth_context_flow" in atk_zk[0].reasons, f"Sawtooth missing on real Zeek TLS 1.3: {atk_zk[0].reasons}"
+assert "ja4_client_stack_whiplash" in atk_zk[0].reasons, f"Real-wire JA4 whiplash missing on Zeek+PCAP: {atk_zk[0].reasons}"
 
 print(
     f"PASS: Suricata 0 FP / {len(atk_sids)}/17 SIDs | "
     f"Zeek 0 FP / {len(atk_notes)}/6 notices | "
+    f"Wire JA4 1 baseline / {len(atk_ja4s)} attack stacks (cross-validated vs Suricata 7.0.3) | "
     f"YARA 0 FP / {len(yara_seeded)} seeded hits | "
     f"artex-hunt 0 baseline candidates / Nginx risk={atk_ng[0].risk_score} ({len(atk_ng[0].reasons)} reasons) / "
-    f"Zeek risk={atk_zk[0].risk_score} ({len(atk_zk[0].reasons)} reasons, incl. llm_sawtooth_context_flow)"
+    f"Zeek+PCAP risk={atk_zk[0].risk_score} ({len(atk_zk[0].reasons)} reasons, incl. llm_sawtooth_context_flow + ja4_client_stack_whiplash)"
 )
 PYEOF

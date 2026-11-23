@@ -404,3 +404,150 @@ def test_persistent_tls_turn_slicer_generalizes_across_wan_tools_vllm_compaction
         pkts.append((t, "198.51.100.14", 443, "192.0.2.20", 51004, ib))
         t += 0.1
     assert run_case("b4_api_pagination", pkts) == []
+
+
+def _build_tls_client_hello(
+    *,
+    ciphers: list[int],
+    sni: str | None = None,
+    alpn: list[str] | None = None,
+    supported_versions: list[int] | None = None,
+    sig_algs: list[int] | None = None,
+    extra_exts: list[int] | None = None,
+) -> bytes:
+    """Build a valid RFC 8446 / 5246 TLS ClientHello record for deterministic FoxIO JA4 unit testing."""
+    import struct
+
+    exts = bytearray()
+    if sni is not None:
+        host_b = sni.encode("ascii")
+        sni_entry = struct.pack("!BH", 0, len(host_b)) + host_b
+        sni_data = struct.pack("!H", len(sni_entry)) + sni_entry
+        exts += struct.pack("!HH", 0x0000, len(sni_data)) + sni_data
+    if alpn:
+        alpn_items = b"".join(struct.pack("!B", len(p.encode("ascii"))) + p.encode("ascii") for p in alpn)
+        alpn_data = struct.pack("!H", len(alpn_items)) + alpn_items
+        exts += struct.pack("!HH", 0x0010, len(alpn_data)) + alpn_data
+    if supported_versions:
+        ver_items = b"".join(struct.pack("!H", v) for v in supported_versions)
+        ver_data = struct.pack("!B", len(ver_items)) + ver_items
+        exts += struct.pack("!HH", 0x002B, len(ver_data)) + ver_data
+    if sig_algs:
+        sa_items = b"".join(struct.pack("!H", s) for s in sig_algs)
+        sa_data = struct.pack("!H", len(sa_items)) + sa_items
+        exts += struct.pack("!HH", 0x000D, len(sa_data)) + sa_data
+    for ext_id in extra_exts or []:
+        exts += struct.pack("!HH", ext_id, 0)
+
+    cipher_bytes = b"".join(struct.pack("!H", c) for c in ciphers)
+    body = bytearray()
+    body += struct.pack("!H", 0x0303)  # legacy client_version TLS 1.2
+    body += b"\x11" * 32  # ClientRandom
+    body += b"\x00"  # session_id_len = 0
+    body += struct.pack("!H", len(cipher_bytes)) + cipher_bytes
+    body += b"\x01\x00"  # compression methods = [null]
+    body += struct.pack("!H", len(exts)) + exts
+
+    hs = struct.pack("!B", 0x01) + len(body).to_bytes(3, "big") + body
+    return struct.pack("!BHH", 0x16, 0x0301, len(hs)) + hs
+
+
+def _write_raw_payload_pcap(path: Path, frames: list[tuple[float, str, int, str, int, bytes]]) -> None:
+    import socket
+    import struct
+
+    chunks = [struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1)]
+    for ts, src_ip, sport, dst_ip, dport, payload in frames:
+        tcp_hdr = struct.pack("!HHIIBBHHH", sport, dport, 1, 1, 0x50, 0x18, 65535, 0, 0)
+        ip_tot = 20 + 20 + len(payload)
+        ip_hdr = struct.pack(
+            "!BBHHHBBH4s4s",
+            0x45,
+            0,
+            ip_tot,
+            1,
+            0,
+            64,
+            6,
+            0,
+            socket.inet_aton(src_ip),
+            socket.inet_aton(dst_ip),
+        )
+        l2 = b"\x00" * 12 + struct.pack("!H", 0x0800)
+        frame = l2 + ip_hdr + tcp_hdr + payload
+        sec = int(ts)
+        usec = int((ts - sec) * 1_000_000)
+        chunks.append(struct.pack("<IIII", sec, usec, len(frame), len(frame)) + frame)
+    path.write_bytes(b"".join(chunks))
+
+
+def test_pure_python_foxio_ja4_spec_grease_alpn_raw_ip_and_suricata_eve_ingestion(tmp_path: Path) -> None:
+    """Validate pure-Python FoxIO JA4 spec compliance + PCAP->Zeek enrichment + native Suricata EVE JSON parsing."""
+    import hashlib
+    import json
+
+    exporter = _load_exporter()
+
+    # 1. TLS 1.3 + GREASE filtering + ALPN h2 + signature_algorithms (preserved unsorted!) + SNI/ALPN excluded from JA4_c
+    ch_h2 = _build_tls_client_hello(
+        ciphers=[0x0A0A, 0x1302, 0x1301, 0xC02F, 0xFAFA],
+        sni="api.example.test",
+        alpn=["h2", "http/1.1"],
+        supported_versions=[0x2A2A, 0x0304, 0x0303],
+        sig_algs=[0x0403, 0x0804, 0x0401],
+        extra_exts=[0x3A3A, 0x0017, 0x0023],
+    )
+    sni_h2, ja4_h2 = exporter.parse_tls_client_hello_ja4(ch_h2)
+    assert sni_h2 == "api.example.test"
+    # Non-GREASE ciphers: 1301,1302,c02f (3); non-GREASE exts: 0000,0010,002b,000d,0017,0023 (6); ALPN: h2
+    exp_b = hashlib.sha256(b"1301,1302,c02f").hexdigest()[:12]
+    exp_c = hashlib.sha256(b"000d,0017,0023,002b_0403,0804,0401").hexdigest()[:12]
+    assert ja4_h2 == f"t13d0306h2_{exp_b}_{exp_c}"
+
+    # 2. Raw-IP TLS 1.3 (no SNI -> `i`) AND IP-literal SNI (`198.51.100.5` -> `i`)
+    ch_raw = _build_tls_client_hello(
+        ciphers=[0x1301, 0x1302],
+        sni=None,
+        supported_versions=[0x0304],
+        sig_algs=[0x0804],
+    )
+    sni_raw, ja4_raw = exporter.parse_tls_client_hello_ja4(ch_raw)
+    assert sni_raw == "" and ja4_raw.startswith("t13i020200_")
+
+    ch_ip_sni = _build_tls_client_hello(
+        ciphers=[0x1301, 0x1302],
+        sni="198.51.100.5",
+        supported_versions=[0x0304],
+        sig_algs=[0x0804],
+    )
+    sni_ip, ja4_ip = exporter.parse_tls_client_hello_ja4(ch_ip_sni)
+    assert sni_ip == "198.51.100.5" and ja4_ip.startswith("t13i020300_")
+
+    # 3. TLS 1.2 without supported_versions (`t12d...00`), split across 2 TCP segments in PCAP!
+    ch_12 = _build_tls_client_hello(ciphers=[0xC02F, 0x009D], sni="legacy.example.test", extra_exts=[0x0017])
+    pcap_path = tmp_path / "ja4_multi.pcap"
+    _write_raw_payload_pcap(
+        pcap_path,
+        [
+            (1795401000.0, "172.30.0.10", 40001, "172.30.0.20", 443, ch_h2),
+            (1795401001.0, "172.30.0.10", 40002, "172.30.0.20", 443, ch_raw),
+            (1795401002.0, "172.30.0.10", 40003, "172.30.0.20", 443, ch_12[:30]),
+            (1795401002.1, "172.30.0.10", 40003, "172.30.0.20", 443, ch_12[30:]),
+        ],
+    )
+    extracted = exporter.extract_pcap_tls_ja4(pcap_path)
+    assert extracted[("172.30.0.10", 40001, "172.30.0.20", 443)] == ("api.example.test", ja4_h2)
+    assert extracted[("172.30.0.10", 40002, "172.30.0.20", 443)] == ("", ja4_raw)
+    assert extracted[("172.30.0.10", 40003, "172.30.0.20", 443)][1].startswith("t12d020200_")
+
+    # 4. Native Suricata EVE JSON ingestion (nested `tls.ja4`/`tls.sni` + `http.*`) triggers `ja4_client_stack_whiplash`
+    eve_path = tmp_path / "suricata_eve.json"
+    eve_rows = [
+        {"timestamp": "2026-11-22T21:00:00.000000+0000", "event_type": "tls", "src_ip": "198.51.100.70", "dest_ip": "10.0.0.10", "dest_port": 443, "tls": {"sni": "portal.corp.local", "ja4": ja4_h2}},
+        {"timestamp": "2026-11-22T21:00:01.000000+0000", "event_type": "tls", "src_ip": "198.51.100.70", "dest_ip": "10.0.0.10", "dest_port": 443, "tls": {"sni": "portal.corp.local", "ja4": ja4_raw}},
+        {"timestamp": "2026-11-22T21:00:02.000000+0000", "event_type": "tls", "src_ip": "198.51.100.70", "dest_ip": "10.0.0.10", "dest_port": 443, "tls": {"sni": "portal.corp.local", "ja4": extracted[("172.30.0.10", 40003, "172.30.0.20", 443)][1]}},
+        {"timestamp": "2026-11-22T21:00:02.500000+0000", "event_type": "http", "src_ip": "198.51.100.70", "dest_ip": "10.0.0.10", "dest_port": 443, "http": {"hostname": "portal.corp.local", "url": "/api/v1/admin", "http_method": "GET", "http_user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "status": 403}},
+    ]
+    eve_path.write_text("\n".join(json.dumps(r) for r in eve_rows) + "\n", encoding="utf-8")
+    cands = scan_telemetry_file(eve_path)
+    assert cands and "ja4_client_stack_whiplash" in cands[0].reasons

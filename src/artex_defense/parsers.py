@@ -130,7 +130,7 @@ def _infer_surface(
         return "endpoint"
     if et in {"http", "web", "proxy", "waf"} or http_path:
         return "web_portal"
-    if et in {"network", "dns", "zeek"}:
+    if et in {"network", "dns", "zeek", "tls", "flow"}:
         return "network"
     return "unknown"
 
@@ -561,8 +561,52 @@ def _normalize_cloudtrail_record(record: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _flatten_suricata_eve_record(record: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Unpack nested Suricata EVE JSON objects (`tls`, `http`, `dns`, `flow`, `alert`) into flat keys."""
+    if "event_type" not in record or not any(k in record for k in ("src_ip", "dest_ip")):
+        return record, False
+    if not any(isinstance(record.get(k), dict) for k in ("tls", "http", "dns", "flow", "alert")):
+        return record, False
+    flat = dict(record)
+    tls_obj = record.get("tls")
+    if isinstance(tls_obj, dict):
+        if tls_obj.get("sni") and not flat.get("dest_host"):
+            flat["dest_host"] = tls_obj["sni"]
+        if tls_obj.get("ja4") and not flat.get("ja4"):
+            flat["ja4"] = tls_obj["ja4"]
+    http_obj = record.get("http")
+    if isinstance(http_obj, dict):
+        if http_obj.get("hostname") and not flat.get("dest_host"):
+            flat["dest_host"] = http_obj["hostname"]
+        if http_obj.get("url") and not flat.get("http_path"):
+            flat["http_path"] = http_obj["url"]
+        if http_obj.get("http_user_agent") and not flat.get("user_agent"):
+            flat["user_agent"] = http_obj["http_user_agent"]
+        if http_obj.get("http_method") and not flat.get("http_method"):
+            flat["http_method"] = http_obj["http_method"]
+        if http_obj.get("status") is not None and flat.get("status_code") is None:
+            flat["status_code"] = http_obj["status"]
+        if http_obj.get("ja4h") and not flat.get("ja4h"):
+            flat["ja4h"] = http_obj["ja4h"]
+    dns_obj = record.get("dns")
+    if isinstance(dns_obj, dict) and dns_obj.get("rrname") and not flat.get("dest_host"):
+        flat["dest_host"] = dns_obj["rrname"]
+    flow_obj = record.get("flow")
+    if isinstance(flow_obj, dict):
+        if flow_obj.get("bytes_toserver") is not None and flat.get("bytes_out") is None:
+            flat["bytes_out"] = flow_obj["bytes_toserver"]
+        if flow_obj.get("bytes_toclient") is not None and flat.get("bytes_in") is None:
+            flat["bytes_in"] = flow_obj["bytes_toclient"]
+    alert_obj = record.get("alert")
+    if isinstance(alert_obj, dict) and alert_obj.get("signature") and not flat.get("action"):
+        flat["action"] = alert_obj["signature"]
+    if not flat.get("dest_host") and flat.get("dest_ip"):
+        flat["dest_host"] = flat["dest_ip"]
+    return flat, True
+
+
 def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
+    """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, Suricata EVE, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
     # Detect native AWS CloudTrail JSON (eventSource + eventName + userIdentity / *.amazonaws.com[.cn])
     if (
         "eventName" in record
@@ -609,6 +653,7 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
         return _normalize_google_workspace_record(record)
 
     record, is_ipfix = _flatten_ipfix_record(record)
+    record, is_suricata_eve = _flatten_suricata_eve_record(record)
 
     # Detect Zscaler NSS JSON fields
     is_zscaler = any(k in record for k in ("ClientIP", "hostname", "urlcategory", "threatname", "reason")) and any(
@@ -636,7 +681,9 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
     ts = parse_timestamp(ts_raw)
 
     appliance = _extract_first(record, ("appliance", "vendor_product", "device_type"))
-    if not appliance and is_zscaler:
+    if not appliance and is_suricata_eve:
+        appliance = "suricata_eve"
+    elif not appliance and is_zscaler:
         appliance = "zscaler"
     elif not appliance and is_ipfix:
         appliance = "yaf_ipfix"
@@ -715,6 +762,7 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
                 "id.resp_h",
                 "destinationIPv4Address",
                 "destinationIPv6Address",
+                "dest_ip",
                 "dst_host",
                 "domain",
             ),
