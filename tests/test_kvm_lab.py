@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -1283,6 +1284,194 @@ def test_watchtower_interpreter_tools_folder_fp_and_new_framework_canaries(tmp_p
     assert "unit42_agentic_canary_probe" in by_host["198.51.100.32"]
     assert "unit42_agentic_canary_probe" in by_host["198.51.100.33"]
     assert "unit42_agentic_canary_probe" in by_host["198.51.100.34"]
+
+
+def test_zeek_dns_log_oob_conversion_and_kvm_falsification_cli_portability(tmp_path: Path) -> None:
+    """Verify Zeek dns.log conversion triggers dns_oob_callback_after_probe & run_falsification.py CLI is portable."""
+    exporter = _load_exporter()
+
+    # 1. Zeek http.log (probe to 172.30.0.20) + dns.log (target 172.30.0.20 emits high-entropy OOB DNS callback)
+    raw_dir = tmp_path / "zeek_dns_oob"
+    raw_dir.mkdir()
+    (raw_dir / "http.log").write_text(
+        json.dumps(
+            {
+                "ts": 1795450000.0,
+                "uid": "Chttp1",
+                "id.orig_h": "172.30.0.10",
+                "id.orig_p": 41000,
+                "id.resp_h": "172.30.0.20",
+                "id.resp_p": 80,
+                "method": "GET",
+                "host": "172.30.0.20",
+                "uri": "/api/v1/ssrf-sim",
+                "user_agent": "python-httpx/0.28.1",
+                "status_code": 200,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (raw_dir / "dns.log").write_text(
+        json.dumps(
+            {
+                "ts": 1795450002.0,
+                "uid": "Cdns1",
+                "id.orig_h": "172.30.0.20",
+                "id.orig_p": 53000,
+                "id.resp_h": "172.30.0.10",
+                "id.resp_p": 53,
+                "query": "a9f8e7d6c5b4a3928170.oob-exfil.example",
+                "qtype_name": "A",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (raw_dir / "conn.log").write_text(
+        json.dumps(
+            {
+                "ts": 1795450002.0,
+                "uid": "Cdns1",
+                "id.orig_h": "172.30.0.20",
+                "id.orig_p": 53000,
+                "id.resp_h": "172.30.0.10",
+                "id.resp_p": 53,
+                "orig_bytes": 60,
+                "resp_bytes": 76,
+                "conn_state": "SF",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    out_j = tmp_path / "zeek_dns_oob.jsonl"
+    cnt = exporter.convert_directory(raw_dir, out_j)
+    assert cnt == 2, "dns.log UID must be deduplicated from conn.log"
+    cands = scan_telemetry_file(out_j)
+    assert any("dns_oob_callback_after_probe" in c.reasons for c in cands)
+
+    # 2. Portable CLI check for lab/kvm/run_falsification.py (no hardcoded personal paths, valid --help)
+    fals_script = LAB_DIR / "run_falsification.py"
+    assert fals_script.is_file()
+    src_text = fals_script.read_text(encoding="utf-8")
+    assert "/home/" not in src_text, "run_falsification.py must not hardcode personal /home/ paths"
+    res = subprocess.run([sys.executable, str(fals_script), "--help"], capture_output=True, text=True, check=True)
+    assert "--model" in res.stdout and "--phases" in res.stdout
+
+
+def test_suricata_eve_meta_dedup_zeek_mdns_filter_and_host_port_oob_join(tmp_path: Path) -> None:
+    """Real-wire regressions: Suricata EVE flow/fileinfo/stats/DNS-answer dedup, Zeek mDNS filter, and Host:port OOB DNS join."""
+    from artex_defense.parsers import parse_auto
+
+    exporter = _load_exporter()
+
+    # 1. Zeek mDNS UDP/5353 & IPv6 multicast chatter must be dropped while Host:8080 correlates with dns_oob_callback_after_probe
+    raw_dir = tmp_path / "zeek_mdns"
+    raw_dir.mkdir()
+    (raw_dir / "http.log").write_text(
+        json.dumps(
+            {
+                "ts": 1795460000.0,
+                "uid": "Ch1",
+                "id.orig_h": "10.1.0.50",
+                "id.orig_p": 42000,
+                "id.resp_h": "10.1.0.20",
+                "id.resp_p": 8080,
+                "method": "GET",
+                "host": "10.1.0.20:8080",
+                "uri": "/api/v1/ssrf",
+                "user_agent": "python-httpx/0.28.1",
+                "status_code": 200,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (raw_dir / "dns.log").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"ts": 1795460000.1, "uid": "Cmdns1", "id.orig_h": "fe80::1", "id.orig_p": 5353, "id.resp_h": "ff02::fb", "id.resp_p": 5353, "query": "workstation.local", "qtype_name": "*"},
+                {"ts": 1795460000.2, "uid": "Cmdns2", "id.orig_h": "10.1.0.1", "id.orig_p": 5353, "id.resp_h": "224.0.0.251", "id.resp_p": 5353, "query": "workstation.local", "qtype_name": "A"},
+                {"ts": 1795460001.5, "uid": "Coob1", "id.orig_h": "10.1.0.20", "id.orig_p": 51000, "id.resp_h": "10.1.0.50", "id.resp_p": 53, "query": "f1e2d3c4b5a69788796a.oob.example", "qtype_name": "A"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (raw_dir / "conn.log").write_text(
+        json.dumps({"ts": 1795460000.3, "uid": "Cmc1", "id.orig_h": "fe80::1", "id.orig_p": 0, "id.resp_h": "ff02::16", "id.resp_p": 0, "orig_bytes": 76, "resp_bytes": 0, "conn_state": "OTH"})
+        + "\n",
+        encoding="utf-8",
+    )
+    out_j = tmp_path / "zeek_mdns.jsonl"
+    cnt = exporter.convert_directory(raw_dir, out_j)
+    assert cnt == 2, f"Expected mDNS/multicast dropped leaving 2 events, got {cnt}"
+    cands = scan_telemetry_file(out_j)
+    assert any("dns_oob_callback_after_probe" in c.reasons for c in cands)
+
+    # 2. Direct Host:port JSONL (without exporter normalization) MUST still correlate in detectors.py
+    direct_oob = tmp_path / "direct_host_port_oob.jsonl"
+    direct_oob.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T20:00:00Z", "source_host": "10.1.0.50", "event_type": "http", "surface": "web_portal", "dest_host": "10.1.0.20:8443", "dest_port": 8443, "http_method": "GET", "http_path": "/ssrf", "status_code": 200},
+                {"timestamp": "2026-11-23T20:00:02Z", "source_host": "10.1.0.20", "event_type": "dns", "surface": "network", "dest_host": "1a2b3c4d5e6f7a8b9c0d.oob.example", "dest_port": 53},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    direct_cands = scan_telemetry_file(direct_oob)
+    assert any("dns_oob_callback_after_probe" in c.reasons for c in direct_cands)
+
+    # 3. Suricata 7 EVE JSON: drop stats/fileinfo/DNS-answer/duplicate-flow & merge flow byte counters onto tls
+    eve_file = tmp_path / "suri_meta.json"
+    eve_rows = [
+        {"timestamp": "2026-11-23T20:00:00.000000+0000", "flow_id": 101, "event_type": "http", "src_ip": "10.1.0.10", "dest_ip": "10.1.0.20", "dest_port": 80, "http": {"hostname": "10.1.0.20", "url": "/dashboard", "http_method": "GET", "http_user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "status": 200}},
+        {"timestamp": "2026-11-23T20:00:00.001000+0000", "flow_id": 101, "event_type": "fileinfo", "src_ip": "10.1.0.20", "dest_ip": "10.1.0.10", "dest_port": 50000, "http": {"hostname": "10.1.0.20", "url": "/dashboard", "status": 200}, "fileinfo": {"filename": "/dashboard", "size": 54}},
+        {"timestamp": "2026-11-23T20:00:05.000000+0000", "flow_id": 102, "event_type": "tls", "src_ip": "10.1.0.10", "dest_ip": "10.1.0.20", "dest_port": 443, "tls": {"sni": "app.corp.local", "ja4": "t13d311100_e8f1e7e78f70_d41ae481755e"}},
+        {"timestamp": "2026-11-23T20:00:08.000000+0000", "flow_id": 103, "event_type": "dns", "src_ip": "10.1.0.10", "dest_ip": "10.1.0.20", "dest_port": 53, "dns": {"type": "query", "rrname": "app.corp.local", "rrtype": "A"}},
+        {"timestamp": "2026-11-23T20:00:08.001000+0000", "flow_id": 103, "event_type": "dns", "src_ip": "10.1.0.10", "dest_ip": "10.1.0.20", "dest_port": 53, "dns": {"type": "answer", "rrname": "app.corp.local", "rrtype": "A"}},
+        {"timestamp": "2026-11-23T19:59:59.000000+0000", "flow_id": 101, "event_type": "flow", "src_ip": "10.1.0.10", "dest_ip": "10.1.0.20", "dest_port": 80, "app_proto": "http", "flow": {"bytes_toserver": 500, "bytes_toclient": 400, "start": "2026-11-23T20:00:00.000000+0000"}},
+        {"timestamp": "2026-11-23T19:59:59.000000+0000", "flow_id": 102, "event_type": "flow", "src_ip": "10.1.0.10", "dest_ip": "10.1.0.20", "dest_port": 443, "app_proto": "tls", "flow": {"bytes_toserver": 4200, "bytes_toclient": 1100, "start": "2026-11-23T20:00:05.000000+0000"}},
+        {"timestamp": "2026-11-23T19:59:59.000000+0000", "flow_id": 104, "event_type": "flow", "src_ip": "fe80::1", "dest_ip": "ff02::fb", "dest_port": 5353, "app_proto": "failed", "flow": {"bytes_toserver": 200, "bytes_toclient": 0}},
+        {"timestamp": "2026-11-23T20:00:10.000000+0000", "event_type": "stats", "stats": {"uptime": 10}},
+    ]
+    eve_file.write_text("\n".join(json.dumps(r) for r in eve_rows) + "\n", encoding="utf-8")
+    parsed = parse_auto(eve_file)
+    assert len(parsed) == 3, f"Expected 3 deduplicated EVE events (http, tls, dns query), got {len(parsed)}"
+    tls_ev = [e for e in parsed if e["event_type"] == "tls"][0]
+    assert tls_ev["bytes_out"] == 4200 and tls_ev["bytes_in"] == 1100, "flow byte counters must merge onto tls flow_id"
+
+    # 4. JSON-array (`[...]`) and single-object (`{...}`) Suricata EVE files must match NDJSON identically
+    eve_array = tmp_path / "suri_meta_array.json"
+    eve_array.write_text(json.dumps(eve_rows), encoding="utf-8")
+    parsed_arr = parse_auto(eve_array)
+    assert parsed_arr == parsed, "JSON-array EVE parsing must match NDJSON dedup & flow_id byte correlation"
+
+    eve_single_stats = tmp_path / "suri_single_stats.json"
+    eve_single_stats.write_text(json.dumps({"timestamp": "2026-11-23T20:00:10.000000+0000", "event_type": "stats", "stats": {"uptime": 10}}), encoding="utf-8")
+    assert parse_auto(eve_single_stats) == [], "Standalone Suricata stats dict must be filtered"
+
+    # 5. Bracketed IPv6 without :port (`[2001:db8::1]`) must also correlate in detectors.py
+    ipv6_oob = tmp_path / "ipv6_bracket_oob.jsonl"
+    ipv6_oob.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T20:00:00Z", "source_host": "2001:db8::50", "event_type": "http", "surface": "web_portal", "dest_host": "[2001:db8::1]", "dest_port": 80, "http_method": "GET", "http_path": "/ssrf", "status_code": 200},
+                {"timestamp": "2026-11-23T20:00:02Z", "source_host": "2001:db8::1", "event_type": "dns", "surface": "network", "dest_host": "1a2b3c4d5e6f7a8b9c0d.oob.example", "dest_port": 53},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert any("dns_oob_callback_after_probe" in c.reasons for c in scan_telemetry_file(ipv6_oob))
+
+
 
 
 

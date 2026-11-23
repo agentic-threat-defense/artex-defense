@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 rm -rf "${OUT_DIR}"
-mkdir -p "${OUT_DIR}/suricata_base" "${OUT_DIR}/suricata_atk" "${OUT_DIR}/zeek_base" "${OUT_DIR}/zeek_atk" "${OUT_DIR}/yara_fixtures"
+mkdir -p "${OUT_DIR}/suricata_base" "${OUT_DIR}/suricata_atk" "${OUT_DIR}/zeek_base" "${OUT_DIR}/zeek_atk" "${OUT_DIR}/zeek_proxy" "${OUT_DIR}/yara_fixtures"
 
 echo "=== [1/7] Building sensor/target image & booting non-routed isolated range (internal: true) ==="
 docker compose -f "${RANGE_DIR}/docker-compose.yml" build --quiet
@@ -48,6 +48,15 @@ sleep 2
 stop_capture
 sleep 1
 cp "${OUT_DIR}/nginx_access.log" "${OUT_DIR}/attack_nginx.log"
+docker exec artex-range-target truncate -s 0 /out/nginx_access.log
+
+echo "=== [3b/7] Capturing Phase 3 (Single-JA4 Recording-Proxy Collapse) PCAP ==="
+docker exec -d artex-range-capture tcpdump -i eth0 -U -w /out/proxy_collapse.pcap
+sleep 1
+docker exec artex-range-replayer python3 /replayer/replay_range.py proxy_collapse
+sleep 1
+stop_capture
+sleep 1
 
 echo "=== [4/7] Validating REAL Suricata 7 (suricata -T + baseline.pcap + attack.pcap) ==="
 docker run --rm --network=none \
@@ -66,8 +75,9 @@ docker run --rm --network=none \
   -v "${OUT_DIR}:/out" \
   zeek/zeek:lts \
   bash -euo pipefail -c '
-    cd /out/zeek_base && zeek -C -r /out/baseline.pcap /rules/artex_agentic_cadence.zeek policy/tuning/json-logs.zeek "Site::local_nets+={172.30.0.10/32}"
-    cd /out/zeek_atk  && zeek -C -r /out/attack.pcap   /rules/artex_agentic_cadence.zeek policy/tuning/json-logs.zeek "Site::local_nets+={172.30.0.10/32}"
+    cd /out/zeek_base  && zeek -C -r /out/baseline.pcap       /rules/artex_agentic_cadence.zeek policy/tuning/json-logs.zeek "Site::local_nets+={172.30.0.10/32}"
+    cd /out/zeek_atk   && zeek -C -r /out/attack.pcap         /rules/artex_agentic_cadence.zeek policy/tuning/json-logs.zeek "Site::local_nets+={172.30.0.10/32}"
+    cd /out/zeek_proxy && zeek -C -r /out/proxy_collapse.pcap /rules/artex_agentic_cadence.zeek policy/tuning/json-logs.zeek "Site::local_nets+={172.30.0.10/32}"
   '
 
 echo "=== [6/7] Validating REAL YARA binary on Benign & Seeded Fixtures ==="
@@ -91,8 +101,9 @@ docker run --rm --network=none \
 echo "=== [7/7] Asserting Real-Sensor Scorecard (Suricata, Zeek, YARA, artex-hunt) ==="
 PY_BIN="${REPO_ROOT}/.venv/bin/python"
 [[ -x "${PY_BIN}" ]] || PY_BIN="python3"
-"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_base" --pcap "${OUT_DIR}/baseline.pcap" --out "${OUT_DIR}/zeek_base.jsonl"
-"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_atk"  --pcap "${OUT_DIR}/attack.pcap" --out "${OUT_DIR}/zeek_atk.jsonl"
+"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_base"  --pcap "${OUT_DIR}/baseline.pcap"       --out "${OUT_DIR}/zeek_base.jsonl"
+"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_atk"   --pcap "${OUT_DIR}/attack.pcap"         --out "${OUT_DIR}/zeek_atk.jsonl"
+"${PY_BIN}" "${REPO_ROOT}/lab/kvm/export_sensor_to_jsonl.py" --input-dir "${OUT_DIR}/zeek_proxy" --pcap "${OUT_DIR}/proxy_collapse.pcap" --out "${OUT_DIR}/zeek_proxy.jsonl"
 
 "${PY_BIN}" - "${OUT_DIR}" <<'PYEOF'
 import json, sys
@@ -140,23 +151,32 @@ yara_seeded = [ln for ln in (out / "yara_seeded.txt").read_text(encoding="utf-8"
 assert len(yara_benign) == 0, f"YARA benign FP matches: {yara_benign}"
 assert len(yara_seeded) >= 4, f"Expected >=4 YARA seeded matches, got {yara_seeded}"
 
-def jsonl_ja4s(path: Path) -> set[str]:
+def jsonl_field_set(path: Path, field: str) -> set[str]:
     vals: set[str] = set()
     for ln in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         if not ln.strip():
             continue
-        j = json.loads(ln).get("ja4")
-        if j:
-            vals.add(str(j))
+        v = json.loads(ln).get(field)
+        if v:
+            vals.add(str(v))
     return vals
 
-base_ja4s = jsonl_ja4s(out / "zeek_base.jsonl")
-atk_ja4s = jsonl_ja4s(out / "zeek_atk.jsonl")
+base_ja4s = jsonl_field_set(out / "zeek_base.jsonl", "ja4")
+atk_ja4s = jsonl_field_set(out / "zeek_atk.jsonl", "ja4")
+proxy_ja4s = jsonl_field_set(out / "zeek_proxy.jsonl", "ja4")
+base_ja4hs = jsonl_field_set(out / "zeek_base.jsonl", "ja4h")
+atk_ja4hs = jsonl_field_set(out / "zeek_atk.jsonl", "ja4h")
+atk_apps = jsonl_field_set(out / "zeek_atk.jsonl", "appliance")
 assert len(base_ja4s) == 1, f"Expected 1 consistent real wire JA4 in baseline, got {sorted(base_ja4s)}"
 assert len(atk_ja4s) >= 4, f"Expected >=4 distinct real wire JA4s in attack, got {sorted(atk_ja4s)}"
+assert len(proxy_ja4s) == 1, f"Expected 1 consistent wire JA4 in proxy_collapse, got {sorted(proxy_ja4s)}"
 assert any(j.startswith("t13i") for j in atk_ja4s), f"Expected raw-IP TLS (t13i...) JA4, got {sorted(atk_ja4s)}"
 assert any(j.startswith("t13d") and j[8:10] == "h2" for j in atk_ja4s), f"Expected ALPN h2 JA4, got {sorted(atk_ja4s)}"
 assert any(j.startswith("t12d") for j in atk_ja4s), f"Expected TLS 1.2 (t12d...) JA4, got {sorted(atk_ja4s)}"
+assert any("enus_" in j for j in base_ja4hs), f"Expected authentic Chrome JA4H (enus) in baseline, got {sorted(base_ja4hs)}"
+assert any("0000_" in j for j in atk_ja4hs), f"Expected stripped CLI JA4H (0000) in attack, got {sorted(atk_ja4hs)}"
+assert "zeek_dns" in atk_apps, f"Expected real-wire Zeek dns.log events in zeek_atk.jsonl, got appliances={sorted(atk_apps)}"
+assert "pcap_tls_turn" in atk_apps, f"Expected persistent TLS 1.3 turns in zeek_atk.jsonl, got appliances={sorted(atk_apps)}"
 
 # Cross-validate cipher/extension counts from pure-Python PCAP JA4 against real Suricata 7.0.3 tls.ja3.string!
 suri_tls_ja3_counts: set[tuple[int, int]] = set()
@@ -182,24 +202,44 @@ except ImportError:
     print("PASS: Suricata 20/20, Zeek 6/6, YARA 0 FP / seeded OK, Wire JA4 verified (install artex-defense to also assert artex-hunt)")
     sys.exit(0)
 
-base_ng = scan_telemetry_file(out / "baseline_nginx.log")
-base_zk = scan_telemetry_file(out / "zeek_base.jsonl")
+canary_routes = ["/api/v1/internal/credential-export"]
+base_ng = scan_telemetry_file(out / "baseline_nginx.log", canary_paths=canary_routes)
+base_zk = scan_telemetry_file(out / "zeek_base.jsonl", canary_paths=canary_routes)
+base_eve = scan_telemetry_file(out / "suricata_base/eve.json", canary_paths=canary_routes)
 assert base_ng == [], f"baseline_nginx.log FP candidates: {[(c.risk_score, c.alert_tier, c.reasons) for c in base_ng]}"
 assert base_zk == [], f"zeek_base.jsonl FP candidates: {[(c.risk_score, c.alert_tier, c.reasons) for c in base_zk]}"
+assert base_eve == [], f"suricata_base/eve.json FP candidates: {[(c.risk_score, c.alert_tier, c.reasons) for c in base_eve]}"
 
-atk_ng = scan_telemetry_file(out / "attack_nginx.log")
-atk_zk = scan_telemetry_file(out / "zeek_atk.jsonl")
+atk_ng = scan_telemetry_file(out / "attack_nginx.log", canary_paths=canary_routes)
+atk_zk = scan_telemetry_file(out / "zeek_atk.jsonl", canary_paths=canary_routes)
+atk_eve = scan_telemetry_file(out / "suricata_atk/eve.json", canary_paths=canary_routes)
+proxy_zk = scan_telemetry_file(out / "zeek_proxy.jsonl")
+
 assert atk_ng and atk_ng[0].risk_score == 100 and atk_ng[0].alert_tier == "alert", f"Unexpected attack_nginx: {atk_ng}"
 assert atk_zk and atk_zk[0].risk_score == 100 and atk_zk[0].alert_tier == "alert", f"Unexpected zeek_atk: {atk_zk}"
-assert "llm_sawtooth_context_flow" in atk_zk[0].reasons, f"Sawtooth missing on real Zeek TLS 1.3: {atk_zk[0].reasons}"
-assert "ja4_client_stack_whiplash" in atk_zk[0].reasons, f"Real-wire JA4 whiplash missing on Zeek+PCAP: {atk_zk[0].reasons}"
+assert atk_eve and any(c.risk_score == 100 and c.alert_tier == "alert" for c in atk_eve), f"Unexpected suricata_atk/eve.json: {atk_eve}"
+
+all_atk_zk_reasons = {r for c in atk_zk for r in c.reasons}
+for req_reason in (
+    "llm_sawtooth_context_flow",
+    "encrypted_tls_agent_turn_loop",
+    "causal_tls_action_loop",
+    "ja4_client_stack_whiplash",
+    "browser_ua_stack_impersonation",
+    "dns_oob_callback_after_probe",
+    "canary_deception_tripwire",
+):
+    assert req_reason in all_atk_zk_reasons, f"Missing expected live-wire reason {req_reason!r} in Zeek+PCAP: {sorted(all_atk_zk_reasons)}"
+
+all_proxy_reasons = {r for c in proxy_zk for r in c.reasons}
+assert "ja4_proxy_collapse_multi_ua" in all_proxy_reasons, f"Missing ja4_proxy_collapse_multi_ua in proxy_collapse: {sorted(all_proxy_reasons)}"
 
 print(
-    f"PASS: Suricata 0 FP / {len(atk_sids)}/20 SIDs | "
-    f"Zeek 0 FP / {len(atk_notes)}/6 notices | "
-    f"Wire JA4 1 baseline / {len(atk_ja4s)} attack stacks (cross-validated vs Suricata 7.0.3) | "
+    f"PASS: Suricata 0 FP / {len(atk_sids)}/20 SIDs (EVE JSON direct OK) | "
+    f"Zeek 0 FP / {len(atk_notes)}/6 notices (+DNS OOB) | "
+    f"Wire JA4 1 base / {len(atk_ja4s)} atk + JA4H + Persistent TLS 1.3 + Proxy Collapse | "
     f"YARA 0 FP / {len(yara_seeded)} seeded hits | "
-    f"artex-hunt 0 baseline candidates / Nginx risk={atk_ng[0].risk_score} ({len(atk_ng[0].reasons)} reasons) / "
-    f"Zeek+PCAP risk={atk_zk[0].risk_score} ({len(atk_zk[0].reasons)} reasons, incl. llm_sawtooth_context_flow + ja4_client_stack_whiplash)"
+    f"artex-hunt 0 base / Nginx risk={atk_ng[0].risk_score} / "
+    f"Zeek+PCAP {len(all_atk_zk_reasons)} reasons (sawtooth+tls_loop+causal+ja4+ja4h_impersonation+dns_oob+canary+proxy_collapse)"
 )
 PYEOF

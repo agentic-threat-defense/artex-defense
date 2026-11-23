@@ -24,10 +24,17 @@ curl -fL "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generi
 # 4. Run 100% benign behavioral replay inside 192.168.250.0/24
 python3 ./lab/kvm/benign_replay.py --target 192.168.250.20 --mode sawtooth
 
-# 5. Export raw Zeek JSON + Auditd logs -> normalized JSONL -> scan in Tier 2 offline Docker sandbox
+# 5. Optional: Run the 4-phase unscripted live-LLM falsification benchmark (requires local Ollama)
+#    Phase 1: Debian 12 auditd + sysadmin/browser baseline (0 FP)
+#    Phase 2: Unscripted organic LLM agent (Zero static IOCs)
+#    Phase 3: Stealth 4.5s-paced agent spoofing Chrome UA
+#    Phase 4: Ultra-stealth 12.0s-paced agent (causal TLS + wire JA4H ceiling test)
+python3 ./lab/kvm/run_falsification.py --model gemma4:26b --phases 1,2,3,4
+
+# 6. Export raw Zeek JSON + DNS + Auditd logs -> normalized JSONL -> scan in Tier 2 offline Docker sandbox
 ./lab/kvm/lab-ctl.sh export-logs quarantine/kvm_run_01
 ./scripts/sandbox-scan.sh quarantine/kvm_run_01/lab_telemetry.jsonl quarantine/kvm_run_01/candidates.json
 
-# 6. Always revert to clean-baseline after every test run
+# 7. Always revert to clean-baseline (or auditd-ready) after every test run
 ./lab/kvm/lab-ctl.sh revert clean-baseline
 ```

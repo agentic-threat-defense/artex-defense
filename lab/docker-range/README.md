@@ -8,11 +8,11 @@ Runs **real Suricata 7**, **real Zeek LTS**, **real YARA**, **real Nginx**, and 
 
 | Container / Stage | IP / Network | Role |
 |---|---|---|
-| `artex-range-target` | `172.30.0.20` (`internal: true`) | Nginx (HTTP `:80`, console `:8787`, TLS `:443` with self-signed `O=ARTEX` cert) + harmless Python mock OpenAPI backend (`target/app.py`) |
-| `artex-range-capture` | Shared netns with `target` | Real `tcpdump` packet capture (`baseline.pcap` & `attack.pcap`) |
-| `artex-range-replayer` | `172.30.0.10` (`internal: true`) | Phase 1 benign human/enterprise baseline + Phase 2 harmless behavioral replay (`replayer/replay_range.py`) |
-| Offline Suricata 7 (`--network=none`) | None | Validates `suricata -T` + runs `rules/network/artex_edge_and_harness.rules` on both PCAPs |
-| Offline Zeek LTS (`--network=none`) | None | Runs `rules/network/artex_agentic_cadence.zeek` + `policy/tuning/json-logs.zeek` on both PCAPs |
+| `artex-range-target` | `172.30.0.20` (`internal: true`) | Nginx (HTTP `:80`, console `:8787`, Keep-Alive TLS 1.2/1.3 `:443` with self-signed `O=ARTEX` cert) + harmless Python mock OpenAPI/LLM-turn backend & isolated UDP/53 mock DNS responder (`target/app.py`) |
+| `artex-range-capture` | Shared netns with `target` | Real `tcpdump` packet capture (`baseline.pcap`, `attack.pcap`, & `proxy_collapse.pcap`) |
+| `artex-range-replayer` | `172.30.0.10` (`internal: true`) | Phase 1 benign human/enterprise baseline (authentic browser JA4H + benign DNS) + Phase 2 behavioral replay (persistent Keep-Alive TLS 1.3 + causal probes, stripped-JA4H impersonation, UDP/53 DNS OOB, deception canary) + Phase 3 single-JA4 recording-proxy collapse (`replayer/replay_range.py`) |
+| Offline Suricata 7 (`--network=none`) | None | Validates `suricata -T --init-errors-fatal` + runs `rules/network/artex_edge_and_harness.rules` on baseline & attack PCAPs + direct `eve.json` ingestion in `artex-hunt` |
+| Offline Zeek LTS (`--network=none`) | None | Runs `rules/network/artex_agentic_cadence.zeek` + `policy/tuning/json-logs.zeek` across all 3 PCAPs (HTTP, TLS, Conn, & DNS logs) |
 | Offline YARA (`--network=none`) | None | Scans benign vs. seeded fixtures with `rules/yara/*.yar` |
 
 ## Quick Start

@@ -561,7 +561,53 @@ def _normalize_cloudtrail_record(record: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _flatten_suricata_eve_record(record: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def _is_multicast_or_mdns_eve(record: dict[str, Any]) -> bool:
+    """Return True if a Suricata EVE record represents local mDNS/LLMNR/multicast chatter."""
+    dport = record.get("dest_port")
+    if dport in (5353, 5355):
+        return True
+    dest_ip = str(record.get("dest_ip") or "").lower()
+    return dest_ip.startswith(("224.0.0.", "239.255.255.", "ff0"))
+
+
+def _should_skip_suricata_eve_record(
+    record: dict[str, Any],
+    *,
+    rich_flow_ids: set[Any] | None = None,
+) -> bool:
+    """Filter non-behavioral/duplicate Suricata EVE meta-records (`stats`, `fileinfo`, DNS answers, duplicate flows)."""
+    et = str(record.get("event_type") or "").lower()
+    if et == "stats" and isinstance(record.get("stats"), dict):
+        return True
+    if et == "fileinfo" and isinstance(record.get("fileinfo"), dict):
+        return True
+    is_eve = "flow_id" in record or "pkt_src" in record or any(
+        isinstance(record.get(k), dict) for k in ("tls", "http", "dns", "flow", "alert")
+    )
+    if not is_eve:
+        return False
+    if et == "dns":
+        dns_obj = record.get("dns")
+        if isinstance(dns_obj, dict) and str(dns_obj.get("type") or "").lower() == "answer":
+            return True
+        if _is_multicast_or_mdns_eve(record):
+            return True
+    if et == "flow" and isinstance(record.get("flow"), dict):
+        if _is_multicast_or_mdns_eve(record):
+            return True
+        fid = record.get("flow_id")
+        if rich_flow_ids and fid is not None and fid in rich_flow_ids:
+            return True
+        if str(record.get("app_proto") or "").lower() in {"http", "dns"}:
+            return True
+    return False
+
+
+def _flatten_suricata_eve_record(
+    record: dict[str, Any],
+    *,
+    flow_bytes_by_id: dict[Any, tuple[int | None, int | None]] | None = None,
+) -> tuple[dict[str, Any], bool]:
     """Unpack nested Suricata EVE JSON objects (`tls`, `http`, `dns`, `flow`, `alert`) into flat keys."""
     if "event_type" not in record or not any(k in record for k in ("src_ip", "dest_ip")):
         return record, False
@@ -599,10 +645,19 @@ def _flatten_suricata_eve_record(record: dict[str, Any]) -> tuple[dict[str, Any]
         flat["dest_host"] = dns_obj["rrname"]
     flow_obj = record.get("flow")
     if isinstance(flow_obj, dict):
+        if str(record.get("event_type") or "").lower() == "flow" and flow_obj.get("start"):
+            flat["timestamp"] = flow_obj["start"]
         if flow_obj.get("bytes_toserver") is not None and flat.get("bytes_out") is None:
             flat["bytes_out"] = flow_obj["bytes_toserver"]
         if flow_obj.get("bytes_toclient") is not None and flat.get("bytes_in") is None:
             flat["bytes_in"] = flow_obj["bytes_toclient"]
+    if flow_bytes_by_id and record.get("flow_id") is not None:
+        fb = flow_bytes_by_id.get(record["flow_id"])
+        if fb:
+            if flat.get("bytes_out") is None and fb[0] is not None:
+                flat["bytes_out"] = fb[0]
+            if flat.get("bytes_in") is None and fb[1] is not None:
+                flat["bytes_in"] = fb[1]
     alert_obj = record.get("alert")
     if isinstance(alert_obj, dict) and alert_obj.get("signature") and not flat.get("action"):
         flat["action"] = alert_obj["signature"]
@@ -651,7 +706,11 @@ def _normalize_k8s_audit_record(record: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
+def normalize_json_record(
+    record: dict[str, Any],
+    *,
+    flow_bytes_by_id: dict[Any, tuple[int | None, int | None]] | None = None,
+) -> dict[str, Any]:
     """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, Suricata EVE, Kubernetes audit, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
     # Detect native Kubernetes `audit.k8s.io/v1` Event JSON
     if (
@@ -707,7 +766,7 @@ def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
         return _normalize_google_workspace_record(record)
 
     record, is_ipfix = _flatten_ipfix_record(record)
-    record, is_suricata_eve = _flatten_suricata_eve_record(record)
+    record, is_suricata_eve = _flatten_suricata_eve_record(record, flow_bytes_by_id=flow_bytes_by_id)
 
     # Detect Zscaler NSS JSON fields
     is_zscaler = any(k in record for k in ("ClientIP", "hostname", "urlcategory", "threatname", "reason")) and any(
@@ -1185,7 +1244,7 @@ def detect_log_format(lines: list[str]) -> str:
     if not sample:
         return "jsonl"
     first = sample[0]
-    if first.startswith("{"):
+    if first.startswith(("{", "[")):
         return "jsonl"
     if any(ASA_FTD_RE.match(ln) for ln in sample):
         return "cisco_asa_ftd"
@@ -1221,7 +1280,9 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
         return parse_web_access_log(lines)
 
     # Default: JSON / JSONL (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, CloudTrail S3 {"Records": [...]}, IdPs)
+    parsed_records: list[dict[str, Any]] = []
     raw_text = "\n".join(lines).strip()
+    whole: Any = None
     if raw_text.startswith("{") or raw_text.startswith("["):
         try:
             whole = json.loads(raw_text)
@@ -1238,57 +1299,54 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
             )
         ):
             batch = whole["Records"] if isinstance(whole.get("Records"), list) else whole["items"]
-            events: list[dict[str, Any]] = []
-            for rec in batch:
-                if isinstance(rec, dict):
-                    try:
-                        events.append(normalize_json_record(rec))
-                    except (ValueError, KeyError, TypeError):
-                        continue
-            return events
-        if isinstance(whole, list):
-            events = []
-            for rec in whole:
-                if isinstance(rec, dict):
-                    try:
-                        events.append(normalize_json_record(rec))
-                    except (ValueError, KeyError, TypeError):
-                        continue
-            return events
-        if isinstance(whole, dict):
-            try:
-                return [normalize_json_record(whole)]
-            except (ValueError, KeyError, TypeError):
-                return []
+            parsed_records = [rec for rec in batch if isinstance(rec, dict)]
+        elif isinstance(whole, list):
+            parsed_records = [rec for rec in whole if isinstance(rec, dict)]
+        elif isinstance(whole, dict):
+            parsed_records = [whole]
 
-    # Resilient per-line JSONL parsing: skip individual malformed/truncated lines instead of aborting the whole file.
-    events = []
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
+    if whole is None:
+        # Resilient per-line JSONL parsing: skip individual malformed/truncated lines instead of aborting the whole file.
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             if isinstance(record, dict):
                 if isinstance(record.get("Records"), list):
-                    for sub in record["Records"]:
-                        if isinstance(sub, dict):
-                            try:
-                                events.append(normalize_json_record(sub))
-                            except (ValueError, KeyError, TypeError):
-                                continue
+                    parsed_records.extend(sub for sub in record["Records"] if isinstance(sub, dict))
                 elif isinstance(record.get("items"), list) and (
                     record.get("kind") == "EventList"
                     or str(record.get("apiVersion", "")).startswith("audit.k8s.io/")
                 ):
-                    for sub in record["items"]:
-                        if isinstance(sub, dict):
-                            try:
-                                events.append(normalize_json_record(sub))
-                            except (ValueError, KeyError, TypeError):
-                                continue
+                    parsed_records.extend(sub for sub in record["items"] if isinstance(sub, dict))
                 else:
-                    events.append(normalize_json_record(record))
-        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+                    parsed_records.append(record)
+
+    # Pre-pass for Suricata EVE JSON: correlate `flow` byte counters onto matching `tls`/`http`/`dns` `flow_id`s
+    # and suppress duplicate/meta records (`stats`, `fileinfo`, DNS `answer` duplicates, mDNS, and redundant `flow` flushes).
+    rich_flow_ids: set[Any] = set()
+    flow_bytes_by_id: dict[Any, tuple[int | None, int | None]] = {}
+    for rec in parsed_records:
+        fid = rec.get("flow_id")
+        if fid is None:
+            continue
+        et = str(rec.get("event_type") or "").lower()
+        if et in {"http", "tls", "dns", "alert"}:
+            rich_flow_ids.add(fid)
+        elif et == "flow" and isinstance(rec.get("flow"), dict):
+            fobj = rec["flow"]
+            flow_bytes_by_id[fid] = (fobj.get("bytes_toserver"), fobj.get("bytes_toclient"))
+
+    events = []
+    for rec in parsed_records:
+        if _should_skip_suricata_eve_record(rec, rich_flow_ids=rich_flow_ids):
+            continue
+        try:
+            events.append(normalize_json_record(rec, flow_bytes_by_id=flow_bytes_by_id or None))
+        except (ValueError, KeyError, TypeError):
             continue
     return events

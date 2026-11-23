@@ -7,14 +7,63 @@ Zero exploit payloads, zero offensive frameworks, zero external connections.
 
 from __future__ import annotations
 
+import http.client
 import socket
 import ssl
+import struct
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 
 TARGET_IP = "172.30.0.20"
+
+
+def _build_dns_query(fqdn: str, txid: int = 0x5151) -> bytes:
+    qname = b"".join(bytes([len(lbl)]) + lbl.encode("ascii") for lbl in fqdn.strip(".").split(".") if lbl) + b"\x00"
+    return struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
+
+
+def dns_query(fqdn: str, server_ip: str = TARGET_IP) -> None:
+    """Send a harmless isolated UDP/53 DNS A-query inside the internal Docker bridge."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(1.5)
+    try:
+        sock.sendto(_build_dns_query(fqdn), (server_ip, 53))
+        sock.recvfrom(512)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+
+def _start_local_dns_responder() -> socket.socket:
+    """Isolated UDP/53 responder on replayer (172.30.0.10:53) so target OOB DNS gets a clean NOERROR reply."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", 53))
+
+    def _serve() -> None:
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                if len(data) < 12:
+                    continue
+                pos = 12
+                while pos < len(data) and data[pos] != 0:
+                    pos += 1 + data[pos]
+                q_end = pos + 5
+                if q_end > len(data):
+                    continue
+                hdr = data[:2] + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
+                ans = struct.pack("!HHHLH4s", 0xC00C, 1, 1, 60, 4, socket.inet_aton("127.0.0.1"))
+                sock.sendto(hdr + data[12:q_end] + ans, addr)
+            except OSError:
+                break
+
+    threading.Thread(target=_serve, daemon=True).start()
+    return sock
 
 
 def http_req(
@@ -111,15 +160,60 @@ def run_baseline() -> None:
         http_req(path, ua=ua, headers=hdrs)
         if pause > 0:
             time.sleep(pause)
-    # Single consistent benign TLS 1.3 stack -> MUST emit 1 consistent wire JA4 and 0 JA4 FPs!
+    # Single consistent benign TLS 1.3 stack + 2 normal benign DNS lookups -> MUST emit 1 wire JA4 and 0 FPs!
+    dns_query("app.lab.local")
+    time.sleep(2.4)
     tls_req_with_sni("app.lab.local", path="/dashboard")
-    time.sleep(4.1)
+    time.sleep(5.1)
+    dns_query("status.corp.local")
+    time.sleep(2.2)
     tls_req_with_sni("app.lab.local", path="/assets/app.js")
     print("BASELINE_REPLAY_DONE")
 
 
+def _run_persistent_tls_causal_loop() -> None:
+    """Single persistent Keep-Alive TLS 1.3 socket with 5 growing turns & interleaved HTTP probes."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    class _SNIConn(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            raw = socket.create_connection((self.host, self.port), self.timeout)
+            self.sock = self._context.wrap_socket(raw, server_hostname="relay-persist.lab.local")
+
+    conn = _SNIConn(TARGET_IP, 443, context=ctx, timeout=15)
+    interleaved_paths = ["/api/v1/status", "/api/v1/profile", "/api/v1/update-documents", "/openapi.json"]
+    try:
+        for idx, body_len in enumerate((1400, 2300, 3300, 4400, 5600)):
+            payload = b'{"messages":"' + (b"M" * body_len) + b'"}'
+            conn.request(
+                "POST",
+                "/api/v1/llm-turn",
+                body=payload,
+                headers={"Host": "relay-persist.lab.local", "Content-Type": "application/json", "Connection": "keep-alive"},
+            )
+            resp = conn.getresponse()
+            resp.read()
+            if idx < len(interleaved_paths):
+                # Causally bracketed external tool action between consecutive TLS LLM turns!
+                time.sleep(0.15)
+                http_req(interleaved_paths[idx], ua="python-httpx/0.28.1")
+                time.sleep(0.15)
+    finally:
+        conn.close()
+
+
 def run_attack_behaviors() -> None:
-    """Harmless behavioral replay exercising Suricata, Zeek, and `artex-hunt scan` detectors."""
+    """Harmless behavioral replay exercising Suricata, Zeek, YARA, Wire JA4/JA4H, DNS OOB, & `artex-hunt scan`."""
+    dns_srv = _start_local_dns_responder()
+    try:
+        _run_attack_behaviors_inner()
+    finally:
+        dns_srv.close()
+
+
+def _run_attack_behaviors_inner() -> None:
     # 1. Explicit framework & Dragos UAs (Suricata sid:9100001, 9100014; Zeek Agentic_Harness_UserAgent)
     http_req("/login", ua="norma/0.4.1")
     http_req("/login", ua="artex-agent")
@@ -213,7 +307,42 @@ def run_attack_behaviors() -> None:
         tls_req_with_sni("relay-node-44.lab.local", path="/sync", body_bytes=size)
         time.sleep(3.2)
 
+    # 9. Persistent single-socket Keep-Alive TLS 1.3 loop + causally interleaved HTTP probes
+    #    (proves real OpenSSL NewSessionTicket stripping + encrypted_tls_agent_turn_loop + causal_tls_action_loop)
+    _run_persistent_tls_causal_loop()
+
+    # 10. Stripped-header HTTP browser-UA impersonation (real FoxIO JA4H ge11nn040000 claiming Chrome/131)
+    http_req("/api/v1/status", ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0")
+    http_req("/api/v1/profile", ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0")
+
+    # 11. Deterministic deception honey-route hit (--canary-path /api/v1/internal/credential-export)
+    http_req("/api/v1/internal/credential-export", ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0")
+
+    # 12. Real isolated UDP/53 DNS OOB & IMDS wildcard-DNS lookups (Zeek dns.log + dns_oob_callback_after_probe)
+    dns_query("xyz987.oast.live")
+    dns_query("169-254-169-254.sslip.io")
+    http_req("/api/v1/ssrf-sim", ua="python-httpx/0.28.1")
+
     print("ATTACK_BEHAVIOR_REPLAY_DONE")
+
+
+def run_proxy_collapse() -> None:
+    """Single consistent TLS stack carrying 3 distinct UA families with 4xx errors (ja4_proxy_collapse_multi_ua)."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    # Send 4 requests over identical TLS 1.3 stack (1 wire JA4) with 3 distinct UA families (Chrome, curl, python)
+    for path, ua in [
+        ("/api/v1/missing-1", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0"),
+        ("/api/v1/missing-2", "curl/8.5.0"),
+        ("/api/v1/missing-3", "python-httpx/0.28.1"),
+        ("/api/v1/missing-4", "curl/8.5.0"),
+    ]:
+        # Also send identical plaintext HTTP UAs so Zeek/Nginx logs the UA families alongside the single TLS JA4
+        tls_req_with_sni("proxy-collapse.lab.local", path=path)
+        http_req(path, ua=ua)
+        time.sleep(0.1)
+    print("PROXY_COLLAPSE_REPLAY_DONE")
 
 
 if __name__ == "__main__":
@@ -222,5 +351,7 @@ if __name__ == "__main__":
         run_baseline()
     elif mode == "attack":
         run_attack_behaviors()
+    elif mode == "proxy_collapse":
+        run_proxy_collapse()
     else:
         raise SystemExit(f"Unknown mode: {mode}")

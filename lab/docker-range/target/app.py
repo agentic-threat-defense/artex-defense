@@ -1,14 +1,72 @@
-"""100% harmless mock OpenAPI / web portal target for non-routed isolated purple-team telemetry validation."""
+"""100% harmless mock OpenAPI / web portal / isolated UDP-53 DNS target for non-routed purple-team validation."""
 
 from __future__ import annotations
 
 import json
+import socket
+import struct
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PUT_SEEN: set[str] = set()
 
 
+def _build_dns_query(fqdn: str, txid: int = 0x4242) -> bytes:
+    """Build a minimal RFC 1035 standard A-record DNS query packet."""
+    qname = b"".join(bytes([len(lbl)]) + lbl.encode("ascii") for lbl in fqdn.strip(".").split(".") if lbl) + b"\x00"
+    return struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0) + qname + struct.pack("!HH", 1, 1)
+
+
+def _start_mock_dns_server(bind_ip: str = "0.0.0.0", port: int = 53) -> None:
+    """Strictly isolated UDP/53 responder replying 127.0.0.1 for any A query (zero external forwarding)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((bind_ip, port))
+
+    def _serve() -> None:
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                if len(data) < 12:
+                    continue
+                txid = data[:2]
+                # Locate end of QNAME
+                pos = 12
+                while pos < len(data) and data[pos] != 0:
+                    pos += 1 + data[pos]
+                q_end = pos + 5
+                if q_end > len(data):
+                    continue
+                question = data[12:q_end]
+                hdr = txid + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
+                # Pointer to QNAME at offset 12 (0xC00C), Type A (1), Class IN (1), TTL 60, RDLEN 4, 127.0.0.1
+                answer = struct.pack("!HHHLH4s", 0xC00C, 1, 1, 60, 4, socket.inet_aton("127.0.0.1"))
+                sock.sendto(hdr + question + answer, addr)
+            except Exception:
+                continue
+
+    threading.Thread(target=_serve, daemon=True).start()
+
+
+def _emit_isolated_oob_dns(fqdn: str, dns_server_ip: str = "172.30.0.10") -> None:
+    """Emit a harmless isolated UDP/53 query inside the internal Docker bridge to test OOB DNS detection."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.5)
+        sock.sendto(_build_dns_query(fqdn), (dns_server_ip, 53))
+        try:
+            sock.recvfrom(512)
+        except OSError:
+            pass
+        sock.close()
+    except OSError:
+        pass
+
+
 class MockTargetHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, format: str, *args: object) -> None:
         return
 
@@ -16,6 +74,7 @@ class MockTargetHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "keep-alive")
         if extra_headers:
             for k, v in extra_headers.items():
                 self.send_header(k, v)
@@ -28,8 +87,15 @@ class MockTargetHandler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"openapi": "3.0.0", "paths": {"/api/v1/update-documents": {}}}).encode())
         elif path in {"/dashboard", "/assets/app.js", "/assets/app.css", "/+CSCOE+/logon.html", "/.env.example", "/login"}:
             self._send(200, b"<html><title>Corp Portal</title><body>OK</body></html>", "text/html")
-        elif path == "/api/v1/update-documents":
-            self._send(200, b'{"status":"updated"}')
+        elif path in {"/api/v1/update-documents", "/api/v1/status", "/api/v1/profile"}:
+            self._send(200, b'{"status":"ok"}')
+        elif path == "/api/v1/internal/credential-export":
+            # Operator-planted honey route for deterministic canary_deception_tripwire validation
+            self._send(200, b'{"export":"decoy_honey_route_only"}')
+        elif path == "/api/v1/ssrf-sim":
+            # Harmless isolated OOB DNS simulation inside internal:true Docker bridge
+            _emit_isolated_oob_dns("a9f8e7d6c5b4a3928170.oob-exfil.example")
+            self._send(200, b'{"simulated_oob_dns":true}')
         elif path == "/.env":
             self._send(200, b"APP_ENV=lab_synthetic_only\n")
         elif path == "/Inform/logger/heartbeat":
@@ -75,8 +141,13 @@ class MockTargetHandler(BaseHTTPRequestHandler):
         _ = self._read_body()
         path = self.path.split("?", 1)[0]
         if path == "/sync":
-            # Steady ~2KB response for sawtooth growing-context TLS flow validation
+            # Steady ~2KB response for multi-connection sawtooth growing-context TLS flow validation
             self._send(200, b'{"ack":"' + (b"x" * 2048) + b'"}')
+            return
+        if path == "/api/v1/llm-turn":
+            # Simulate compact real-LLM server inference latency (~0.32s) & ~680B tool-call JSON response
+            time.sleep(0.32)
+            self._send(200, b'{"tool_call":"run_probe","args":"' + (b"p" * 640) + b'"}')
             return
         if path == "/login":
             self._send(401, b'{"error":"unauthorized"}')
@@ -85,5 +156,6 @@ class MockTargetHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    _start_mock_dns_server("0.0.0.0", 53)
     server = ThreadingHTTPServer(("127.0.0.1", 8080), MockTargetHandler)
     server.serve_forever()

@@ -3516,7 +3516,10 @@ def scan_telemetry_file(
     callback_rows = con.execute(
         """
         SELECT
-            in_ev.dest_host AS target_server,
+            CASE
+                WHEN in_ev.dest_host NOT LIKE '%:%:%' THEN REGEXP_REPLACE(in_ev.dest_host, ':[0-9]+$', '')
+                ELSE REGEXP_REPLACE(in_ev.dest_host, '^\\[([^\\]]+)\\](?::[0-9]+)?$', '\\1')
+            END AS target_server,
             in_ev.source_host AS probing_ip,
             MIN(in_ev.ts_epoch) AS first_probe_ts,
             MIN(out_ev.ts_epoch) AS first_callback_ts,
@@ -3526,15 +3529,25 @@ def scan_telemetry_file(
             MAX(out_ev.dest_port) AS sample_cb_port
         FROM events in_ev
         JOIN events out_ev
-          ON out_ev.source_host = in_ev.dest_host
+          ON out_ev.source_host = (
+                CASE
+                    WHEN in_ev.dest_host NOT LIKE '%:%:%' THEN REGEXP_REPLACE(in_ev.dest_host, ':[0-9]+$', '')
+                    ELSE REGEXP_REPLACE(in_ev.dest_host, '^\\[([^\\]]+)\\](?::[0-9]+)?$', '\\1')
+                END
+          )
          AND out_ev.dest_host = in_ev.source_host
          AND out_ev.ts_epoch >= in_ev.ts_epoch
          AND (out_ev.ts_epoch - in_ev.ts_epoch) <= 600
         WHERE in_ev.surface IN ('web_portal', 'edge_appliance')
           AND in_ev.source_host <> ''
           AND in_ev.dest_host <> ''
-          AND in_ev.source_host <> in_ev.dest_host
-        GROUP BY in_ev.dest_host, in_ev.source_host
+          AND in_ev.source_host <> (
+                CASE
+                    WHEN in_ev.dest_host NOT LIKE '%:%:%' THEN REGEXP_REPLACE(in_ev.dest_host, ':[0-9]+$', '')
+                    ELSE REGEXP_REPLACE(in_ev.dest_host, '^\\[([^\\]]+)\\](?::[0-9]+)?$', '\\1')
+                END
+          )
+        GROUP BY 1, in_ev.source_host
         ORDER BY first_callback_ts ASC
         """
     ).fetchall()
@@ -3667,21 +3680,29 @@ def scan_telemetry_file(
     dns_oob_rows = con.execute(
         """
         SELECT
-            in_ev.dest_host AS target_server,
+            CASE
+                WHEN in_ev.dest_host NOT LIKE '%:%:%' THEN REGEXP_REPLACE(in_ev.dest_host, ':[0-9]+$', '')
+                ELSE REGEXP_REPLACE(in_ev.dest_host, '^\\[([^\\]]+)\\](?::[0-9]+)?$', '\\1')
+            END AS target_server,
             in_ev.source_host AS probing_ip,
             dns_ev.dest_host AS oob_fqdn,
             MIN(in_ev.ts_epoch) AS probe_ts,
             MIN(dns_ev.ts_epoch) AS dns_ts
         FROM events in_ev
         JOIN events dns_ev
-          ON dns_ev.source_host = in_ev.dest_host
+          ON dns_ev.source_host = (
+                CASE
+                    WHEN in_ev.dest_host NOT LIKE '%:%:%' THEN REGEXP_REPLACE(in_ev.dest_host, ':[0-9]+$', '')
+                    ELSE REGEXP_REPLACE(in_ev.dest_host, '^\\[([^\\]]+)\\](?::[0-9]+)?$', '\\1')
+                END
+          )
          AND dns_ev.ts_epoch >= in_ev.ts_epoch
          AND (dns_ev.ts_epoch - in_ev.ts_epoch) <= 90
         WHERE in_ev.surface IN ('web_portal', 'edge_appliance')
           AND in_ev.dest_host <> ''
           AND dns_ev.dest_host <> ''
           AND (LOWER(dns_ev.event_type) LIKE '%dns%' OR dns_ev.dest_port = 53)
-        GROUP BY in_ev.dest_host, in_ev.source_host, dns_ev.dest_host
+        GROUP BY 1, in_ev.source_host, dns_ev.dest_host
         ORDER BY dns_ts ASC
         """
     ).fetchall()

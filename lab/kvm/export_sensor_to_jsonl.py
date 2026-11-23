@@ -435,7 +435,12 @@ def convert_zeek_json_lines(
             t_sni, t_ja4 = ssl_by_tuple.get((str(src), int(orig_p), str(resp_h), int(port)), ("", ""))
             sni_join = sni_join or t_sni
             ja4_join = ja4_join or t_ja4
-        dst = rec.get("host") or rec.get("server_name") or sni_join or resp_h
+        dst = str(rec.get("host") or rec.get("server_name") or sni_join or resp_h)
+        if kind == "http":
+            if dst.startswith("[") and "]" in dst:
+                dst = dst[1 : dst.index("]")]
+            elif dst.count(":") == 1 and dst.rsplit(":", 1)[1].isdigit():
+                dst = dst.rsplit(":", 1)[0]
 
         if kind == "http":
             ja4h_val = str(rec.get("ja4h") or "")
@@ -492,7 +497,31 @@ def convert_zeek_json_lines(
                     "action": "zeek_ssl",
                 }
             )
+        elif kind == "dns":
+            # Skip local multicast/broadcast discovery (mDNS UDP/5353, LLMNR UDP/5355)
+            resp_low = str(resp_h).lower()
+            if port in (5353, 5355) or resp_low.startswith(("224.0.0.", "239.255.255.", "ff0")):
+                continue
+            qname = str(rec.get("query") or resp_h)
+            qtype = str(rec.get("qtype_name") or "A")
+            out.append(
+                {
+                    "timestamp": ts,
+                    "source_host": src,
+                    "actor": src,
+                    "event_type": "dns",
+                    "surface": "network",
+                    "appliance": "zeek_dns",
+                    "dest_host": qname,
+                    "dest_port": port or 53,
+                    "action": f"dns_{qtype.lower()}",
+                }
+            )
         else:  # conn.log
+            # Skip local link-layer / IPv6 router-solicitation / MLD multicast discovery chatter
+            resp_low = str(resp_h).lower()
+            if resp_low.startswith(("224.0.0.", "239.255.255.", "ff0")):
+                continue
             out.append(
                 {
                     "timestamp": ts,
@@ -699,6 +728,7 @@ def convert_directory(
     ssl_by_uid: dict[str, tuple[str, str]] = {}
     ssl_by_tuple: dict[tuple[str, int, str, int], tuple[str, str]] = {}
     http_uids: set[str] = set()
+    dns_uids: set[str] = set()
     conn_uids: set[str] = set()
 
     ssl_path = input_dir / "ssl.log"
@@ -739,6 +769,19 @@ def convert_directory(
             if isinstance(rec, dict) and rec.get("uid"):
                 http_uids.add(str(rec["uid"]))
 
+    dns_path = input_dir / "dns.log"
+    if dns_path.is_file():
+        for raw in dns_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and rec.get("uid"):
+                dns_uids.add(str(rec["uid"]))
+
     conn_path = input_dir / "conn.log"
     if conn_path.is_file():
         for raw in conn_path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -770,10 +813,11 @@ def convert_directory(
             http_ja4h_by_tuple.setdefault(hkey, []).extend(hlist)
 
     for name, kind, skips in (
-        # Avoid double-counting connections: HTTP connections use rich http.log rows;
-        # TLS connections use conn.log rows enriched with ssl.log + PCAP-computed FoxIO JA4.
-        ("conn.log", "conn", http_uids),
+        # Avoid double-counting connections: HTTP connections use rich http.log rows, DNS uses dns.log;
+        # TLS/raw connections use conn.log rows enriched with ssl.log + PCAP-computed FoxIO JA4.
+        ("conn.log", "conn", http_uids | dns_uids),
         ("http.log", "http", None),
+        ("dns.log", "dns", None),
         ("ssl.log", "ssl", conn_uids),
     ):
         p = input_dir / name
