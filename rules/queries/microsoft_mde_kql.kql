@@ -60,21 +60,31 @@ AADServicePrincipalSignInLogs
 | where (SecretFails >= 2 and Successes >= 1) or DistinctResources >= 5
 | order by DistinctResources desc, SecretFails desc
 
+// T1-E. MDE: BLOODALCHEMY Sideloaded DLL & ARTEX Staging Files on Disk / Image Load (ALL Hosts)
+//       (Catches graphics-hook-filter64.dll / graphics-hook_config.bin / artex_config.json / artx5v even when process creation only logs the host binary)
+union isfuzzy=true DeviceImageLoadEvents, DeviceFileEvents
+| where Timestamp > ago(7d)
+| where FileName in~ ("graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "xcai-effort-shim.py", "mitmproxy-ca-cert.pem")
+    or FolderPath has_any (@"\ProgramData\artx5v\", "/artx5v/")
+| project Timestamp, DeviceName, ActionType, InitiatingProcessFileName, FileName, FolderPath
+
 
 // ============================================================================
 // TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
 // ============================================================================
 
-// T2-A. MDE: External Console Ports 8787/8788/8790/8890 (Public IPs Only, Excl. Zscaler 8890) & Non-Browser Webhook/OAST Exfil
+// T2-A. MDE: External Console Ports 8787/8788/8790/8890/18899 (Public IPs Only, Excl. Zscaler 8890) & Non-Browser Webhook/OAST/IMDS-Wildcard Exfil
+//       (Note: For targeted CyberStrikeAI hunts, optionally append 5001, 5002, 5003, 8082 after baselining dev/proxy apps)
 DeviceNetworkEvents
 | where Timestamp > ago(7d)
 | where (RemoteIPType == "Public"
-         and RemotePort in (8787, 8788, 8790, 8890)
+         and RemotePort in (8787, 8788, 8790, 8890, 18899)
          and not(RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"))
-    or (RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:webhook\.site|oast\.(?:live|fun|me)|interact\.sh|dnslog\.cn)(?:[:/]|$)"
+    or (RemoteUrl matches regex @"(?i)(?:^|\.|//)(?:webhook\.site|oast\.(?:live|fun|me|pro|site|online)|interact\.sh|dnslog\.cn)(?:[:/]|$)"
         and not(RemoteUrl has "webhook.site"
                 and (InitiatingProcessFileName in~ ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "postman.exe", "code.exe", "MsSense.exe")
                      or InitiatingProcessFileName startswith "ZSA")))
+    or RemoteUrl matches regex @"(?i)(?:^|[.\-/])(?:169[.\-]254[.\-](?:169[.\-]254|170[.\-]2)|a9fea9fe)\.(?:sslip\.io|nip\.io|xip\.io|traefik\.me)(?:[:/]|$)"
 | summarize Hits = count(), Destinations = make_set(RemoteUrl, 10), RemoteIPs = make_set(RemoteIP, 10), Ports = make_set(RemotePort, 5), FirstSeen = min(Timestamp), LastSeen = max(Timestamp)
     by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName
 | order by Hits asc
@@ -98,10 +108,10 @@ DeviceProcessEvents
     by InitiatingProcessFileName, FileName, ProcessCommandLine
 | order by Hits asc
 
-// T2-C. MDE: Compressed Endpoint Recon Burst (>= 5 Unique Discovery/Cloud Commands in 30s)
+// T2-C. MDE: Compressed Endpoint Recon Burst (>= 5 Unique Discovery/Cloud Commands in 30s — Windows + Linux Parity)
 DeviceProcessEvents
 | where Timestamp > ago(24h)
-| where ProcessCommandLine matches regex @"(?i)\b(whoami|ipconfig|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b"
+| where ProcessCommandLine matches regex @"(?i)(?:\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|ps\s+(?:aux|-ef)|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b|/etc/passwd)"
 | summarize
     CmdCount = count(),
     UniqueCmds = dcount(ProcessCommandLine),

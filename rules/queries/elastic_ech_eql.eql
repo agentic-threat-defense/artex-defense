@@ -16,20 +16,22 @@
 // ============================================================================
 
 // T1-A. [EQL] Confirmed ARTEX / BLOODALCHEMY C2 Domains, Staging Artifacts, Control-Plane URIs & Post-Exploit Tools
-//       (Generic high ports 8787-8890 and dev-noisy webhook.site are isolated in Tier 2 T2-A below)
+//       (Generic high ports 8787-8890/18899 and dev-noisy webhook.site are isolated in Tier 2 T2-A below)
 any where
-  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
-  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*", "*lsadump::*", "*sekurlsa::*", "*AdaptixC2*", "*wisp-c2*", "*ligolo-agent*") or
+  file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*xcai-effort-shim.py*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
+  dll.name : ("graphics-hook-filter64.dll") or
+  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*", "*lsadump::*", "*sekurlsa::*", "*AdaptixC2*", "*wisp-c2*", "*ligolo-agent*", "*CyberStrikeAI*") or
   url.original : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
+  url.full : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
   url.domain : ("xcai.com", "*.xcai.com", "xcai.pro", "*.xcai.pro", "artex.lol", "*.artex.lol", "lanmao666.com", "*.lanmao666.com", "lanmao666.xyz", "*.lanmao666.xyz", "nginxmysql.com", "*.nginxmysql.com", "vietnam852.com", "*.vietnam852.com", "zhzy999.net", "*.zhzy999.net", "sqlserver-sqlite.com", "*.sqlserver-sqlite.com", "artex.noog2infra.site", "artex.ok7777.eu.cc", "artex.tokena2b.top") or
   user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*hermes-agent/*", "*strix/*")
 
-// T1-B. [EQL] Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s)
+// T1-B. [EQL] Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s — Windows + Linux Parity)
 sequence by host.name with maxspan=30s
   [process where event.type == "start" and
-   process.command_line : ("*whoami*", "*nltest*", "*ipconfig*", "*net localgroup*", "*aws sts*", "*az account*")]
+   process.command_line : ("*whoami*", "*uname*", "*hostname*", "*nltest*", "*ipconfig*", "*ifconfig*", "*ip addr*", "*ss -*", "*/etc/passwd*", "*net localgroup*", "*aws sts*", "*az account*")]
   [process where event.type == "start" and
-   process.command_line : ("*sc query*", "*Get-Service*", "*tasklist*", "*systemctl status*") and
+   process.command_line : ("*sc query*", "*Get-Service*", "*tasklist*", "*systemctl status*", "*pgrep*") and
    process.command_line : ("*CSFalcon*", "*falcon-sensor*", "*SentinelAgent*", "*WinDefend*", "*CbDefense*", "*Sysmon*")]
 
 // T1-C. [EQL] Web Portal / Edge Appliance Error-Correction Pivot (4xx -> 200 OK on High-Confidence Sensitive Path <= 20s)
@@ -47,14 +49,17 @@ sequence by source.ip with maxspan=20s
 // TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
 // ============================================================================
 
-// T2-A. [EQL] External Console Ports 8787-8890 (Excl. RFC1918 & Zscaler 8890) & Non-Browser Webhook/OAST Exfil
-//       (Guards nullable process.name and splits webhook.site from OAST domains to avoid 3-valued EQL null drops)
+// T2-A. [EQL] External Console Ports 8787-8890/18899 (Excl. RFC1918 & Zscaler 8890) & Non-Browser Webhook/OAST Exfil
+//       (Gates cidrMatch on event.category == "network" and destination.ip != null for mixed-index safety;
+//        for targeted CyberStrikeAI hunts, optionally append 5001, 5002, 5003, 8082 after baselining dev/proxy apps)
 any where
-  (destination.port in (8787, 8788, 8790, 8890)
-   and (destination.ip == null or not cidrMatch(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"))
+  (event.category == "network"
+   and destination.ip != null
+   and destination.port in (8787, 8788, 8790, 8890, 18899)
+   and not cidrMatch(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16")
    and (process.name == null or not (destination.port == 8890 and process.name : ("ZSA*", "zscaler*"))))
-  or dns.question.name : ("oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn")
-  or url.domain : ("oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn")
+  or dns.question.name : ("oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "oast.pro", "*.oast.pro", "oast.site", "*.oast.site", "oast.online", "*.oast.online", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn", "*169-254-169-254.sslip.io", "*169.254.169.254.sslip.io", "*169-254-169-254.nip.io", "*169.254.169.254.nip.io", "*a9fea9fe.nip.io")
+  or url.domain : ("oast.live", "*.oast.live", "oast.fun", "*.oast.fun", "oast.me", "*.oast.me", "oast.pro", "*.oast.pro", "oast.site", "*.oast.site", "oast.online", "*.oast.online", "interact.sh", "*.interact.sh", "dnslog.cn", "*.dnslog.cn", "*169-254-169-254.sslip.io", "*169.254.169.254.sslip.io", "*169-254-169-254.nip.io", "*169.254.169.254.nip.io", "*a9fea9fe.nip.io")
   or ((dns.question.name : ("webhook.site", "*.webhook.site") or url.domain : ("webhook.site", "*.webhook.site"))
       and (process.name == null or not process.name : ("chrome*", "msedge*", "firefox*", "brave*", "postman*", "code*", "MsSense*", "ZSA*")))
 
@@ -82,7 +87,7 @@ network where
 // | WHERE TO_LOWER(process.command_line) LIKE "*artex-probe-*"
 //      OR TO_LOWER(process.command_line) LIKE "*artexprobe*"
 //      OR file.path RLIKE ".*/tasks/[0-9]+/i[0-9]+/cmd-output/.*"
-//      OR file.name IN ("mitmproxy-ca-cert.pem", "artex_config.json", "artex.yaml", "graphics-hook-filter64.dll")
+//      OR TO_LOWER(file.name) IN ("mitmproxy-ca-cert.pem", "artex_config.json", "artex.yaml", "xcai-effort-shim.py", "graphics-hook-filter64.dll", "graphics-hook_config.bin")
 //      OR TO_LOWER(user_agent.original) RLIKE ".*(norma/[0-9]|artex-(enrich|readonly|worker|audit|pentest|verify|spawn|selfupdate)|artex/1\\.0|spa-api-recon|reconprobe|hexstrike-|cyberstrikeai-|artexprobe).*"
 // | KEEP @timestamp, host.name, user.name, process.command_line, file.path, user_agent.original
 // | SORT @timestamp DESC

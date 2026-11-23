@@ -17,11 +17,12 @@
 event.type == "DNS Resolved" AND
 event.dns.request matches "(?i)(?:^|\\.)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|artex\\.noog2infra\\.site|artex\\.ok7777\\.eu\\.cc|artex\\.tokena2b\\.top)$"
 
-// T1-B. Explicit ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Control-Plane URIs, & Framework Artifacts
-//       (Generic high ports 8787-8890 and webhook.site are isolated in Tier 2 T2-A below)
-(tgt.file.path contains:anycase ("ProgramData\\artx5v", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "mitmproxy-ca-cert.pem") OR
+// T1-B. Explicit ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Module Loads, Control-Plane URIs, & Framework Artifacts
+//       (Includes module.path for BLOODALCHEMY DLL sideloading; generic ports 8787-8890/18899 & webhook.site are in Tier 2 T2-A)
+(tgt.file.path contains:anycase ("ProgramData\\artx5v", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "xcai-effort-shim.py", "mitmproxy-ca-cert.pem") OR
+ module.path contains:anycase ("graphics-hook-filter64.dll", "graphics-hook_config.bin", "ProgramData\\artx5v") OR
  (tgt.file.path contains:anycase "/tasks/" AND tgt.file.path contains:anycase "/cmd-output/") OR
- tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent", "ntlmrelayx") OR
+ tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "CyberStrikeAI", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent", "ntlmrelayx") OR
  url.address contains:anycase ("/Inform/logger/", "/api/exploration/", "/api/sync/scopesentry", "?artex=", "&artex=") OR
  url.address matches "(?i)(?:^|\\.|//)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com)(?:[:/]|$)")
 
@@ -35,13 +36,15 @@ tgt.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon"
 // TIER 2 — BEHAVIORAL & BASELINE-REQUIRED HUNTS (Expect Org-Specific Tuning)
 // ============================================================================
 
-// T2-A. External Console Ports 8787-8890 (Excl. Zscaler 8890 & RFC1918) & Non-Browser Webhook/OAST Exfil
+// T2-A. External Console Ports 8787-8890/18899 (Excl. Zscaler 8890 & RFC1918) & Non-Browser Webhook/OAST/IMDS-Wildcard Exfil
+//       (Note: For targeted CyberStrikeAI hunts, optionally append 5001, 5002, 5003, 8082 after baselining dev/proxy apps)
 (event.type == "IP Connect" AND
- dst.port.number in (8787, 8788, 8790, 8890) AND
+ dst.port.number in (8787, 8788, 8790, 8890, 18899) AND
  NOT (dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA") AND
  NOT (dst.ip.address matches "^(10\\.|127\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.)")) OR
 (event.type == "DNS Resolved" AND
- event.dns.request matches "(?i)(?:^|\\.)(?:oast\\.(?:live|fun|me)|interact\\.sh|dnslog\\.cn)$") OR
+ (event.dns.request matches "(?i)(?:^|\\.)(?:oast\\.(?:live|fun|me|pro|site|online)|interact\\.sh|dnslog\\.cn)$" OR
+  event.dns.request matches "(?i)(?:^|[.\\-])(?:169[.\\-]254[.\\-](?:169[.\\-]254|170[.\\-]2)|a9fea9fe)\\.(?:sslip\\.io|nip\\.io|xip\\.io|traefik\\.me)$")) OR
 (event.type == "DNS Resolved" AND
  event.dns.request matches "(?i)(?:^|\\.)webhook\\.site$" AND
  NOT (src.process.name in:anycase ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "postman.exe", "code.exe", "MsSense.exe") OR
@@ -63,9 +66,9 @@ event.type == "DNS Resolved" AND
 endpoint.type == "server" AND
 event.dns.request matches "(?i)(?:^|\\.)(?:api\\.anthropic\\.com|api\\.openai\\.com|api\\.deepseek\\.com|open\\.bigmodel\\.cn|api\\.x\\.ai|api\\.moonshot\\.(?:cn|ai)|dashscope\\.aliyuncs\\.com|openrouter\\.ai|api\\.siliconflow\\.cn|sslip\\.io|nip\\.io|xip\\.io|traefik\\.me)$"
 
-// T2-D. Singularity Data Lake PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s)
+// T2-D. Singularity Data Lake PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s — Win + Linux)
 event.type == "Process Creation"
-| filter tgt.process.cmdline matches "(?i)\\b(whoami|ipconfig|ifconfig|nltest|net\\s+localgroup|aws\\s+sts|az\\s+account|kubectl\\s+get|sc\\s+query|get-service|tasklist)\\b"
+| filter tgt.process.cmdline matches "(?i)(?:\\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\\s+(?:a|addr|route)|ss\\s+-|netstat|ps\\s+(?:aux|-ef)|nltest|net\\s+localgroup|aws\\s+sts|az\\s+account|kubectl\\s+get|sc\\s+query|get-service|tasklist)\\b|/etc/passwd)"
 | let tb = timebucket(event.time, "30s")
 | group cmd_count = count(), unique_cmds = estimate_distinct(tgt.process.cmdline) by endpoint.name, tgt.process.user, tb
 | filter unique_cmds >= 5

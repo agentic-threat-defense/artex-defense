@@ -108,6 +108,8 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert 'RLIKE "(?i)' not in eql, "ES|QL Lucene Automaton RLIKE does not support (?i) flag"
     assert 'url.path : ("*/Inform/logger/*", "*?artex=*"' not in eql, "ECS url.path excludes query strings"
     assert "BY aws.cloudtrail.user_identity.arn, source.ip, event.action" not in eql, "Grouping by event.action forces COUNT_DISTINCT=1"
+    assert 'event.category == "network"' in eql and "destination.ip != null" in eql
+    assert "url.full :" in eql and "TO_LOWER(file.name) IN" in eql
     assert "process.name == null or not (destination.port == 8890 and process.name" in eql
     eql_t1 = _tier1_query_code(eql)
     assert "webhook.site" not in eql_t1 and "8890" not in eql_t1
@@ -121,6 +123,8 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert '";", "&&"' not in kql, "KQL has_any() only matches alphanumeric terms, never pure punctuation"
     assert r'matches regex @"[;|&`]|\$\("' in kql
     assert 'DeviceType =~ "Server"' in kql, "MDE KQL server LLM hunt must use DeviceInfo server role"
+    assert "union isfuzzy=true DeviceImageLoadEvents, DeviceFileEvents" in kql
+    assert "/etc/passwd" in kql
     kql_t1 = _tier1_query_code(kql)
     assert "webhook" not in kql_t1.lower() and "8890" not in kql_t1
 
@@ -129,6 +133,8 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert "| bucket 30s" not in s1ql, "Invalid S1QL PowerQuery syntax; use timebucket()"
     assert "timebucket(" in s1ql
     assert "tgt.process.cmdline" in s1ql
+    assert "module.path contains:anycase" in s1ql
+    assert "/etc/passwd" in s1ql
     assert "src.process.parent.name" not in s1ql, "Inverted S1QL 2.0 parent/child lineage"
     assert 'dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA"' in s1ql
     assert 'tgt.process.cmdline contains:anycase "metadata.google.internal"' in s1ql
