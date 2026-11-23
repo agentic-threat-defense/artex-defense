@@ -219,6 +219,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "cloud_iam_privilege_burst": 80,
     "cloud_secret_search_or_dryrun_burst": 80,
     "web_error_correction_pivot": 80,
+    "web_memory_corruption_crash_loop": 80,
     "on_box_compiler_in_staging_path": 75,
     "webhook_exfil_egress": 75,
     "agentic_default_port": 75,
@@ -433,10 +434,20 @@ WEB_PARENT_PROCESSES: tuple[str, ...] = (
     "nitro",
     "restjavad",
     "sqlservr.exe",
+    "puma",
+    "unicorn",
+    "passenger",
+)
+# Exact / versioned daemon basename matcher (prevents path-substring FPs like /home/passenger/deploy.sh or /srv/puma-docs/build.sh)
+WEB_PARENT_BASE_RE = re.compile(
+    r"^(?:w3wp\.exe|nginx(?:\.exe)?|httpd(?:\.exe)?|apache\d*(?:\.exe)?|php-fpm[\d.]*|tomcat\d*(?:\.exe)?|nitro|restjavad|sqlservr\.exe|puma|unicorn|unicorn_rails|passenger)$",
+    re.IGNORECASE,
 )
 
-# Noisy runtime parents (java/node spawn shells legitimately in CI/builds; require suspicious shell args)
-RUNTIME_WEB_PARENTS: tuple[str, ...] = ("java", "java.exe", "node", "node.exe")
+# Noisy runtime parents (java/node/ruby spawn shells legitimately in CI/builds; require suspicious shell args)
+RUNTIME_WEB_PARENTS: tuple[str, ...] = ("java", "java.exe", "node", "node.exe", "ruby", "ruby.exe")
+RUBY2SHELL_CHARSET_RE = re.compile(r"charset\s*=\s*\"?(?:iso[-_]?8859[-_]?1|windows[-_]?1252|latin[-_]?1)\b", re.IGNORECASE)
+RUBY2SHELL_EXPANSION_RE = re.compile(r"(?:(?:%df){4,}|ß{4,}|(?:\\xdf){4,}|(?:\\u00df){4,})", re.IGNORECASE)
 SUSPICIOUS_RUNTIME_SHELL_ARG_RE = re.compile(
     r"(whoami|\bid\b|nltest|sc\s+query|curl\s|wget\s|invoke-webrequest|-enc(?:odedcommand)?\s|base64|/dev/tcp|\bnc\s)",
     re.IGNORECASE,
@@ -1812,6 +1823,12 @@ def _inspect_window_signals(
     saw_non_asset_4xx = False
     non_asset_error_count = 0
     non_asset_error_codes: set[int] = set()
+    worker_crash_5xx_count = 0
+    worker_crash_paths: set[str] = set()
+    worker_crash_size_seq: list[int] = []
+    worker_crash_timestamps: list[float] = []
+    saw_worker_recovery_2xx = False
+    ruby2shell_encoding_probe_hits = 0
     random_slug_probe_paths: set[str] = set()
     saw_sensitive_2xx_after_error = False
     saw_spec_harvest = False
@@ -2102,6 +2119,35 @@ def _inspect_window_signals(
 
         # Web error-correction loop, error-handling calibration (multi-code forcing / random-slug 404), & UA diversity
         status = ev.get("status_code")
+        is_health_or_asset = bool(
+            ev_path_base
+            and (STATIC_ASSET_PATH_RE.search(ev_path_base) or _HEALTH_PROBE_PATH_RE.search(ev_path_base))
+        )
+        if ev_method in {"POST", "PUT", "PATCH"} and ev_path_base and not is_health_or_asset:
+            # Exclude 503 (load-balancer / maintenance backoff); track genuine worker crashes (500/502)
+            if status in {500, 502}:
+                worker_crash_5xx_count += 1
+                worker_crash_paths.add(ev_path_base)
+                worker_crash_timestamps.append(ev["ts_epoch"])
+                b_out = ev.get("bytes_out")
+                if isinstance(b_out, int) and b_out > 0:
+                    worker_crash_size_seq.append(b_out)
+            elif status is not None and 200 <= status < 300 and worker_crash_5xx_count >= 3 and ev_path_base in worker_crash_paths:
+                saw_worker_recovery_2xx = True
+                worker_crash_timestamps.append(ev["ts_epoch"])
+
+        # Ruby2Shell (CVE-2026-132825): IDS alert signature OR correlated web/HTTP legacy single-byte charset + dense 0xDF expansion
+        ev_type_low = str(ev.get("event_type") or "").lower()
+        act_low = str(ev.get("action") or "").lower()
+        if ev_type_low == "alert" and ("ruby2shell" in act_low or "cve-2026-132825" in act_low):
+            ruby2shell_encoding_probe_hits += 1
+            indicators.add(f"ruby2shell_ids_alert:{ev.get('action', '')[:60]}")
+        elif ev.get("surface") in {"web_portal", "edge_appliance"} or ev_type_low in {"http", "web", "proxy", "waf"}:
+            r2s_http_blob = f"{ev_path} {ev.get('raw_json', '')}"
+            if RUBY2SHELL_CHARSET_RE.search(r2s_http_blob) and RUBY2SHELL_EXPANSION_RE.search(r2s_http_blob):
+                ruby2shell_encoding_probe_hits += 1
+                indicators.add(f"ruby2shell_probe:{ev_path_base or ev_path[:60]}")
+
         if status is not None and status >= 400:
             if not (ev_path_base and STATIC_ASSET_PATH_RE.search(ev_path_base)):
                 saw_non_asset_4xx = True
@@ -2203,7 +2249,7 @@ def _inspect_window_signals(
         proc_base = proc_low.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         if parent_low and proc_low:
             parent_base = parent_low.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-            if any(wp in parent_low for wp in WEB_PARENT_PROCESSES) and (
+            if WEB_PARENT_BASE_RE.fullmatch(parent_base) and (
                 proc_base in SHELL_CHILD_BASES or proc_base in WEB_DAEMON_EXTRA_CHILDREN
             ):
                 reasons.add("web_parent_shell_spawn")
@@ -2467,9 +2513,40 @@ def _inspect_window_signals(
         reasons.add("edge_appliance_path_probe")
         indicators.add(f"unique_edge_paths:{len(edge_path_probes)}")
 
-    # Web error-correction pivot, forced error-handling calibration, spec-driven targeting, & read-back
+    # Web error-correction pivot, forced error-handling calibration, memory-corruption crash-loop, spec targeting, & read-back
     if saw_sensitive_2xx_after_error and non_asset_error_count >= 3:
         reasons.add("web_error_correction_pivot")
+    # Compute crash-burst-specific pacing & monotonic payload-size ramp (blocks busy random-size 502/503 API blips AND slow-prefix bypasses)
+    crash_burst_mean_gap: float | None = None
+    if len(worker_crash_timestamps) >= 2:
+        sorted_cts = sorted(worker_crash_timestamps)
+        crash_gaps = [sorted_cts[i] - sorted_cts[i - 1] for i in range(1, len(sorted_cts))]
+        crash_burst_mean_gap = sum(crash_gaps) / len(crash_gaps)
+    has_monotonic_groom_ramp = False
+    if len(worker_crash_size_seq) >= 3:
+        inc_run = 1
+        for idx_s in range(1, len(worker_crash_size_seq)):
+            if worker_crash_size_seq[idx_s] > worker_crash_size_seq[idx_s - 1]:
+                inc_run += 1
+                if inc_run >= 3:
+                    has_monotonic_groom_ramp = True
+                    break
+            elif worker_crash_size_seq[idx_s] < worker_crash_size_seq[idx_s - 1]:
+                inc_run = 1
+    if (
+        (ruby2shell_encoding_probe_hits >= 1 and (worker_crash_5xx_count >= 2 or ruby2shell_encoding_probe_hits >= 2))
+        or (
+            worker_crash_5xx_count >= 3
+            and has_monotonic_groom_ramp
+            and saw_worker_recovery_2xx
+            and crash_burst_mean_gap is not None
+            and crash_burst_mean_gap <= 3.0
+        )
+    ):
+        reasons.add("web_memory_corruption_crash_loop")
+        indicators.add(
+            f"worker_5xx_crashes:{worker_crash_5xx_count},distinct_sizes:{len(set(worker_crash_size_seq))},r2s_probes:{ruby2shell_encoding_probe_hits}"
+        )
     fault_codes = non_asset_error_codes & {405, 415, 422, 500}
     if (
         (len(non_asset_error_codes) >= 3 and non_asset_error_count >= 3)

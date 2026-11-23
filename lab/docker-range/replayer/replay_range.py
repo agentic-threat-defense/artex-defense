@@ -160,6 +160,15 @@ def run_baseline() -> None:
         http_req(path, ua=ua, headers=hdrs)
         if pause > 0:
             time.sleep(pause)
+    # Benign European ISO-8859-1 form POST containing a single German 'ß' (0xDF) -> MUST produce 0 Suricata/artex-hunt FPs!
+    http_req(
+        "/api/v1/rails-form",
+        method="POST",
+        ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0",
+        headers={**benign_browser_hdrs, "Content-Type": "application/x-www-form-urlencoded; charset=iso-8859-1"},
+        body=b"street=Hauptstra\xdfe+12&city=Berlin",
+    )
+    time.sleep(4.2)
     # Single consistent benign TLS 1.3 stack + 2 normal benign DNS lookups -> MUST emit 1 wire JA4 and 0 FPs!
     dns_query("app.lab.local")
     time.sleep(2.4)
@@ -322,6 +331,18 @@ def _run_attack_behaviors_inner() -> None:
     dns_query("xyz987.oast.live")
     dns_query("169-254-169-254.sslip.io")
     http_req("/api/v1/ssrf-sim", ua="python-httpx/0.28.1")
+
+    # 13. Harmless Ruby2Shell (CVE-2026-132825) behavioral replay: ISO-8859-1 dense 0xDF heap-grooming sweep
+    #     (3 distinct POST sizes triggering 502 worker crashes then 200 recovery -> Suricata sid:9100021 + web_memory_corruption_crash_loop)
+    for pad_len in (32, 96, 192, 320):
+        http_req(
+            "/api/v1/rails-form",
+            method="POST",
+            ua="python-httpx/0.28.1",
+            headers={"Content-Type": "application/x-www-form-urlencoded; charset=iso-8859-1"},
+            body=b"_method=patch&q=" + (b"\xdf" * 16) + (b"A" * pad_len),
+        )
+        time.sleep(0.12)
 
     print("ATTACK_BEHAVIOR_REPLAY_DONE")
 

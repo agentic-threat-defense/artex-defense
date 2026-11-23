@@ -99,7 +99,7 @@ bash lab/docker-range/run-range.sh
 - [docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md) — Upstream researchers, repositories, and advisories
 - [docs/soc_siem_validation_playbook.md](docs/soc_siem_validation_playbook.md) — Positive-control schema checks and 7-day shadow-mode tuning
 - [docs/production_adaptation_pack.md](docs/production_adaptation_pack.md) — YAF IPFIX, JA4X/JA4S, and Spark SQL query templates
-- [docs/ja4_agentic_hunting_guide.md](docs/ja4_agentic_hunting_guide.md) — Standalone FoxIO JA4/JA4H/JA4X hunting guide, live-measured Go 1.22–1.24 / Python / `curl` reference tables, and anti-blocklist caveats ([ja4_agentic_patterns.json](rules/intel_hunting/ja4_agentic_patterns.json) | [3-page illustrated PDF briefing](docs/ja4_agentic_detection_nuances.pdf))
+- [docs/ja4_agentic_hunting_guide.md](docs/ja4_agentic_hunting_guide.md) — Standalone FoxIO JA4/JA4H/JA4X hunting guide, live-measured Go 1.22–1.24 / Python / `curl` reference tables, and anti-blocklist caveats ([rules/intel_hunting/ja4_agentic_patterns.json](rules/intel_hunting/ja4_agentic_patterns.json))
 - [docs/blind_stress_test_log.md](docs/blind_stress_test_log.md) — Multi-round blind out-of-distribution stress-test findings
 - [docs/ADVERSARIAL_REVIEW_BOARD.md](docs/ADVERSARIAL_REVIEW_BOARD.md) — 5-seat fresh-context Adversarial Review Board & CTO release-gate methodology
 - [docs/artex_threat_model.md](docs/artex_threat_model.md) & [docs/edge_to_endpoint_hardening.md](docs/edge_to_endpoint_hardening.md) — Threat model and hardening controls

@@ -10,6 +10,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PUT_SEEN: set[str] = set()
+RAILS_GROOM_SIZES: set[int] = set()
 
 
 def _build_dns_query(fqdn: str, txid: int = 0x4242) -> bytes:
@@ -138,8 +139,20 @@ class MockTargetHandler(BaseHTTPRequestHandler):
         self._send(404, b'{"error":"not_found"}')
 
     def do_POST(self) -> None:
-        _ = self._read_body()
+        body = self._read_body()
         path = self.path.split("?", 1)[0]
+        if path == "/api/v1/rails-form":
+            # Benign European ISO-8859-1 text (single 0xDF, e.g. "Straße") -> 200 OK (0 FP baseline check).
+            # Dense 0xDF heap-grooming sweep (b"\xdf" * 4+) simulates 3 Puma worker 502 crashes across distinct sizes then 200 recovery.
+            if b"\xdf\xdf\xdf\xdf" in body or b"%df%df%df%df" in body.lower():
+                RAILS_GROOM_SIZES.add(len(body))
+                if len(RAILS_GROOM_SIZES) <= 3:
+                    self._send(502, b'{"error":"bad_gateway_worker_restart"}')
+                    return
+                self._send(200, b'{"status":"processed"}')
+                return
+            self._send(200, b'{"status":"saved"}')
+            return
         if path == "/sync":
             # Steady ~2KB response for multi-connection sawtooth growing-context TLS flow validation
             self._send(200, b'{"ack":"' + (b"x" * 2048) + b'"}')

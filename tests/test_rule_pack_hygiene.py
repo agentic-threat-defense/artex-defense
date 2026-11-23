@@ -78,9 +78,13 @@ def test_suricata_rules_have_valid_classtypes_buffers_sids_and_no_fp_traps() -> 
                 assert ";" not in m.group(1), f"Unescaped ';' inside Suricata {kw}: {ln[:100]}"
 
     # Hardened SID coverage and FP boundary assertions
-    assert {"9100016", "9100017", "9100018", "9100019", "9100020"}.issubset(seen_sids), (
+    assert {"9100016", "9100017", "9100018", "9100019", "9100020", "9100021"}.issubset(seen_sids), (
         "Missing POST-body canary (9100016), IMDS wildcard DNS (9100017), SOAP OSExecute (9100018), "
-        "SAPControl read (9100019), or .htaccess PHP reactivation (9100020)"
+        "SAPControl read (9100019), .htaccess PHP reactivation (9100020), or Ruby2Shell CVE-2026-132825 (9100021)"
+    )
+    sid21_line = next(ln for ln in rule_lines if "sid:9100021;" in ln)
+    assert "charset=" in sid21_line and r"\xdf{4,}" in sid21_line, (
+        "sid:9100021 must require BOTH legacy charset header AND >=4 consecutive 0xDF bytes (0 FP on German 'Straße')"
     )
     assert r"O=ARTEX(?:,|$)" in text, "sid:9100013 must enforce exact RDN boundary on O=ARTEX"
     assert "oast\\.(?:live|fun|me|pro|site|online)" in text, "sid:9100011 must include full Interactsh oast.* TLDs"
