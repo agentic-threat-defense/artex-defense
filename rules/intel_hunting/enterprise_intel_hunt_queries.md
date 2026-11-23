@@ -8,9 +8,9 @@
 
 *(Note: VTGrep `content:` is case-sensitive. Always pair with `type:` filters to avoid HTML/document noise.)*
 
-### A. Go Binaries & Fork Artifacts (ARTEX / AntiFox / ScopeWeaver / Pojun / FORANG / Guanlan SEC / `norma` SDK / BLOODALCHEMY)
+### A. Go Binaries & Fork Artifacts (ARTEX / AntiFox / ScopeWeaver / CyberStrikeAI / Pojun / FORANG / Guanlan SEC / `norma` SDK / BLOODALCHEMY / Follow-On C2)
 ```text
-(content:"github.com/Autumn-27/artex" OR content:"artx5v" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"Pojun" OR content:"FORANG" OR content:"sco-fix2" OR content:"artex-enrich/1.0" OR content:"artex-readonly/1.0" OR content:"ARTEX-worker/1.0" OR content:"artex-selfupdate" OR content:"norma/0." OR content:"ArtexProbe" OR content:"graphics-hook-filter64.dll" OR content:"/Inform/logger/" OR content:"xcai.pro" OR content:"lanmao666" OR content:"artex.lol" OR content:"sqlserver-sqlite.com" OR content:"Guanlan SEC") AND (type:peexe OR type:pedll OR type:elf OR type:macho)
+(content:"github.com/Autumn-27/artex" OR content:"artx5v" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"Pojun" OR content:"FORANG" OR content:"sco-fix2" OR content:"artex-enrich/1.0" OR content:"artex-readonly/1.0" OR content:"ARTEX-worker/1.0" OR content:"artex-selfupdate" OR content:"norma/0." OR content:"ArtexProbe" OR content:"CyberStrikeAI" OR content:"cyberstrikeai-" OR content:"adaptixc2" OR content:"wisp-c2" OR content:"ARTEX_WRITE_PROBE" OR content:"graphics-hook-filter64.dll" OR content:"/Inform/logger/" OR content:"xcai.pro" OR content:"lanmao666" OR content:"artex.lol" OR content:"sqlserver-sqlite.com" OR content:"Guanlan SEC") AND (type:peexe OR type:pedll OR type:elf OR type:macho)
 ```
 
 ### B. Exposed Console Title / Embedded Next.js Web UI Strings
@@ -27,20 +27,23 @@
 
 ## 2. Censys Platform (CenQL) & Hunt.io (HuntSQL) — Exposed Consoles & Staging Directories
 
-### A. Exposed ARTEX / Rebranded Fork Consoles (Ports 8787 / 8788 / 8790 / 8890 / `Basic realm="ARTEX"` / Co-Located `Sub2API`)
+### A. Exposed ARTEX / Rebranded Fork / CyberStrikeAI Consoles (Ports 8787 / 8788 / 8790 / 8890 / 18899 / 5001–5003 / 8082 / `Basic realm="ARTEX"` / Co-Located `Sub2API`)
 
-**Censys Platform (CenQL — RE2 regex via `=~ "(?i)..."`):**
+**Censys Platform (CenQL — scoped inside `host.services:(...)` so port & HTTP body match the same service; RE2 regex via `=~ "(?i)..."`):**
 ```text
-host.services.endpoints.http.headers:(key="WWW-Authenticate" and value=~'(?i)Basic realm="ARTEX"')
-or (host.services.port in [8787, 8788, 8790, 8890] and (
-  host.services.endpoints.http.html_title=~"(?i)(自主渗透测试控制台|Agent Security Workbench|ARTEX MX|AntiFox|Guanlan SEC|ScopeWeaver)"
-  or host.services.endpoints.http.body=~"(?i)(ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|Autonomous Penetration|artex_token=)"
-))
+host.services:(endpoints.http.headers:(key="WWW-Authenticate" and value=~'(?i)Basic realm="ARTEX"'))
+or host.services:(
+  port in [8787, 8788, 8790, 8890, 18899, 5001, 5002, 5003, 8082]
+  and (
+    endpoints.http.html_title=~"(?i)(自主渗透测试控制台|Agent Security Workbench|ARTEX MX|AntiFox|Guanlan SEC|ScopeWeaver|CyberStrikeAI)"
+    or endpoints.http.body=~"(?i)(ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|Autonomous Penetration|artex_token=|CyberStrikeAI|adaptixc2|ARTEX_WRITE_PROBE)"
+  )
+)
 ```
 
 **Censys Platform (CenQL) — Co-Located `Sub2API` Subscription-to-API Gateways (Unit 42 Overlap Pivot):**
 ```text
-host.services.port=8080 and host.services.endpoints.http.body=~"(?i)(Sub2API|Subscription to API Conversion)"
+host.services:(port=8080 and endpoints.http.body=~"(?i)(Sub2API|Subscription to API Conversion)")
 ```
 
 **Censys / Hunt.io — Exact ARTEX Console Routes, Cookie, Cert & UI Asset MD5s (Theori AIPT / Hunt.io):**
@@ -48,7 +51,7 @@ host.services.port=8080 and host.services.endpoints.http.body=~"(?i)(Sub2API|Sub
 - Session cookie: `artex_token=`
 - Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) — in CenQL pivot via `host.services.cert.parsed.issuer.organization="ARTEX"`; in HuntSQL pivot via `tls.issuer.organization = 'ARTEX' AND SPLIT(ja4x, '_')[1] = SPLIT(ja4x, '_')[2]`.
 - Next.js UI asset MD5s: `cd3ebd16437d6d3963592f7365dd3980`, `16bf6c5653291854e8c56c8eff7ca20d`
-- Observed operator ports: `8787` (default console), `8788` (recording proxy), `8790` / `8890` / `8090` (alternate consoles/APIs), `8000` / `8001` / `8907` (open staging & UnboundID JNDI/LDAP dirs)
+- Observed operator ports: `8787` (default console), `8788` (recording proxy), `8790` / `8890` / `8090` (alternate consoles/APIs), `18899` (MCP/TAG-217 ARTEX console), `5001`–`5003` / `8082` (CyberStrikeAI web consoles), `8000` / `8001` / `8907` (open staging & UnboundID JNDI/LDAP dirs)
 - Exact worker output spill directory layout (for open Python `SimpleHTTP` hunting): `<data>/tasks/<task-id>/i<intent-id>/cmd-output/` + `traffic/_ca/mitmproxy-ca-cert.pem` + `traffic/_index/index.sqlite`
 
 **Hunt.io (HuntSQL — `httpv2` table):**
@@ -56,15 +59,19 @@ host.services.port=8080 and host.services.endpoints.http.body=~"(?i)(Sub2API|Sub
 SELECT ip, port, html.head.title
 FROM httpv2
 WHERE http.headers.raw ILIKE '%WWW-Authenticate%realm="ARTEX"%'
-   OR (port IN (8787, 8788, 8790, 8890) AND (
+   OR (port IN (8787, 8788, 8790, 8890, 18899, 5001, 5002, 5003, 8082) AND (
         html.head.title ILIKE '%自主渗透测试%'
      OR html.head.title ILIKE '%Agent Security Workbench%'
      OR html.head.title ILIKE '%ARTEX MX%'
+     OR html.head.title ILIKE '%CyberStrikeAI%'
      OR http.body ILIKE '%ScopeWeaver%'
      OR http.body ILIKE '%AntiFox%'
      OR http.body ILIKE '%Pojun%'
      OR http.body ILIKE '%FORANG%'
      OR http.body ILIKE '%artex_token=%'
+     OR http.body ILIKE '%CyberStrikeAI%'
+     OR http.body ILIKE '%adaptixc2%'
+     OR http.body ILIKE '%ARTEX_WRITE_PROBE%'
    ));
 ```
 *(Tips: Unit 42 linked separate ARTEX intrusions via co-located `Sub2API` gateways on TCP `8080` and `lanmao666[.]com` / `lanmao666[.]xyz` multi-tenant LLM gateway infrastructure. Pivot AntiFox console hits against Alibaba Cloud ASNs — Arctic Wolf observed Alibaba Cloud-hosted AntiFox operators targeting AWS IAM credentials and production secrets.)*
@@ -75,11 +82,13 @@ WHERE http.headers.raw ILIKE '%WWW-Authenticate%realm="ARTEX"%'
 
 Early and active ARTEX operators frequently spin up temporary Python HTTP servers (`python3 -m http.server`) exposing staging folders, agent `TaskID` logs, command outputs, and failed/retried task traces:
 
-**Censys Platform (CenQL):**
+**Censys Platform (CenQL — service-scoped):**
 ```text
-host.services.endpoints.http.html_title="Directory listing for /"
-and host.services.endpoints.http.headers:(key="Server" and value=~"(?i)SimpleHTTP")
-and host.services.endpoints.http.body=~"(?i)(cmd-output|mitmproxy-ca-cert\.pem|index\.sqlite|artx5v|scopeweaver|artex_config\.json|artex\.yaml|exploration_nodes|intent_id)"
+host.services:(
+  endpoints.http.html_title="Directory listing for /"
+  and endpoints.http.headers:(key="Server" and value=~"(?i)SimpleHTTP")
+  and endpoints.http.body=~"(?i)(cmd-output|mitmproxy-ca-cert\.pem|index\.sqlite|artx5v|scopeweaver|cyberstrikeai|artex_config\.json|artex\.yaml|exploration_nodes|intent_id|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK)"
+)
 ```
 
 **Hunt.io (HuntSQL — `httpv2` table):**
@@ -93,8 +102,10 @@ WHERE html.head.title = 'Directory listing for /'
     OR http.body ILIKE '%mitmproxy-ca-cert.pem%'
     OR http.body ILIKE '%artx5v%'
     OR http.body ILIKE '%scopeweaver%'
+    OR http.body ILIKE '%cyberstrikeai%'
     OR http.body ILIKE '%artex_config.json%'
     OR http.body ILIKE '%exploration_nodes%'
+    OR http.body ILIKE '%ARTEX_WRITE_PROBE%'
   );
 ```
 *(Note: ARTEX's Exploration Graph labels individual planner intents sequentially as `i1`, `i2`, `i12345`, etc. Pivot on ASN, SSL/TLS cert issuer, and co-hosted ports `8787`/`8788`/`8790`/`8890` to separate threat-actor staging servers from benign lab/CTF boxes. Any sanitized `TaskID` / `i<digits>` / `.jsonl` transcripts exported from an isolated Tier 3 VM can be digested locally via `artex-hunt analyze-tasks <path>`.)*
@@ -139,6 +150,14 @@ GreyNoise actively tracks opportunistic and framework-specific ARTEX reconnaissa
 ```text
 tags:"ARTEX-Enrichment User-Agent (Possible ARTEX)" OR tags:"ARTEX Parameter Attempt (Possible ARTEX)"
 ```
+*GNQL v3 native fields (`raw_data.http.*` — recommended for strict v3 API endpoints):*
+```text
+raw_data.http.useragent:"*artex-enrich/*" OR raw_data.http.useragent:"*norma/0.*" OR raw_data.http.useragent:"*LLMLeak-RedTeam*" OR raw_data.http.useragent:"*authorized-exposure-audit*" OR raw_data.http.useragent:"*authorized-security-research*" OR raw_data.http.useragent:"*ArtexProbe*"
+```
+```text
+raw_data.http.path:"*artex=*" OR raw_data.http.path:"*zz_no_such_user*" OR raw_data.http.path:"*zzzrandom*" OR raw_data.http.path:"*ARTEX_WRITE_PROBE*"
+```
+*Legacy GNQL v2 compatibility aliases (`raw_data.web.*`):*
 ```text
 raw_data.web.useragents:"*artex-enrich/*" OR raw_data.web.useragents:"*norma/0.*" OR raw_data.web.useragents:"*LLMLeak-RedTeam*" OR raw_data.web.useragents:"*authorized-exposure-audit*" OR raw_data.web.useragents:"*authorized-security-research*" OR raw_data.web.useragents:"*ArtexProbe*"
 ```
@@ -210,7 +229,15 @@ DeviceNetworkEvents
 (index=dns OR index=proxy OR index=web)
 (query="*.sslip.io" OR query="*.nip.io" OR query="*.xip.io" OR query="*.traefik.me"
  OR url="*sslip.io*" OR url="*nip.io*" OR url="*xip.io*" OR url="*localtest.me*" OR url="*lvh.me*")
-| eval is_imds_or_rfc1918=if(match(lower(coalesce(query, url)), "(?:^|[./:@=-])(169[.-]254[.-]169[.-]254|169[.-]254[.-]170[.-]2|a9fea9fe|127[.-]0[.-]0[.-]1|7f000001|192[.-]168[.-]|10[.-]\\d+[.-]\\d+[.-]\\d+|172[.-](1[6-9]|2\\d|3[01])[.-]|localtest\\.me|lvh\\.me)"), "1_HIGH_SSRF_EVASION", "2_HUNT_PUBLIC_OR_DEV")
-| stats count values(is_imds_or_rfc1918) as signal values(dest) as targets by src, host, sourcetype
+| eval target_str=lower(coalesce(query, url)),
+       is_workstation=if(match(lower(coalesce(host, src_host, "")), "^(wks|lt|lap|mac|desktop|dev)[-_0-9]") OR cidrmatch("10.200.0.0/16", coalesce(src, "")), 1, 0),
+       signal=case(
+         match(target_str, "(?:^|[./:@=-])(169[.-]254[.-]169[.-]254|169[.-]254[.-]170[.-]2|a9fea9fe)"), "1_CRITICAL_IMDS_SSRF",
+         is_workstation=0 AND match(target_str, "(?:^|[./:@=-])(127[.-]0[.-]0[.-]1|7f000001|192[.-]168[.-]|10[.-]\\d+[.-]\\d+[.-]\\d+|172[.-](1[6-9]|2\\d|3[01])[.-]|localtest\\.me|lvh\\.me)"), "2_HIGH_SERVER_SSRF",
+         1=1, "3_DEV_LOOPBACK_OR_PUBLIC_BASELINE"
+       )
+| where signal!="3_DEV_LOOPBACK_OR_PUBLIC_BASELINE"
+| stats count values(signal) as signal values(dest) as targets by src, host, sourcetype
 | sort + signal, - count
 ```
+*(Tune the `is_workstation` host prefix / workstation CIDR `10.200.0.0/16` to match your environment so developer OAuth callbacks on `localtest.me` / `127-0-0-1.nip.io` stay out of Tier 1 while cloud IMDS bypasses alert from any host.)*

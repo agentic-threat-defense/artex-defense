@@ -10,9 +10,11 @@
 
 | Actor | Primary Target Surface | Overlap with `artex-defense` Core | Key Companion Hunts Below |
 | :--- | :--- | :--- | :--- |
-| **Storm-0940** | Cloud IdP (Entra ID, Okta), OAuth/Graph SPs, supply-chain apps, edge VPN sprays | **Direct core coverage** (`artex_entra_sp_secret_abuse_and_mfa_tampering.yml`, `artex_okta_mfa_fatigue_and_authn_spray.yml`, `distributed_proxy_pool_probe`) | Zero-interactive-signin Graph/SP abuse; low-and-slow distributed ORB/residential-proxy spray |
-| **Crystal Typhoon** (`Storm-1849` / `UAT4356`) | Perimeter **Cisco ASA / FTD** (`ArcaneDoor`, `Line Dancer`, `Line Runner`, CVE-2024-20353 / 20359) | Edge WebVPN spray (`artex_cisco_asa_ftd_rapid_vpn_spray.yml`, Suricata `sid:9100005`, native ASA syslog parser) | ASA `111008`/`111010` logging-suppression & `webvpn` tampering; unscheduled crash/reload + syslog silence; ASA forensic checklist |
+| **Storm-0940** | Cloud IdP (Entra ID, Okta), OAuth/Graph SPs, Device Code OAuth, edge VPN sprays | **Direct core coverage** (`artex_entra_sp_secret_abuse_and_mfa_tampering.yml`, `artex_okta_mfa_fatigue_and_authn_spray.yml`, `distributed_proxy_pool_probe`) | Zero-interactive-signin Graph/SP abuse (`ServicePrincipalId` join); distributed ORB/residential-proxy spray; Entra Device Code phishing + rogue device registration |
+| **Crystal Typhoon** (`Storm-1849` / `UAT4356`) | Perimeter **Cisco ASA / FTD** (`ArcaneDoor`, `Line Dancer`, `Line Runner`, CVE-2024-20353 / 20359) | Edge WebVPN spray (`artex_cisco_asa_ftd_rapid_vpn_spray.yml`, Suricata `sid:9100005`, native ASA syslog parser) | ASA `111008`/`111010` logging-suppression & `webvpn` tampering; active-gateway syslog silence (`PriorEvents >= 5000` + `EventsLastHour >= 200`); ASA forensic checklist |
 | **Salt Typhoon** (`UNC5807` / `Operator Panda` / `Earth Estries`) | Core/PE/CE routers (**Cisco IOS XE / NX-OS**, Juniper, PAN-OS), telecom & enterprise edge (`GuestShell`, GRE, `monitor capture`, `JumbledPath`, `GhostSpider`, `Demodex`, `SNAPPYBEE`) | Edge gateway probing, AD lateral movement, Chisel/Ligolo/Proxychains pivots, relocated DLL sideloading | Router `guestshell` / `monitor capture` / rogue GRE / TACACS+ accounting hunts; unauthorized `ip.proto == 47` (GRE) egress; router CLI audit checklist |
+| **UNC5221 / SPAWN** | Perimeter **Ivanti Connect Secure / Pulse Secure** (CVE-2023-46805 / CVE-2024-21887 / CVE-2025-0282) | Shared ORB relay infrastructure & edge appliance pivot behavior | `/api/v1/totp/user-backup-code/` path-traversal probes; `dsserver` spawning `/bin/sh` or `python` |
+| **UTA0218 / MidnightEclipse** | Perimeter **Palo Alto PAN-OS GlobalProtect** (CVE-2024-3400) | Edge GlobalProtect gateway probing (`artex_edge_and_harness.rules` `sid:9100005`) | `SESSID=` path-traversal into `/opt/panlogs/tmp/device_telemetry/`; `gpsvc`/`pan_sslvpn` shell execution |
 
 ---
 
@@ -33,8 +35,8 @@ let sp_cred_adds = AuditLogs
     "Add app role assignment to service principal",
     "Consent to application"
   )
-| extend TargetSP = tostring(TargetResources[0].displayName)
-| project CredAddTime = TimeGenerated, TargetSP, InitiatedBy = tostring(InitiatedBy);
+| extend TargetSPId = tostring(TargetResources[0].id), TargetSPName = tostring(TargetResources[0].displayName)
+| project CredAddTime = TimeGenerated, TargetSPId, TargetSPName, InitiatedBy = tostring(InitiatedBy);
 AADServicePrincipalSignInLogs
 | where TimeGenerated >= ago(lookback)
 | summarize
@@ -48,7 +50,14 @@ AADServicePrincipalSignInLogs
     LastSeen = max(TimeGenerated)
   by ServicePrincipalName, ServicePrincipalId
 | where (FailCount >= 2 and SuccessCount >= 1) or DistinctResources >= 4
-| join kind=leftouter sp_cred_adds on $left.ServicePrincipalName == $right.TargetSP
+| join kind=leftouter sp_cred_adds on $left.ServicePrincipalId == $right.TargetSPId
+| join kind=leftouter (
+    sp_cred_adds
+    | where isnotempty(TargetSPName)
+    | project CredAddTimeByName = CredAddTime, TargetSPNameFallback = TargetSPName, InitiatedByName = InitiatedBy
+  ) on $left.ServicePrincipalName == $right.TargetSPNameFallback
+| extend CredAddTime = coalesce(CredAddTime, CredAddTimeByName), InitiatedBy = coalesce(InitiatedBy, InitiatedByName)
+| project-away TargetSPId, TargetSPName, CredAddTimeByName, TargetSPNameFallback, InitiatedByName
 | order by FailCount desc, DistinctResources desc
 ```
 
@@ -94,6 +103,30 @@ FROM logs-okta.system-*, logs-azure.signinlogs-*
 | SORT bucket DESC
 ```
 
+### 1D. Microsoft Sentinel (KQL) — Entra ID Device Code Phishing & Rogue Device Registration (Storm-0940 / Midnight Blizzard Overlap)
+```kql
+// Hunt: OAuth Device Code sign-ins from non-corporate IPs correlated with newly registered devices
+// (common fallback when password sprays hit MFA walls).
+let lookback = 7d;
+let device_reg = AuditLogs
+| where TimeGenerated >= ago(lookback)
+| where OperationName in~ ("Register device", "Add registered owner to device", "Add device")
+| extend RegUser = tolower(tostring(InitiatedBy.user.userPrincipalName)),
+         TargetDevice = tostring(TargetResources[0].displayName)
+| where isnotempty(RegUser)
+| project RegTime = TimeGenerated, RegUser, RegOp = OperationName, TargetDevice;
+SigninLogs
+| where TimeGenerated >= ago(lookback)
+| where AuthenticationProtocol == "deviceCode"
+| where ResultType == "0"
+| extend UserLow = tolower(UserPrincipalName)
+| join kind=leftouter device_reg on $left.UserLow == $right.RegUser
+| where isnull(RegTime) or (RegTime between (TimeGenerated - 10m .. TimeGenerated + 2h))
+| project TimeGenerated, UserPrincipalName, IPAddress, AutonomousSystemNumber, AppDisplayName,
+          ClientAppUsed, Location, RegOp, TargetDevice, RegTime
+| order by TimeGenerated desc
+```
+
 ---
 
 ## 2. Crystal Typhoon (`Storm-1849` / `UAT4356` — Cisco ASA / FTD `ArcaneDoor`)
@@ -137,12 +170,17 @@ FROM logs-cisco_asa.*
 ### 2C. Microsoft Sentinel (KQL) — Perimeter ASA/FTD Syslog Silence ("Heartbeat Drop") Detection
 ```kql
 // Hunt: ArcaneDoor operators frequently disable syslog or trigger device reloads to evade detection.
-// Flag perimeter Cisco ASA/FTD hosts that logged steadily over the prior 24h but went silent >15m.
+// Flag active primary Cisco ASA/FTD gateways (>=5000 events/24h AND >=200 events in prior hour)
+// that abruptly drop to zero in the last 15m (avoids standby HA peers & low-volume quiet windows).
 let active_hosts = CommonSecurityLog
 | where TimeGenerated between (ago(24h) .. ago(15m))
 | where DeviceVendor has "Cisco" and DeviceProduct has_any ("ASA", "FTD", "Firepower")
-| summarize PriorEvents = count(), LastSeen = max(TimeGenerated) by DeviceName
-| where PriorEvents >= 500;
+| summarize
+    PriorEvents = count(),
+    EventsLastHour = countif(TimeGenerated >= ago(75m)),
+    LastSeen = max(TimeGenerated)
+  by DeviceName
+| where PriorEvents >= 5000 and EventsLastHour >= 200;
 let recent_hosts = CommonSecurityLog
 | where TimeGenerated >= ago(15m)
 | where DeviceVendor has "Cisco" and DeviceProduct has_any ("ASA", "FTD", "Firepower")
@@ -244,6 +282,73 @@ dir bootflash: | include \.py|\.tcl|\.pcap|\.sh                 ! NX-OS: equival
 Where Salt Typhoon pivots from edge routers into internal servers (AD/AAA/jump hosts), correlate the router hunts above with:
 - **Relocated DLL sideloading & unsigned kernel drivers** (`Demodex` rootkit / `GhostSpider` / `SNAPPYBEE` loader behavior) — covered behaviorally in [`rules/sigma/artex_ad_ntlm_relay_chisel_sideload_pivots.yml`](../sigma/artex_ad_ntlm_relay_chisel_sideload_pivots.yml) and `detectors.py` (`dll_sideload_relocated_binary_with_config`).
 - **On-box Go packet-sniffer execution (`JumbledPath`-style)** — hunt Linux/jump-host `auditd` for non-standard binaries invoking `AF_PACKET` raw sockets (`cap_net_raw`) or spawning from `/tmp`, `/dev/shm`, or `/var/tmp` outside `/usr/bin/tcpdump` and `/usr/bin/dumpcap`.
+
+---
+
+## 4. Ivanti Connect Secure / Pulse Secure (`UNC5221` / SPAWN Ecosystem)
+
+`UNC5221` and overlapping China-nexus edge operators exploit Ivanti Connect Secure appliances using unauthenticated path-traversal / command-injection chains (CVE-2023-46805, CVE-2024-21887, CVE-2025-0282) over ORB relay networks, spawning shells from `dsserver` and deploying persistent web/TLS implants (`SPAWN` / `ZIPLINE`).
+
+### 4A. Microsoft Sentinel (KQL) — Ivanti Path-Traversal & Command-Injection Edge Hunt (`CommonSecurityLog`)
+```kql
+CommonSecurityLog
+| where TimeGenerated >= ago(14d)
+| where RequestURL has_any (
+    "/api/v1/totp/user-backup-code/",
+    "/api/v1/cav/client/status/",
+    "/system/maintenance/archiving/cloud-server-test-connection",
+    "/dana-ws/namedusers.ws",
+    "/dana-na/auth/url_default/welcome.cgi"
+  )
+  and (RequestURL contains ".." or RequestURL contains "%2e%2e" or RequestURL contains ";")
+| project TimeGenerated, DeviceName, SourceIP, DestinationIP, RequestMethod, RequestURL, DeviceAction
+| order by TimeGenerated desc
+```
+
+### 4B. Splunk SPL — Ivanti Syslog / Appliance `dsserver` Shell Spawn & Integrity-Checker Tampering
+```spl
+(index=ivanti OR index=syslog OR sourcetype="ivanti:ics" OR sourcetype="pulse:connectsecure")
+(
+  "/api/v1/totp/user-backup-code/"
+  OR "cloud-server-test-connection"
+  OR ("dsserver" AND ("/bin/sh" OR "/bin/bash" OR "python" OR "curl " OR "wget "))
+  OR "Integrity Checker"
+)
+| stats count values(src_ip) as src_ips values(_raw) as sample_events min(_time) as first_seen max(_time) as last_seen by host
+| sort - count
+```
+
+---
+
+## 5. Palo Alto PAN-OS GlobalProtect (`CVE-2024-3400` / `UTA0218` / Operation MidnightEclipse)
+
+Edge campaigns targeting PAN-OS GlobalProtect portals leverage unauthenticated `SESSID` cookie path-traversal into `/opt/panlogs/tmp/device_telemetry/` for cron-triggered command execution (`UPSTYLE`), often alongside `gpsvc` / `pan_sslvpn` spawning unexpected shells.
+
+### 5A. Microsoft Sentinel (KQL) — PAN-OS GlobalProtect `SESSID` Path-Traversal Hunt (`CommonSecurityLog`)
+```kql
+CommonSecurityLog
+| where TimeGenerated >= ago(14d)
+| where DeviceVendor has "Palo Alto" or RequestURL has_any ("/ssl-vpn/hipreport.esp", "/global-protect/portal/images/")
+| where AdditionalExtensions contains "opt/panlogs/tmp/device_telemetry"
+   or AdditionalExtensions contains "SESSID=/../"
+   or AdditionalExtensions contains "SESSID=../../../../"
+   or RequestURL contains "opt/panlogs/tmp/device_telemetry"
+| project TimeGenerated, DeviceName, SourceIP, DestinationIP, RequestMethod, RequestURL, AdditionalExtensions
+| order by TimeGenerated desc
+```
+*(Note: UPSTYLE temporarily appends command output to stock `/global-protect/portal/css/bootstrap.min.css` on disk — do **not** alert on `bootstrap.min.css` standalone because every legitimate GlobalProtect browser loads it; only pivot on `bootstrap.min.css` requests from a `SourceIP` already matched by the `SESSID` path-traversal hunt above.)*
+
+### 5B. Splunk SPL — PAN-OS Telemetry Path-Traversal & `gpsvc` / `pan_sslvpn` Shell Execution
+```spl
+(index=pan_logs OR index=syslog OR sourcetype="pan:threat" OR sourcetype="pan:system")
+(
+  "opt/panlogs/tmp/device_telemetry"
+  OR "SESSID=/../"
+  OR (("gpsvc" OR "pan_sslvpn") AND ("/bin/sh" OR "/bin/bash" OR "python" OR "curl " OR "wget "))
+)
+| stats count values(src_ip) as src_ips values(_raw) as sample_events min(_time) as first_seen max(_time) as last_seen by host
+| sort - count
+```
 
 ---
 

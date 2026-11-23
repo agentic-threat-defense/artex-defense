@@ -195,8 +195,23 @@ def test_passive_intel_hunt_queries_use_current_platform_syntax() -> None:
     md = (RULES_ROOT / "intel_hunting" / "enterprise_intel_hunt_queries.md").read_text(encoding="utf-8")
     assert "CONTAINS '" not in md and 'CONTAINS "' not in md, "HuntSQL uses LIKE/ILIKE, not CONTAINS"
     assert "services.http.response." not in md, "Update legacy Censys Search 2.0 paths to CenQL host.services"
+    assert "host.services:(" in md, "CenQL multi-field service predicates must be scoped inside host.services:(...)"
+    assert "18899" in md and "CyberStrikeAI" in md and "adaptixc2" in md
     assert "raw_data.web.useragents:*norma/0.*" not in md, "GNQL slashes must be quoted"
     assert "raw_data.web.paths:*artex=*" not in md, "GNQL '=' must be quoted"
+    assert 'raw_data.http.useragent:"*artex-enrich/*"' in md, "Include native GNQL v3 raw_data.http.useragent field"
+    assert 'raw_data.http.path:"*artex=*"' in md, "Include native GNQL v3 raw_data.http.path field"
+    assert "1_CRITICAL_IMDS_SSRF" in md and "is_workstation" in md, "Splunk wildcard-DNS hunt must separate dev workstations from server SSRF"
+
+    adj = (RULES_ROOT / "intel_hunting" / "adjacent_china_nexus_edge_and_idp_hunts.md").read_text(encoding="utf-8")
+    assert "$left.ServicePrincipalId == $right.TargetSPId" in adj, "Sentinel SP hunt must join on ServicePrincipalId first"
+    assert "PriorEvents >= 5000 and EventsLastHour >= 200" in adj, "ASA syslog silence hunt must exclude low-volume standby HA peers"
+    assert 'AuthenticationProtocol == "deviceCode"' in adj
+    assert "isnull(RegTime)" in adj and "isempty(RegTime)" not in adj, "KQL datetime columns require isnull(), not isempty()"
+    assert "/api/v1/totp/user-backup-code/" in adj
+    assert "opt/panlogs/tmp/device_telemetry" in adj
+    assert 'or RequestURL contains "/global-protect/portal/css/bootstrap.min.css"' not in adj, "Stock GlobalProtect CSS FPs if matched standalone"
+    assert 'has ".."' not in adj and 'has ";"' not in adj, "KQL has/has_any cannot match pure punctuation"
 
 
 def test_sigma_rules_avoid_known_critical_fp_and_drift_regressions() -> None:
