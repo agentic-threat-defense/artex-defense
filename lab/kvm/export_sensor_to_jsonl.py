@@ -401,7 +401,7 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
         epoch_s, eid = float(m_ts.group(1)), m_ts.group(2)
         entry = grouped.setdefault(
             eid,
-            {"epoch": epoch_s, "args": {}, "exe": "", "comm": "", "uid": "unknown", "pid": "", "ppid": "", "success": ""},
+            {"epoch": epoch_s, "args": {}, "exe": "", "comm": "", "auid": "", "uid": "unknown", "pid": "", "ppid": "", "success": ""},
         )
 
         if line.startswith("type=SYSCALL"):
@@ -417,7 +417,9 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
                     entry["ppid"] = val
                 elif k == "success":
                     entry["success"] = val
-                elif k in {"auid", "uid"} and entry["uid"] == "unknown":
+                elif k == "auid":
+                    entry["auid"] = val
+                elif k == "uid" and entry["uid"] == "unknown":
                     entry["uid"] = val
         elif line.startswith("type=EXECVE"):
             for k, qv, uv in AUDIT_KV_RE.findall(line):
@@ -440,11 +442,12 @@ def convert_auditd_lines(lines: list[str], *, hostname: str = "artex-target-01")
         if g["pid"] and proc:
             pid_to_exe[g["pid"]] = proc
         parent_proc = pid_to_exe.get(g["ppid"], "") if g["ppid"] else ""
+        actor_uid = g["auid"] if g["auid"] not in {"", "4294967295", "-1", "unset"} else g["uid"]
         events.append(
             {
                 "timestamp": _iso_from_epoch(g["epoch"]),
                 "source_host": hostname,
-                "actor": f"uid:{g['uid']}",
+                "actor": f"uid:{actor_uid}",
                 "event_type": "process",
                 "surface": "endpoint",
                 "appliance": "linux_auditd",
@@ -495,16 +498,28 @@ def extract_pcap_tls_turns(
             if bursts and bursts[-1][1] == direction:
                 bursts[-1][2] = ts
                 bursts[-1][3] += nbytes
+                bursts[-1][4].append((ts, nbytes))
             else:
-                bursts.append([ts, direction, ts, nbytes])
+                bursts.append([ts, direction, ts, nbytes, [(ts, nbytes)]])
 
         turns: list[tuple[float, float, int, float, float, int]] = []
         i = 0
         while i + 1 < len(bursts):
             if bursts[i][1] == "OUT" and bursts[i + 1][1] == "IN":
-                o_s, _, o_e, o_b = bursts[i]
-                i_s, _, i_e, i_b = bursts[i + 1]
-                if o_b >= 2000 and i_b >= 400:
+                o_s, _, o_e, o_b, _ = bursts[i]
+                i_s, _, i_e, i_b, in_pkts = bursts[i + 1]
+                # RFC 8446 §4.6.1 TLS 1.3 NewSessionTicket / HTTP/2 SETTINGS ACK:
+                # Servers often emit 1-2 small (<=350B) post-handshake tickets <=50ms after Turn 1's request,
+                # followed by the real LLM inference pause (>=0.15s) before the actual HTTP response arrives.
+                if (i_s - o_e) < 0.05 and len(in_pkts) >= 2:
+                    lead_bytes = 0
+                    for k in range(len(in_pkts) - 1):
+                        lead_bytes += in_pkts[k][1]
+                        if lead_bytes <= 768 and (in_pkts[k + 1][0] - in_pkts[k][0]) >= 0.15:
+                            i_s = in_pkts[k + 1][0]
+                            i_b = max(0, i_b - lead_bytes)
+                            break
+                if o_b >= 1000 and i_b >= 400:
                     turns.append((o_s, o_e, o_b, i_s, i_e, i_b))
                 i += 2
             else:

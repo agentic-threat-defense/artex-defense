@@ -410,7 +410,7 @@ EDR_DISCOVERY_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 RECON_CMD_RE = re.compile(
     r"\b(whoami|id|uname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|nltest|net\s+user|net\s+group|net\s+localgroup|"
-    r"systeminfo|hostname|quser|qwinsta|arp\s+-a|route\s+print|ss\s+-|netstat|"
+    r"systeminfo|hostname|quser|qwinsta|arp\s+-a|route\s+print|ss\s+-|netstat|ps\s+(?:-?aux\w*|-ef\w*)|"
     r"aws\s+sts|aws\s+iam|aws\s+s3|az\s+account|az\s+ad|az\s+keyvault|gcloud\s+auth|kubectl\s+get|"
     r"gh\s+auth|sc\s+query|tasklist|get-service|get-aduser)\b|/etc/passwd",
     re.IGNORECASE,
@@ -1099,8 +1099,9 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
         if dest in seen_dests or _is_known_llm_api_dest(dest):
             continue
         pts.sort(key=lambda x: x[0])
-        # Filter to substantive LLM-like turns (non-trivial prompt/response + real server inference latency)
-        llm_turns = [p for p in pts if p[1] >= 4000 and p[2] >= 800 and p[3] >= 0.18]
+        # Filter to substantive LLM-like turns (non-trivial prompt/response + real server inference latency).
+        # Supports both large cloud contexts (>=10KB) and compact local/vLLM tool-calling loops (1KB->4KB+, 400B+ tool JSON).
+        llm_turns = [p for p in pts if p[1] >= 1000 and p[2] >= 400 and p[3] >= 0.18]
         if len(llm_turns) < 4:
             continue
 
@@ -1133,12 +1134,20 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
         mono_ratio = inc_transitions / max(len(outs) - 1, 1)
         pos_growth = sum(max(0, b - a) for a, b in zip(outs, outs[1:]))
         peak_out = max(outs)
+        expansion_ratio = peak_out / max(outs[0], 1)
 
-        growth_ok = (
+        large_ctx_ok = peak_out >= 10000 and (
             (len(best_climb) >= 4 and (best_climb[-1] - best_climb[0]) >= 2000)
             or (mono_ratio >= 0.75 and pos_growth >= 2000)
             or (len(compacted_climbs) >= 2)
         )
+        compact_ctx_ok = (
+            4000 <= peak_out < 10000
+            and (len(best_climb) >= 4 or mono_ratio >= 0.80)
+            and pos_growth >= 2000
+            and expansion_ratio >= 2.0
+        )
+        growth_ok = large_ctx_ok or compact_ctx_ok
 
         # Evaluate autonomous client turnaround across turns (accommodates 1-5s WAN tools, rejects >=8s human chat)
         turnarounds = [p[4] for p in main_turns[1:] if p[4] is not None]
@@ -1148,12 +1157,95 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
         med_ta = sorted_ta[len(sorted_ta) // 2]
         fast_ta = sum(1 for t in turnarounds if t <= 5.0)
 
-        if growth_ok and peak_out >= 10000 and fast_ta >= 2 and med_ta <= 6.0:
+        if growth_ok and fast_ta >= 2 and med_ta <= 6.0:
             seen_dests.add(dest)
             hits.append(
                 f"tls_agent_loop:{dest}(turns={len(main_turns)},growth=+{pos_growth}B,peak={peak_out}B,med_turn={med_ta:.2f}s)"
             )
     return hits
+
+
+_LINUX_SSHD_DAEMON_CMD_RE = re.compile(r"^(?:/usr)?/sbin/sshd(?:\s+-[DRde46q]+)*\s*$")
+_LINUX_SYSTEMD_USER_PROC_RE = re.compile(
+    r"^(?:/usr)?/lib/systemd/(?:systemd|systemd-user-runtime-dir|user-(?:environment-)?generators/[\w.-]+)$"
+)
+_LINUX_SYSTEMD_USER_CMD_RE = re.compile(
+    r"^(?:/usr)?/lib/systemd/(?:systemd(?:\s+--user)?|systemd-user-runtime-dir\s+(?:start|stop)\s+\d+|user-(?:environment-)?generators/[\w.-]+(?:\s+/run/user/\d+/systemd/[\w./-]+)*)\s*$"
+)
+_LINUX_MOTD_SHELL_PROCS: frozenset[str] = frozenset({"/bin/sh", "/usr/bin/sh", "/bin/dash", "/usr/bin/dash"})
+_LINUX_MOTD_ENV_PROCS: frozenset[str] = frozenset({"/bin/env", "/usr/bin/env"})
+_LINUX_MOTD_RUNPARTS_PROCS: frozenset[str] = frozenset({"/bin/run-parts", "/usr/bin/run-parts"})
+# Strictly anchored fullmatch patterns for Debian/Ubuntu pam_motd plumbing (forbids chaining/comments/redirection abuse)
+_LINUX_MOTD_SH_WRAPPER_RE = re.compile(
+    r"^sh -c /usr/bin/env -i PATH=[A-Za-z0-9_/:.-]+ run-parts --lsbsysinit /etc/update-motd\.d(?: > /run/motd\.dynamic\.new)?$"
+)
+_LINUX_MOTD_ENV_CMD_RE = re.compile(
+    r"^/usr/bin/env -i PATH=[A-Za-z0-9_/:.-]+ run-parts --lsbsysinit /etc/update-motd\.d$"
+)
+_LINUX_MOTD_RUNPARTS_CMD_RE = re.compile(r"^run-parts --lsbsysinit /etc/update-motd\.d$")
+_LINUX_MOTD_SCRIPT_CMD_RE = re.compile(
+    r"^(?:/usr)?/bin/sh (?:/etc/update-motd\.d/[0-9]{2}-[A-Za-z0-9._-]+|/usr/share/unattended-upgrades/update-motd-unattended-upgrades)$"
+)
+
+
+def _is_exact_pam_motd_event(proc: str, cmd: str) -> bool:
+    """Return True ONLY for exact, unchained Debian/Ubuntu pam_motd executable+cmdline pairs."""
+    if proc in _LINUX_MOTD_SHELL_PROCS:
+        return bool(_LINUX_MOTD_SH_WRAPPER_RE.fullmatch(cmd) or _LINUX_MOTD_SCRIPT_CMD_RE.fullmatch(cmd))
+    if proc in _LINUX_MOTD_ENV_PROCS:
+        return bool(_LINUX_MOTD_ENV_CMD_RE.fullmatch(cmd))
+    if proc in _LINUX_MOTD_RUNPARTS_PROCS:
+        return bool(_LINUX_MOTD_RUNPARTS_CMD_RE.fullmatch(cmd))
+    return False
+
+
+def _filter_linux_login_scaffolding(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip standard Linux SSH/PAM/systemd login plumbing from real auditd streams before windowing.
+
+    Prevents Debian/Ubuntu `pam_motd` (`run-parts --lsbsysinit /etc/update-motd.d` -> `10-uname` -> `uname -snrvm`)
+    and `systemd --user` session generators from causing false positives on burst, think-act cadence, or
+    redundant-recon detectors during normal SSH/Ansible administration.
+    All patterns are strictly binary-scoped and fullmatch-anchored to prevent MOTD-comment/path cloaking.
+    """
+    # Pass 1 (order-independent): record timestamps of exact `/etc/update-motd.d/10-uname` executions per (host, actor)
+    motd_uname_times: dict[tuple[str, str], list[float]] = {}
+    for ev in events:
+        if ev.get("surface") != "endpoint" or ev.get("event_type") != "process":
+            continue
+        proc = str(ev.get("process") or "")
+        cmd = str(ev.get("command_line") or "").strip()
+        ts = ev.get("ts_epoch")
+        if proc in _LINUX_MOTD_SHELL_PROCS and cmd in {"/bin/sh /etc/update-motd.d/10-uname", "/usr/bin/sh /etc/update-motd.d/10-uname"} and ts is not None:
+            host_actor = (str(ev.get("source_host") or ""), str(ev.get("actor") or ""))
+            motd_uname_times.setdefault(host_actor, []).append(float(ts))
+
+    filtered: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("surface") != "endpoint" or ev.get("event_type") != "process":
+            filtered.append(ev)
+            continue
+        proc = str(ev.get("process") or "")
+        parent = str(ev.get("parent_process") or "")
+        cmd = str(ev.get("command_line") or "").strip()
+        ts = ev.get("ts_epoch")
+        host_actor = (str(ev.get("source_host") or ""), str(ev.get("actor") or ""))
+
+        if proc in {"/usr/sbin/sshd", "/sbin/sshd"} and _LINUX_SSHD_DAEMON_CMD_RE.match(cmd):
+            continue
+        if _LINUX_SYSTEMD_USER_PROC_RE.match(proc) and _LINUX_SYSTEMD_USER_CMD_RE.match(cmd):
+            continue
+        if _is_exact_pam_motd_event(proc, cmd):
+            continue
+        if (
+            proc in {"/usr/bin/uname", "/bin/uname"}
+            and cmd == "uname -snrvm"
+            and parent.rsplit("/", 1)[-1] in {"dash", "sh"}
+            and ts is not None
+            and any(0.0 <= (float(ts) - mts) <= 0.5 for mts in motd_uname_times.get(host_actor, ()))
+        ):
+            continue
+        filtered.append(ev)
+    return filtered
 
 
 def load_events(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]:
@@ -1443,10 +1535,22 @@ def _inspect_window_signals(
     is_authorized_llm_host = is_workstation or is_explicit_authorized_llm_host
 
     timestamps: list[float] = []
+    think_act_timestamps: list[float] = []
+    last_endpoint_ts: float | None = None
+    last_recon_norm_seen: dict[str, tuple[float, bool]] = {}
 
     for ev in events:
         if ev.get("ts_epoch") is not None:
-            timestamps.append(float(ev["ts_epoch"]))
+            ev_ts = float(ev["ts_epoch"])
+            timestamps.append(ev_ts)
+            # Collapse same-command <=15ms Linux auditd fork/exec pipelines (e.g., bash -> sudo -> cp in 4ms)
+            # into a single logical action without advancing the anchor on skipped children (preventing chained-window evasion).
+            if ev.get("surface") == "endpoint" and ev.get("event_type") == "process":
+                if last_endpoint_ts is None or (ev_ts - last_endpoint_ts) > 0.015:
+                    think_act_timestamps.append(ev_ts)
+                    last_endpoint_ts = ev_ts
+            else:
+                think_act_timestamps.append(ev_ts)
         if ev.get("surface") and ev["surface"] != "unknown":
             surfaces[ev["surface"]] += 1
         if ev.get("appliance"):
@@ -1723,12 +1827,23 @@ def _inspect_window_signals(
         # Endpoint compressed recon commands, wrapper-stripped redundant worker recon, LLM CLI idioms, & touch-and-bail
         cmd_raw = ev.get("command_line", "")
         cmd_norm = _normalize_shell_cmd(cmd_raw)
-        cmd_m = RECON_CMD_RE.search(cmd_norm)
-        if cmd_m:
+        for cmd_m in RECON_CMD_RE.finditer(cmd_norm):
             recon_cmds.add((cmd_m.group(1) or cmd_m.group(0)).lower())
             llm_idiom_has_recon_or_net = True
         if READONLY_RECON_NORMALIZE_RE.match(cmd_norm):
-            readonly_recon_counts[cmd_norm] += 1
+            is_shell_wrapper = bool(SHELL_WRAPPER_PREFIX_RE.match(cmd_raw.strip()))
+            ev_ts_opt = float(ev["ts_epoch"]) if ev.get("ts_epoch") is not None else None
+            prev_seen = last_recon_norm_seen.get(cmd_norm)
+            is_parent_child_dup = (
+                ev_ts_opt is not None
+                and prev_seen is not None
+                and 0.0 <= (ev_ts_opt - prev_seen[0]) <= 0.5
+                and prev_seen[1] != is_shell_wrapper
+            )
+            if not is_parent_child_dup:
+                readonly_recon_counts[cmd_norm] += 1
+            if ev_ts_opt is not None:
+                last_recon_norm_seen[cmd_norm] = (ev_ts_opt, is_shell_wrapper)
         if LLM_TOOLBOX_INVENTORY_RE.search(cmd_raw):
             llm_idiom_types.add("toolbox_inventory")
             llm_idiom_has_recon_or_net = True
@@ -2080,7 +2195,7 @@ def _inspect_window_signals(
         reasons.add("write_then_readback_verification")
 
     # Bimodal LLM Think-Act cadence (Unit 42 / Theori)
-    think_act_cycles = _count_think_act_cycles(timestamps)
+    think_act_cycles = _count_think_act_cycles(think_act_timestamps)
     if think_act_cycles >= 1:
         reasons.add("think_act_bimodal_cadence")
         indicators.add(f"think_act_cycles:{think_act_cycles}")
@@ -2187,6 +2302,10 @@ def scan_telemetry_file(
     Zscaler NSS, and Nginx/Apache access logs via auto-detection.
     """
     events = load_events(file_path, fmt=fmt)
+    if not events:
+        return []
+
+    events = _filter_linux_login_scaffolding(events)
     if not events:
         return []
 
