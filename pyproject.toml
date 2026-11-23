@@ -1,6 +1,6 @@
 [project]
 name = "artex-defense"
-version = "0.1.0"
+version = "0.2.5"
 description = "Local-first defensive threat-hunting and detection-engineering workbench for ARTEX and autonomous agentic offensive frameworks."
 requires-python = ">=3.11"
 dependencies = [

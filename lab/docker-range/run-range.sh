@@ -199,7 +199,7 @@ assert suri_tls_ja3_counts and suri_tls_ja3_counts.issubset(py_ja4_counts), (
 try:
     from artex_defense.detectors import scan_telemetry_file
 except ImportError:
-    print("PASS: Suricata 20/20, Zeek 6/6, YARA 0 FP / seeded OK, Wire JA4 verified (install artex-defense to also assert artex-hunt)")
+    print("PASS: Suricata 21/21, Zeek 6/6, YARA 0 FP / seeded OK, Wire JA4 verified (install artex-defense to also assert artex-hunt)")
     sys.exit(0)
 
 canary_routes = ["/api/v1/internal/credential-export"]
