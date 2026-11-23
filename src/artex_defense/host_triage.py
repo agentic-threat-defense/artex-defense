@@ -40,11 +40,24 @@ CA_ENV_KEYS: frozenset[str] = frozenset(
 )
 
 CMDLINE_ARTIFACT_RE = re.compile(
-    r"(artex[-_ ]?(?:server|worker|cli|pro|mx)?|scopeweaver|antifox|pojun|forang|sco-fix2|"
+    r"((?:^|[/\\\s\"'])artex(?:[-_](?:server|worker|cli|pro|mx|agent|enrich|readonly|audit|pentest|verify|spawn)|(?=$|[\s\"']))|"
+    r"scopeweaver|antifox|pojun|forang|sco-fix2|"
     r"tomicdd/artex|congdonglinux/artex|mitmproxy-ca-cert\.pem|graphics-hook-filter64\.dll|"
     r"artex_config\.json|artex\.yaml)",
     re.IGNORECASE,
 )
+EXACT_CMDLINE_ARTIFACT_RE = re.compile(
+    r"(scopeweaver|antifox|pojun|forang|sco-fix2|tomicdd/artex|congdonglinux/artex|"
+    r"mitmproxy-ca-cert\.pem|graphics-hook-filter64\.dll|artex_config\.json|artex\.yaml)",
+    re.IGNORECASE,
+)
+BENIGN_DOC_VIEWER_BINS: frozenset[str] = frozenset(
+    {"less", "more", "cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "vim", "nvim", "vi", "nano", "code"}
+)
+BENIGN_DOC_EXT_RE = re.compile(r"\.(?:md|markdown|rst|txt|adoc)(?=$|[\s\"'])", re.IGNORECASE)
+CA_CERT_ARTIFACT_RE = re.compile(r"(?:mitmproxy|(?:^|[._\-])artex(?:$|[._\-]))", re.IGNORECASE)
+SQL_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
+SQL_LINE_COMMENT_RE = re.compile(r"--[^\r\n]*")
 
 TASK_CMD_OUTPUT_RE = re.compile(r"(?:^|[/\\])tasks[/\\]\d+[/\\]i\d+[/\\]cmd-output(?:$|[/\\])", re.IGNORECASE)
 
@@ -273,8 +286,14 @@ def check_proc_proxy_ca_injection(proc_root: Path) -> list[TriageFinding]:
                 )
             )
         elif cmdline and CMDLINE_ARTIFACT_RE.search(cmdline):
-            # Ignore generic grep/ps/editor inspections of docs or repo paths
-            if not any(benign in cmdline for benign in ("artex-defense", "artex_defense")):
+            # Ignore workbench repo paths and read-only viewers/editors opening markdown/doc notes
+            first_bin = cmdline.split(None, 1)[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+            is_benign_doc_view = (
+                first_bin in BENIGN_DOC_VIEWER_BINS
+                and not EXACT_CMDLINE_ARTIFACT_RE.search(cmdline)
+                and bool(BENIGN_DOC_EXT_RE.search(cmdline))
+            )
+            if not is_benign_doc_view and not any(benign in cmdline for benign in ("artex-defense", "artex_defense")):
                 findings.append(
                     TriageFinding(
                         check="proc_proxy_ca_injection",
@@ -428,10 +447,12 @@ def check_installed_ca_certs(fs_root: Path) -> list[TriageFinding]:
         except OSError:
             continue
         for item in entries:
-            if item.is_symlink() or not item.is_file():
+            # Inspect symlink names too (Debian/Ubuntu update-ca-certificates & c_rehash populate
+            # /etc/ssl/certs with symlinks); Path.iterdir() never follows/reads symlink targets.
+            if not item.is_symlink() and not item.is_file():
                 continue
             name_low = item.name.lower()
-            if "mitmproxy" in name_low or "artex" in name_low:
+            if CA_CERT_ARTIFACT_RE.search(name_low):
                 findings.append(
                     TriageFinding(
                         check="installed_ca_certs",
@@ -444,16 +465,27 @@ def check_installed_ca_certs(fs_root: Path) -> list[TriageFinding]:
     return findings
 
 
+def _pg_has_table_reference(clean_sql: str, table_name: str) -> bool:
+    """Match a PostgreSQL table in DDL statements, psql \\dt listings, or bare table-list lines."""
+    t = re.escape(table_name)
+    ddl_pat = rf"\b(?:create\s+table(?:\s+if\s+not\s+exists)?|alter\s+table(?:\s+only)?|copy|insert\s+into)\s+(?:(?:\"?[a-z_][a-z0-9_$]*\"?\.)?\"?{t}\"?)\b"
+    psql_pat = rf"(?:^|\|)\s*(?:[a-z_][a-z0-9_$]*\.)?{t}\s*(?:\||$)"
+    return bool(re.search(ddl_pat, clean_sql, re.IGNORECASE) or re.search(psql_pat, clean_sql, re.IGNORECASE | re.MULTILINE))
+
+
 def check_postgres_dual_graph(pg_schema_file: Path | None) -> list[TriageFinding]:
     """Inspect a read-only PostgreSQL table/schema listing or SQL dump for ARTEX's dual-graph tables."""
     if pg_schema_file is None or not pg_schema_file.is_file():
         return []
     if pg_schema_file.stat().st_size > 10 * 1024 * 1024:
         return []
-    text = pg_schema_file.read_text(encoding="utf-8", errors="ignore").lower()
-    has_anchor = bool(re.search(rf"\b{ARTEX_PG_ANCHOR_TABLE}\b", text))
-    companions = sorted(t for t in ARTEX_PG_COMPANION_TABLES if re.search(rf"\b{t}\b", text))
-    if has_anchor and len(companions) >= 2:
+    raw_text = pg_schema_file.read_text(encoding="utf-8", errors="ignore")
+    clean_sql = SQL_LINE_COMMENT_RE.sub("", SQL_BLOCK_COMMENT_RE.sub("", raw_text)).lower()
+    has_anchor = _pg_has_table_reference(clean_sql, ARTEX_PG_ANCHOR_TABLE)
+    if not has_anchor:
+        return []
+    companions = sorted(t for t in ARTEX_PG_COMPANION_TABLES if _pg_has_table_reference(clean_sql, t))
+    if "agent_prompts" in companions or len(companions) >= 3:
         return [
             TriageFinding(
                 check="postgres_dual_graph",
@@ -463,7 +495,30 @@ def check_postgres_dual_graph(pg_schema_file: Path | None) -> list[TriageFinding
                 path_or_pid=str(pg_schema_file),
             )
         ]
+    if len(companions) == 2:
+        return [
+            TriageFinding(
+                check="postgres_dual_graph",
+                severity="high",
+                summary="PostgreSQL schema contains exploration_nodes with 2 generic companion tables (verify ARTEX dual-graph)",
+                evidence=f"anchor={ARTEX_PG_ANCHOR_TABLE} companions={companions}",
+                path_or_pid=str(pg_schema_file),
+            )
+        ]
     return []
+
+
+def _default_live_scan_specs(max_depth: int) -> list[tuple[Path, int]]:
+    """Return bounded high-yield live Linux scan roots with tighter depth on /root and /home."""
+    specs: list[tuple[Path, int]] = []
+    for path in (Path("/opt"), Path("/srv"), Path("/var/lib"), Path("/tmp")):
+        if path.exists():
+            specs.append((path, max_depth))
+    home_depth = min(max_depth, 4)
+    for path in (Path("/root"), Path("/home")):
+        if path.exists():
+            specs.append((path, home_depth))
+    return specs
 
 
 def run_host_triage(
@@ -480,16 +535,11 @@ def run_host_triage(
     is_offline = str(root_path) != "/"
 
     if scan_paths is not None:
-        resolved_scan_paths = [Path(p) for p in scan_paths]
+        scan_specs: list[tuple[Path, int]] = [(Path(p), max_depth) for p in scan_paths]
     elif is_offline:
-        resolved_scan_paths = [root_path]
+        scan_specs = [(root_path, max_depth)]
     else:
-        # Bounded high-yield locations on a live Linux host (fast, non-intrusive)
-        resolved_scan_paths = [
-            p
-            for p in (Path("/opt"), Path("/srv"), Path("/var/lib"), Path("/tmp"))
-            if p.exists()
-        ]
+        scan_specs = _default_live_scan_specs(max_depth)
 
     checks_run = [
         "listening_ports",
@@ -502,7 +552,8 @@ def run_host_triage(
     port_findings, saw_8080 = check_listening_ports(proc_path)
     findings.extend(port_findings)
     findings.extend(check_proc_proxy_ca_injection(proc_path))
-    findings.extend(check_filesystem_artifacts(resolved_scan_paths, max_depth=max_depth))
+    for scan_root, depth_limit in scan_specs:
+        findings.extend(check_filesystem_artifacts([scan_root], max_depth=depth_limit))
     findings.extend(check_installed_ca_certs(root_path))
 
     if pg_schema_file is not None:

@@ -105,3 +105,87 @@ def test_host_triage_detects_all_artex_operator_host_artifacts(tmp_path: Path) -
     assert any("8788" in e for e in port_evidences)
     assert any("8790" in e for e in port_evidences)
     assert any("8080" in e for e in port_evidences)
+
+
+def test_host_triage_hardening_boundaries_home_root_symlink_ca_and_pg_ddl(tmp_path: Path) -> None:
+    """Permanent regression suite for Seat 1 / Seat 3 host_triage.py audit findings."""
+    from artex_defense.host_triage import (
+        _default_live_scan_specs,
+        check_installed_ca_certs,
+        check_postgres_dual_graph,
+        check_proc_proxy_ca_injection,
+    )
+
+    # 1. [Seat 1] CMDLINE_ARTIFACT_RE must NOT match compound substrings (smartex, quartex, artex_logistics)
+    #    or doc viewers opening markdown notes, while matching real artex-worker / artex-server processes.
+    proc = tmp_path / "proc_fp"
+    for pid, cmd in (
+        ("101", b"/usr/bin/smartex-worker\x00--daemon\x00"),
+        ("102", b"/usr/local/bin/quartex-daemon\x00"),
+        ("103", b"python3\x00manage.py\x00--partner=artex_logistics\x00"),
+        ("104", b"vim\x00artex_notes.md\x00"),
+        ("105", b"less\x00/docs/artex.md\x00"),
+        ("106", b"grep\x00artex\x00notes.md\x00"),
+    ):
+        d = proc / pid
+        d.mkdir(parents=True)
+        (d / "cmdline").write_bytes(cmd)
+    assert check_proc_proxy_ca_injection(proc) == []
+
+    real_pid = proc / "202"
+    real_pid.mkdir(parents=True)
+    (real_pid / "cmdline").write_bytes(b"/root/artex/artex-worker\x00--port\x008790\x00")
+    real_hits = check_proc_proxy_ca_injection(proc)
+    assert len(real_hits) == 1 and real_hits[0].path_or_pid == "pid:202"
+
+    # 2. [Seat 3] Live scan specs include /root and /home capped at depth 4 (if present on host)
+    specs = dict(_default_live_scan_specs(max_depth=6))
+    if Path("/home").exists():
+        assert specs[Path("/home")] == 4
+    if Path("/root").exists():
+        assert specs[Path("/root")] == 4
+
+    # 3. [Seat 1] check_installed_ca_certs catches symlinked mitmproxy/artex CAs without following targets,
+    #    while ignoring unrelated compound CA names like Smartex_Root_CA.pem
+    ca_root = tmp_path / "ca_host"
+    ssl_dir = ca_root / "etc" / "ssl" / "certs"
+    ssl_dir.mkdir(parents=True)
+    outside_pem = tmp_path / "outside_mitm.pem"
+    outside_pem.write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+    (ssl_dir / "mitmproxy-ca.pem").symlink_to(outside_pem)
+    (ssl_dir / "Smartex_Root_CA.pem").write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+    ca_hits = check_installed_ca_certs(ca_root)
+    assert len(ca_hits) == 1
+    assert "mitmproxy-ca.pem" in ca_hits[0].evidence
+
+    # 4. [Seat 3] check_postgres_dual_graph ignores SQL comments, tiers 2 generic companions as high,
+    #    and requires agent_prompts or >=3 companions in DDL/table context for critical.
+    pg_comment_only = tmp_path / "comment_only.sql"
+    pg_comment_only.write_text(
+        "-- legacy note mentioning exploration_nodes and agent_prompts\n"
+        "/* block comment exploration_nodes */\n"
+        "CREATE TABLE assets (id int);\n"
+        "CREATE TABLE companies (id int);\n"
+        "CREATE TABLE activity (id int);\n",
+        encoding="utf-8",
+    )
+    assert check_postgres_dual_graph(pg_comment_only) == []
+
+    pg_two_generic = tmp_path / "two_generic.sql"
+    pg_two_generic.write_text(
+        "CREATE TABLE public.exploration_nodes (id int);\n"
+        "CREATE TABLE public.assets (id int);\n"
+        "CREATE TABLE public.companies (id int);\n",
+        encoding="utf-8",
+    )
+    hits_two = check_postgres_dual_graph(pg_two_generic)
+    assert len(hits_two) == 1 and hits_two[0].severity == "high"
+
+    pg_with_prompts = tmp_path / "with_prompts.sql"
+    pg_with_prompts.write_text(
+        "CREATE TABLE IF NOT EXISTS public.exploration_nodes (id int);\n"
+        "CREATE TABLE public.agent_prompts (id int);\n",
+        encoding="utf-8",
+    )
+    hits_crit = check_postgres_dual_graph(pg_with_prompts)
+    assert len(hits_crit) == 1 and hits_crit[0].severity == "critical"
