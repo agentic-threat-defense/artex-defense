@@ -15,9 +15,9 @@ Static strings from early advisories (`ArtexProbe`, realm headers, canary paths)
 
 ## Start Where You Need
 
-- **Detection Engineers:** 20 validated Sigma rules in [rules/sigma/](rules/sigma/), pre-compiled SIEM/XDR packs in [rules/queries/compiled_sigma/](rules/queries/compiled_sigma/) (Elastic ES|QL & Lucene, Microsoft KQL/MDE/Sentinel ASIM, CrowdStrike LogScale CQL, Splunk SPL, SentinelOne S1QL), plus Zeek/Suricata in [rules/network/](rules/network/) and YARA in [rules/yara/](rules/yara/).
+- **Detection Engineers:** 21 validated Sigma rules in [rules/sigma/](rules/sigma/), pre-compiled SIEM/XDR packs in [rules/queries/compiled_sigma/](rules/queries/compiled_sigma/) (Elastic ES|QL & Lucene, Microsoft KQL/MDE/Sentinel ASIM, CrowdStrike LogScale CQL, Splunk SPL, SentinelOne S1QL), plus Zeek/Suricata in [rules/network/](rules/network/) and YARA in [rules/yara/](rules/yara/).
 - **Incident Responders:** Read-only Linux/offline-image operator host triage (`artex-hunt host-triage`) and `--network=none --read-only` Docker log/transcript wrappers ([scripts/sandbox-scan.sh](scripts/sandbox-scan.sh), [scripts/sandbox-analyze-tasks.sh](scripts/sandbox-analyze-tasks.sh)).
-- **Tabletop & Purple Teams:** Follow the [Live-Lab & Purple-Team Evaluation Guide](docs/LAB_EVALUATION_GUIDE.md) to test against an isolated lab range, or run `artex-hunt simulate` / `artex-hunt eval` for 34 self-contained synthetic datasets (18 multi-surface agentic scenarios + 16 benign baselines).
+- **Tabletop & Purple Teams:** Follow the [Live-Lab & Purple-Team Evaluation Guide](docs/LAB_EVALUATION_GUIDE.md) to test against an isolated lab range, or run `artex-hunt simulate` / `artex-hunt eval` for 36 self-contained synthetic datasets (19 multi-surface agentic scenarios + 17 benign baselines).
 - **Threat Hunters & Researchers:** Blind out-of-distribution stress-test logs ([docs/blind_stress_test_log.md](docs/blind_stress_test_log.md)), threat model ([docs/artex_threat_model.md](docs/artex_threat_model.md)), and primary-source references ([docs/REFERENCES_AND_ACKNOWLEDGMENTS.md](docs/REFERENCES_AND_ACKNOWLEDGMENTS.md)).
 
 ---
@@ -27,11 +27,11 @@ Static strings from early advisories (`ArtexProbe`, realm headers, canary paths)
 | Surface | Behavioral (Zero-IOC) Signals | Static / Forensic Signals | Rules & Parsers |
 | :--- | :--- | :--- | :--- |
 | **Edge Appliances** *(ASA/FTD, Citrix, PAN-OS, F5)* | Rapid & throttled VPN sprays, distributed proxy-pool probing, bimodal LLM think-act pauses | Gateway path probes, `artex-enrich/1.0`, `norma/0.4`, self-proclaimed authorized UAs | Native parsers, Sigma, Suricata |
-| **Web / API / WAF** | Error-correction pivots, forced error-class & random-slug 404 calibration, OpenAPI spec targeting, REST write-then-readback, NAT-safe JA4/JA4H stack whiplash, single-JA4 recording-proxy collapse (`ja4_proxy_collapse_multi_ua`), cross-direction server callback on probe | Control-404 canaries, `alg:none` JWT spray, cloud metadata SSRF, CMS/upload webshell bypasses, GraphQL introspection & AI/MCP path discovery | `detectors.py`, Sigma, Zeek, Suricata |
+| **Web / API / WAF** | Error-correction pivots, forced error-class & random-slug 404 calibration, OpenAPI spec targeting, REST write-then-readback, NAT-safe JA4/JA4H stack whiplash, time-independent browser-UA stack impersonation (`browser_ua_stack_impersonation`), single-JA4 recording-proxy collapse (`ja4_proxy_collapse_multi_ua`), cross-direction server callback on probe, operator-configurable honey-route/token canaries (`--canary-path`/`--canary-token`) | Control-404 canaries, `alg:none` JWT spray, cloud metadata SSRF, SAPControl SOAP (`OSExecute`/config reads), `.htaccess` PHP upload reactivation, CMS/upload webshell bypasses, GraphQL introspection & AI/MCP path discovery | `detectors.py`, Sigma, Zeek, Suricata |
 | **Identity Providers** *(Okta, Entra ID, Duo, PingFederate, Google Workspace)* | Spray-then-success, 2FA push fatigue & factor tampering, mass self-service probe signups, federated multi-`client_id`/cross-RP trust probing, SP secret-guess-then-success & multi-resource fanout | Okta `user.risk.detect` & Workflows invoke abuse, Entra `7000215`/`500121`, Duo `fraud_reported`, PingID rejections, GWS `2sv_disable` | Native 5-IdP parsers, Sigma, KQL & ES\|QL |
 | **Cloud Control Plane** *(AWS & Azure)* | Multi-service `AccessDenied` sweeps to `GetSecretValue`, 100%-`200 OK` stolen-key multi-service enum, sub-2s AWS bursts (EC2 `userData` / SSM), external EC2 instance-role replay, multi-identity single-IP pivoting, 30-day dormant-gap shared-IP correlation | CloudWatch `FilterLogEvents` secret queries, EC2 `DryRunOperation`, Azure Kudu & `/deployments/validate`, LLM API key harvesting | `detectors.py`, Sigma, ES\|QL, KQL |
-| **Endpoints & Operator Hosts** *(Windows & Linux)* | Compressed recon bursts, wrapper-stripped multi-worker redundant recon, LLM CLI context-budget idioms, touch-and-bail EDR sweeps, SMB/WinRM lateral fanout, on-box staging compilation | `/tasks/<id>/i<id>/cmd-output/`, `mitmproxy-ca-cert.pem` + `HTTP_PROXY`, `xcai-effort-shim.py`, `BLOODALCHEMY` & relocated DLL sideloading, NTLM relay/LDAP-Kerb enum, Chisel/Ligolo/Proxychains pivots | Sigma, YARA, `artex-hunt host-triage` |
-| **Encrypted Network & Biflows** *(YAF IPFIX / RFC 5103, Zeek, JA4+)* | Compaction-resilient TLS 1.3 sawtooth growing-context flows, raw-IP TLS (`t13i`/`t12i`), custom-domain high-entropy DNS OOB callbacks, `JA4X_c` + `JA4S` clustering | Default console/proxy ports (`8787`/`8788`/`8790`/`8890`), self-signed `Issuer O=ARTEX` certs, server-only bot C2 egress | Native YAF/IPFIX parser, Zeek, Suricata |
+| **Endpoints & Operator Hosts** *(Windows & Linux)* | Compressed & compound shell recon bursts, wrapper-stripped multi-worker redundant recon (with Debian/Ubuntu `pam_motd` hygiene), LLM CLI context-budget idioms, touch-and-bail EDR sweeps, SMB/WinRM lateral fanout, on-box staging compilation | `/tasks/<id>/i<id>/cmd-output/`, `mitmproxy-ca-cert.pem` + `HTTP_PROXY`, `xcai-effort-shim.py`, `BLOODALCHEMY` & signer-scoped DLL sideloading, K8s privileged pod staging & SA token theft, `systemd` tunnel persistence, NTLM relay/LDAP-Kerb enum, Chisel/Ligolo/Proxychains pivots | Sigma, YARA, `artex-hunt host-triage` |
+| **Encrypted Network & Biflows** *(YAF IPFIX / RFC 5103, Zeek, PCAP JA4/JA4H)* | Compaction- & `NewSessionTicket`-resilient TLS 1.3 sawtooth & persistent-socket turn loops, cross-channel `TLS_IN → Action → TLS_OUT` causal coupling (`causal_tls_action_loop`, beats `>10 s` jitter & 60 s windows), wire FoxIO JA4/JA4H PCAP extraction, raw-IP TLS (`t13i`/`t12i`), custom-domain high-entropy DNS OOB callbacks, `JA4X_c` + `JA4S` clustering | Default console/proxy ports (`8787`/`8788`/`8790`/`8890`/`18899`), self-signed `Issuer O=ARTEX` certs, server-only bot C2 egress | Native YAF/IPFIX parser, Zeek, Suricata |
 
 ---
 
@@ -44,11 +44,11 @@ python3 -m venv .venv
 # Run the offline test suite (parsers, Zero-IOC evasion, IdPs, IPFIX, security hardening, Sigma, KVM lab)
 .venv/bin/pytest -v -m "not live"
 
-# Run the 34-dataset Precision/Recall evaluation harness
+# Run the 36-dataset Precision/Recall evaluation harness
 .venv/bin/artex-hunt eval
 
-# Stage 1 deterministic scan (0 LLM tokens; optional --scanner-ip allowlist)
-.venv/bin/artex-hunt scan tests/fixtures/sample_telemetry.jsonl --scanner-ip 10.50.0.0/24
+# Stage 1 deterministic scan (0 LLM tokens; optional allowlists & deception canaries)
+.venv/bin/artex-hunt scan tests/fixtures/sample_telemetry.jsonl --scanner-ip 10.50.0.0/24 --trusted-proxy-ip 10.20.0.0/24 --canary-path /api/v1/internal/credential-export
 
 # Strictly read-only host triage (live /proc & paths, or --root for a mounted forensic image)
 .venv/bin/artex-hunt host-triage

@@ -60,11 +60,26 @@ def scan(
     scanner_ip: list[str] | None = typer.Option(
         None, "--scanner-ip", help="Authorized scanner IP or CIDR to suppress generic burst cadence (repeatable)."
     ),
+    trusted_proxy_ip: list[str] | None = typer.Option(
+        None, "--trusted-proxy-ip", help="Trusted L7 reverse-proxy IP or CIDR (skips TLS JA4 impersonation while keeping HTTP JA4H; repeatable)."
+    ),
+    canary_path: list[str] | None = typer.Option(
+        None, "--canary-path", help="Operator-planted honey HTTP route path that triggers deterministic Risk 100 alerts (repeatable)."
+    ),
+    canary_token: list[str] | None = typer.Option(
+        None, "--canary-token", help="Operator-planted honey credential/token (>=8 chars) that triggers deterministic Risk 100 alerts (repeatable)."
+    ),
     out: Path | None = typer.Option(None, "--out", help="Write candidate windows JSON to file."),
 ) -> None:
     """Run Stage 1 deterministic DuckDB + Python behavioral and artifact pre-filters (0 LLM tokens)."""
     candidates = scan_telemetry_file(
-        log_file, fmt=fmt, bucket_seconds=bucket_seconds, authorized_scanner_ips=scanner_ip
+        log_file,
+        fmt=fmt,
+        bucket_seconds=bucket_seconds,
+        authorized_scanner_ips=scanner_ip,
+        trusted_proxy_ips=trusted_proxy_ip,
+        canary_paths=canary_path,
+        canary_tokens=canary_token,
     )
     if not candidates:
         console.print("[green]No suspicious behavioral or artifact windows detected.[/green]")

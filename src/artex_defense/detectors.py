@@ -229,6 +229,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "distributed_proxy_pool_probe": 75,
     "multi_account_credential_spray": 75,
     "llm_sawtooth_context_flow": 70,
+    "canary_deception_tripwire": 100,
     "causal_tls_action_loop": 75,
     "encrypted_tls_agent_turn_loop": 65,
     "browser_ua_stack_impersonation": 65,
@@ -1091,12 +1092,71 @@ def _is_non_browser_ja4h(ja4h: str) -> str:
     return ""
 
 
-def _detect_browser_ua_stack_impersonation(events: list[dict[str, Any]]) -> list[str]:
+def _detect_canary_deception_tripwires(
+    events: list[dict[str, Any]],
+    *,
+    canary_paths: list[str] | set[str] | tuple[str, ...] | None = None,
+    canary_tokens: list[str] | set[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    """Deterministic, zero-overtuning deception tripwire for operator-planted honey routes and honey tokens.
+
+    Catches even ultra-slow agents using authentic headless browsers and external LLMs the moment they touch
+    an unlinked honey route (e.g., planted in /robots.txt Disallow or decoy /openapi.json) or replay a honey
+    credential/token (e.g., planted in /.env or ~/.aws/credentials).
+    """
+    norm_paths: list[str] = []
+    for p in canary_paths or ():
+        cleaned = str(p).strip().split("?", 1)[0].rstrip("/").lower()
+        if cleaned and cleaned != "/":
+            if not cleaned.startswith("/"):
+                cleaned = "/" + cleaned
+            norm_paths.append(cleaned)
+
+    # Require >=8 chars on canary tokens to prevent accidental short-substring FPs
+    norm_tokens = [str(t).strip() for t in (canary_tokens or ()) if len(str(t).strip()) >= 8]
+    if not norm_paths and not norm_tokens:
+        return []
+
+    hits: set[str] = set()
+    for ev in events:
+        if norm_paths:
+            ev_path = str(ev.get("http_path") or "").strip().split("?", 1)[0].rstrip("/").lower()
+            if ev_path:
+                for cp in norm_paths:
+                    if ev_path == cp or ev_path.startswith(cp + "/"):
+                        hits.add(f"canary_route:{cp}")
+        if norm_tokens:
+            raw_val = ev.get("raw_json")
+            raw_str = raw_val if isinstance(raw_val, str) else (json.dumps(raw_val) if raw_val else "")
+            blob = " ".join(
+                (
+                    str(ev.get("http_path") or ""),
+                    str(ev.get("command_line") or ""),
+                    str(ev.get("actor") or ""),
+                    str(ev.get("dest_host") or ""),
+                    str(ev.get("user_agent") or ""),
+                    str(ev.get("action") or ""),
+                    raw_str,
+                )
+            )
+            for tok in norm_tokens:
+                if tok in blob:
+                    masked = f"{tok[:4]}...{tok[-4:]}"
+                    hits.add(f"canary_token:{masked}")
+    return sorted(hits)
+
+
+def _detect_browser_ua_stack_impersonation(
+    events: list[dict[str, Any]],
+    *,
+    skip_tls_ja4: bool = False,
+) -> list[str]:
     """Time-independent lie detector: claims modern Chrome/Firefox/Edge 90+ UA on a non-browser JA4/JA4H stack.
 
     Catches slow stealth agents (even 1 request every 30 minutes) using `curl -A Chrome/...` or Python/Go HTTP
     clients with spoofed browser User-Agents, while staying 0 FP on real browsers, Playwright/HeadlessChrome,
-    honest monitoring UAs, and single-URL dev `/healthz` checks.
+    honest monitoring UAs, corporate proxy HTTP CONNECT tunnels, and single-URL dev `/healthz` checks.
+    Set `skip_tls_ja4=True` for trusted L7 reverse proxies that re-originate TLS upstream while preserving UAs.
     """
     impersonated_paths: set[str] = set()
     impersonated_count = 0
@@ -1114,7 +1174,7 @@ def _detect_browser_ua_stack_impersonation(events: list[dict[str, Any]]) -> list
 
         ja4 = str(ev.get("ja4") or "")
         ja4h = str(ev.get("ja4h") or "")
-        why = _is_non_browser_ja4(ja4) or _is_non_browser_ja4h(ja4h)
+        why = ("" if skip_tls_ja4 else _is_non_browser_ja4(ja4)) or _is_non_browser_ja4h(ja4h)
         if not why:
             continue
 
@@ -1670,6 +1730,9 @@ def _inspect_window_signals(
     span_seconds: float,
     error_count: int,
     authorized_llm_hosts: list[str] | set[str] | tuple[str, ...] | None = None,
+    trusted_proxy_ips: list[str] | set[str] | tuple[str, ...] | None = None,
+    canary_paths: list[str] | set[str] | tuple[str, ...] | None = None,
+    canary_tokens: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> tuple[list[str], list[str], SurfaceType, str | None]:
     reasons: set[str] = set()
     indicators: set[str] = set()
@@ -2431,10 +2494,20 @@ def _inspect_window_signals(
             indicators.update(causal_tls_hits)
 
     # Zero-IOC Detector 1b: Time-independent browser UA vs wire JA4/JA4H stack impersonation
-    ua_imp_hits = _detect_browser_ua_stack_impersonation(events)
+    # Skip TLS JA4 check (while keeping HTTP JA4H) when telemetry originates from a trusted L7 reverse proxy IP/CIDR.
+    is_trusted_proxy = _is_allowlisted_scanner_ip(source_host, trusted_proxy_ips)
+    ua_imp_hits = _detect_browser_ua_stack_impersonation(events, skip_tls_ja4=is_trusted_proxy)
     if ua_imp_hits:
         reasons.add("browser_ua_stack_impersonation")
         indicators.update(ua_imp_hits)
+
+    # Deterministic Deception Tripwires: operator-planted honey routes & honey tokens (0 overtuning, 0 FP)
+    canary_hits = _detect_canary_deception_tripwires(
+        events, canary_paths=canary_paths, canary_tokens=canary_tokens
+    )
+    if canary_hits:
+        reasons.add("canary_deception_tripwire")
+        indicators.update(canary_hits)
 
     # Zero-IOC Detector 2: Multi-worker redundant read-only recon collision
     repeated_recon = {cmd: cnt for cmd, cnt in readonly_recon_counts.items() if cnt >= 2}
@@ -2513,6 +2586,9 @@ def scan_telemetry_file(
     max_sample_events: int = 15,
     authorized_scanner_ips: list[str] | set[str] | tuple[str, ...] | None = None,
     authorized_llm_hosts: list[str] | set[str] | tuple[str, ...] | None = None,
+    trusted_proxy_ips: list[str] | set[str] | tuple[str, ...] | None = None,
+    canary_paths: list[str] | set[str] | tuple[str, ...] | None = None,
+    canary_tokens: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> list[CandidateWindow]:
     """Run Stage 1 deterministic DuckDB + Python behavioral & artifact detection.
 
@@ -2717,6 +2793,9 @@ def scan_telemetry_file(
             span_seconds=span,
             error_count=int(error_count),
             authorized_llm_hosts=authorized_llm_hosts,
+            trusted_proxy_ips=trusted_proxy_ips,
+            canary_paths=canary_paths,
+            canary_tokens=canary_tokens,
         )
 
         # General behavioral cadence detections (suppressed only for operator-allowlisted scanner IPs/CIDRs
@@ -2924,6 +3003,9 @@ def scan_telemetry_file(
             span_seconds=fh_span,
             error_count=int(fh_errs),
             authorized_llm_hosts=authorized_llm_hosts,
+            trusted_proxy_ips=trusted_proxy_ips,
+            canary_paths=canary_paths,
+            canary_tokens=canary_tokens,
         )
         # NAT/SWG FP guard: require error-heavy probing (or an explicit behavioral signal) before adding cadence
         if (
@@ -3718,7 +3800,9 @@ def scan_telemetry_file(
                 lh_reasons.append("causal_tls_action_loop")
                 lh_indicators.extend(c_hits)
         if sh not in hosts_with_ua_imp:
-            u_hits = _detect_browser_ua_stack_impersonation(h_events)
+            u_hits = _detect_browser_ua_stack_impersonation(
+                h_events, skip_tls_ja4=_is_allowlisted_scanner_ip(sh, trusted_proxy_ips)
+            )
             if u_hits:
                 lh_reasons.append("browser_ua_stack_impersonation")
                 lh_indicators.extend(u_hits)

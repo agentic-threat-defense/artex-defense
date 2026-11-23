@@ -1059,4 +1059,137 @@ def test_causal_tls_action_loop_beats_slow_jitter_and_rejects_human_chat_noise(t
     assert scan_telemetry_file(p_fp_slow) == []
 
 
+def test_canary_deception_tripwires_and_trusted_proxy_ingress(tmp_path: Path) -> None:
+    """Zero-overtuning deterministic canaries (honey routes/tokens) & trusted L7 reverse-proxy TLS JA4 ingress guard."""
+    from typer.testing import CliRunner
+
+    from artex_defense.cli import app
+
+    # 1. Honey-route & honey-token tripwires catch a real-browser, external-LLM, 10-hour-silent adversary at Risk 100
+    canary_log = tmp_path / "canary_hit.jsonl"
+    canary_log.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {
+                    "timestamp": "2026-11-23T05:00:00.000Z",
+                    "source_host": "198.51.100.88",
+                    "actor": "198.51.100.88",
+                    "event_type": "http",
+                    "surface": "web_portal",
+                    "dest_host": "app.example.test",
+                    "http_method": "GET",
+                    "http_path": "/api/v1/internal/credential-export?format=json",
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0",
+                    "ja4": "t13d1516h2_8daaf6152771_e5627efa2ab1",
+                    "ja4h": "ge11cn14enus_60a1c1a3a9d9_000000000000_000000000000",
+                    "status_code": 200,
+                },
+                {
+                    "timestamp": "2026-11-23T15:00:00.000Z",
+                    "source_host": "203.0.113.44",
+                    "actor": "AKIAIOSFODNN7CANARY9",
+                    "event_type": "cloudtrail",
+                    "surface": "cloud_iam",
+                    "dest_host": "sts.amazonaws.com",
+                    "action": "GetCallerIdentity",
+                    "status_code": 200,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cands = scan_telemetry_file(
+        canary_log,
+        canary_paths=["/api/v1/internal/credential-export", "/"],  # "/" must be safely ignored!
+        canary_tokens=["AKIAIOSFODNN7CANARY9", "short"],  # <8-char tokens must be safely ignored!
+    )
+    assert len(cands) == 2
+    assert all(c.risk_score == 100 and c.alert_tier == "alert" and "canary_deception_tripwire" in c.reasons for c in cands)
+    assert any("canary_route:/api/v1/internal/credential-export" in ind for c in cands for ind in c.matched_indicators)
+    assert any("canary_token:AKIA...ARY9" in ind for c in cands for ind in c.matched_indicators)
+
+    # 2. Unrelated benign paths do NOT trip canaries (even when "/" or short tokens are accidentally supplied)
+    benign_canary = tmp_path / "benign_no_canary.jsonl"
+    benign_canary.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-11-23T05:05:00.000Z",
+                "source_host": "198.51.100.89",
+                "actor": "198.51.100.89",
+                "event_type": "http",
+                "surface": "web_portal",
+                "dest_host": "app.example.test",
+                "http_method": "GET",
+                "http_path": "/api/v1/internal/credential-export-v2",
+                "status_code": 200,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert (
+        scan_telemetry_file(
+            benign_canary,
+            canary_paths=["/api/v1/internal/credential-export", "/"],
+            canary_tokens=["AKIAIOSFODNN7CANARY9", "api"],
+        )
+        == []
+    )
+
+    # 3. Trusted L7 reverse proxy (`10.20.0.5` in `10.20.0.0/24`) re-originating OpenSSL TLS 1.2 while forwarding
+    #    authentic Chrome JA4H -> 0 FP; same proxy forwarding curl-stripped JA4H -> STILL fires!
+    proxy_ok = tmp_path / "l7_proxy_benign.jsonl"
+    proxy_ok.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T06:00:00.000Z", "source_host": "10.20.0.5", "actor": "10.20.0.5", "event_type": "http", "surface": "web_portal", "dest_host": "origin.corp.local", "http_method": "GET", "http_path": "/dashboard", "user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "ja4": "t12d311100_e8f1e7e78f70_d41ae481755e", "ja4h": "ge11cr09enus_60a1c1a3a9d9_000000000000_000000000000", "status_code": 200},
+                {"timestamp": "2026-11-23T06:00:12.000Z", "source_host": "10.20.0.5", "actor": "10.20.0.5", "event_type": "http", "surface": "web_portal", "dest_host": "origin.corp.local", "http_method": "GET", "http_path": "/api/v1/jobs", "user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "ja4": "t12d311100_e8f1e7e78f70_d41ae481755e", "ja4h": "ge11cr09enus_60a1c1a3a9d9_000000000000_000000000000", "status_code": 200},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(proxy_ok, trusted_proxy_ips=["10.20.0.0/24"]) == []
+
+    proxy_spoof = tmp_path / "l7_proxy_spoof.jsonl"
+    proxy_spoof.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T06:05:00.000Z", "source_host": "10.20.0.5", "actor": "10.20.0.5", "event_type": "http", "surface": "web_portal", "dest_host": "origin.corp.local", "http_method": "GET", "http_path": "/api/v1/status", "user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "ja4": "t12d311100_e8f1e7e78f70_d41ae481755e", "ja4h": "ge11nn030000_2d91f4a3c1b0_000000000000_000000000000", "status_code": 200},
+                {"timestamp": "2026-11-23T06:05:15.000Z", "source_host": "10.20.0.5", "actor": "10.20.0.5", "event_type": "http", "surface": "web_portal", "dest_host": "origin.corp.local", "http_method": "GET", "http_path": "/api/v1/jobs", "user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "ja4": "t12d311100_e8f1e7e78f70_d41ae481755e", "ja4h": "ge11nn030000_2d91f4a3c1b0_000000000000_000000000000", "status_code": 200},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_pspoof = scan_telemetry_file(proxy_spoof, trusted_proxy_ips=["10.20.0.0/24"])
+    assert c_pspoof and "browser_ua_stack_impersonation" in c_pspoof[0].reasons
+
+    # 4. CLI wiring check (`artex-hunt scan --canary-path ... --canary-token ... --trusted-proxy-ip ...`)
+    out_json = tmp_path / "cli_canary_out.json"
+    res = CliRunner().invoke(
+        app,
+        [
+            "scan",
+            str(canary_log),
+            "--canary-path",
+            "/api/v1/internal/credential-export",
+            "--canary-token",
+            "AKIAIOSFODNN7CANARY9",
+            "--trusted-proxy-ip",
+            "10.20.0.0/24",
+            "--out",
+            str(out_json),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    saved = json.loads(out_json.read_text(encoding="utf-8"))
+    assert len(saved) == 2 and all("canary_deception_tripwire" in w["reasons"] for w in saved)
+
+
+
 
