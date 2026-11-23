@@ -40,15 +40,37 @@ def main(out_dir: Path) -> None:
         "Threat Intelligence Summary: BLOODALCHEMY uses graphics-hook-filter64.dll and Agent Security Workbench.\n",
         encoding="utf-8",
     )
+    # 3. Benign CTI PDF & HTML reports quoting artex.yaml, artex_config.json, and ARTEX_WRITE_PROBE (must NOT trigger Path C)
+    (benign_dir / "benign_cti_report.pdf").write_bytes(
+        b"%PDF-1.7\nThreat Report: artex.yaml artex_config.json exploration_nodes prompt_templates port: 8787\n"
+    )
+    (benign_dir / "benign_cti_blog.html").write_text(
+        "<!DOCTYPE html><html><body>Blog discussing artex.yaml, artex_config.json, exploration_nodes, and ARTEX_WRITE_PROBE.</body></html>\n",
+        encoding="utf-8",
+    )
+    # 4. Benign unsigned PE using /Inform/logger/ + Windows Internet Settings registry path (must NOT trigger Retrohunt Path A)
+    (benign_dir / "benign_unsigned_logger.pe").write_bytes(
+        make_minimal_pe(
+            b"/Inform/logger/\x00SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\x00" + b"\x00" * 256
+        )
+    )
 
     # SEEDED FIXTURES (MUST match their expected YARA rules!)
     # 1. Seeded Go ELF with ScopeWeaver + :8787
     (seeded_dir / "seeded_scopeweaver.elf").write_bytes(
         b"\x7fELF" + b"\x00" * 60 + b"runtime.main\x00ScopeWeaver\x00:8787\x00" + b"\x00" * 10240
     )
-    # 2. Seeded <1KB artex.yaml config (validates Retrohunt Path C allows <1KB configs!)
+    # 2. Seeded stripped Go ELF (`-ldflags="-s -w"`, NO runtime.main — uses Go buildinfo header!)
+    (seeded_dir / "seeded_stripped_go_scopeweaver.elf").write_bytes(
+        b"\x7fELF" + b"\x00" * 60 + b"\xff Go buildinf:\x00ScopeWeaver\x00:8787\x00" + b"\x00" * 10240
+    )
+    # 3. Seeded Universal/Fat Mach-O (`0xCAFEBABE` -> YARA `0xBEBAFECA`) with CyberStrikeAI
+    (seeded_dir / "seeded_cyberstrikeai_universal.macho").write_bytes(
+        b"\xca\xfe\xba\xbe" + b"\x00" * 60 + b"CyberStrikeAI\x00" + b"\x00" * 10240
+    )
+    # 4. Seeded <1KB artex.yaml config (validates Retrohunt Path C allows <1KB configs paired with config keys!)
     (seeded_dir / "seeded_small_config.txt").write_text("config: artex.yaml\nport: 8787\n", encoding="utf-8")
-    # 3. Seeded unsigned PE with BLOODALCHEMY graphics-hook-filter64.dll (validates Retrohunt Path A `pe.is_pe`!)
+    # 5. Seeded unsigned PE with BLOODALCHEMY graphics-hook-filter64.dll (validates Retrohunt Path A `pe.is_pe`!)
     (seeded_dir / "seeded_bloodalchemy.pe").write_bytes(
         make_minimal_pe(b"graphics-hook-filter64.dll\x00/Inform/logger/\x00" + b"\x00" * 256)
     )

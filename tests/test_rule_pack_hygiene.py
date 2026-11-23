@@ -21,15 +21,24 @@ def test_yara_rules_enforce_filesize_bounds_and_avoid_fp_traps() -> None:
         assert '$name_artex = "artex"' not in text, f"{yf.name} re-introduced bare 'artex' substring trap"
         assert '$name_luck = "LUCK"' not in text, f"{yf.name} re-introduced bare 'LUCK' substring trap"
         assert "or $name_bloodalchemy" not in text, f"{yf.name} matches vendor name BLOODALCHEMY unconditionally"
+        assert "FF 20 47 6F 20 62 75 69 6C 64 69 6E 66 3A" in text, f"{yf.name} missing stripped-Go buildinfo anchor"
+        assert "0xBEBAFECA" in text, f"{yf.name} missing Universal/Fat Mach-O magic"
+        assert "CyberStrikeAI" in text and "adaptixc2" in text and "wisp-c2" in text, f"{yf.name} missing CyberStrikeAI/C2 anchors"
+        assert "ARTEX_WRITE_PROBE" in text and "E3 80 90 41 52 54 45 58" in text, f"{yf.name} missing Nov 2026 canary/audit anchors"
+        assert "0x46445025" in text and "$doc_html" in text, f"{yf.name} missing PDF/HTML CTI report FP guard"
 
     livehunt = (RULES_ROOT / "yara" / "gti_livehunt_artex_payloads_transcripts.yar").read_text(encoding="utf-8")
     assert "uint16(0) == 0x5A4D" in livehunt, "Livehunt BLOODALCHEMY branch must be PE-gated"
     assert "xcai.pro" in livehunt
+    assert "any of ($ba_dll, $ba_cfg, $ba_uri)" not in livehunt, "Livehunt Branch 1 must not match standalone /Inform/logger/"
+    assert "any of ($mod_artex, $mod_norma, $art_yaml, $art_json)" not in livehunt, "Standalone artex.yaml/artex_config.json FPs on CTI reports"
 
     retrohunt = (RULES_ROOT / "yara" / "gti_retrohunt_vaporpanda_bloodalchemy_artex.yar").read_text(encoding="utf-8")
     assert "pe.is_pe" in retrohunt
     assert "xcai.pro" in retrohunt
     assert "filesize > 1KB and filesize < 35MB and (" not in retrohunt, "Global filesize > 1KB drops <1KB configs"
+    assert "($ba_uri and any of ($ba_reg, $ba_path1, $ba_dll_br))" not in retrohunt, "Path A must not pair /Inform/logger/ with Internet Settings alone"
+    assert "any of ($mod_artex, $mod_norma, $art_path1, $art_cfg1, $art_cfg2)" not in retrohunt, "Standalone artex.yaml/artex_config.json FPs on CTI reports"
 
 
 def test_suricata_rules_have_valid_classtypes_buffers_sids_and_no_fp_traps() -> None:
