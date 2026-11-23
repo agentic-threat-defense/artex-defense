@@ -59,13 +59,48 @@ def test_suricata_rules_have_valid_classtypes_buffers_sids_and_no_fp_traps() -> 
         # Every HTTP rule with PCRE must specify an explicit HTTP sticky buffer
         if ln.startswith("alert http ") and "pcre:" in ln:
             assert any(
-                buf in ln for buf in ("http.uri;", "http.user_agent;", "http.header;", "http.response_body;")
+                buf in ln
+                for buf in ("http.uri;", "http.user_agent;", "http.header;", "http.request_body;", "http.response_body;")
             ), f"HTTP PCRE rule missing sticky buffer: {ln[:80]}"
 
         # Unescaped semicolons inside pcre:"..." or content:"..." break Suricata's option parser
         for kw in ("pcre", "content"):
             for m in re.finditer(rf'{kw}:"((?:[^"\\]|\\.)*)"', ln):
                 assert ";" not in m.group(1), f"Unescaped ';' inside Suricata {kw}: {ln[:100]}"
+
+    # Hardened SID coverage and FP boundary assertions
+    assert {"9100016", "9100017"}.issubset(seen_sids), "Missing POST-body canary (9100016) or IMDS wildcard DNS (9100017)"
+    assert r"O=ARTEX(?:,|$)" in text, "sid:9100013 must enforce exact RDN boundary on O=ARTEX"
+    assert "oast\\.(?:live|fun|me|pro|site|online)" in text, "sid:9100011 must include full Interactsh oast.* TLDs"
+    assert "[8787,8788,8790,8890,18899]" in text, "sid:9100002 must include MCP port 18899"
+    assert 'content:!"X-Zscaler"' in text, "sid:9100002 must guard against Zscaler proxy headers"
+    # Verify sid:9100015 JWT alg:none regex matches key-reordered/mixed-case/spaced Base64URL headers without FP on RS256/HS256
+    sid15_line = next(ln for ln in rule_lines if "sid:9100015;" in ln)
+    sid15_pcre = re.search(r'pcre:"/(.+)/"', sid15_line)
+    assert sid15_pcre is not None, "sid:9100015 must use case-sensitive PCRE (no /i flag on Base64)"
+    jwt_re = re.compile(sid15_pcre.group(1))
+    import base64
+
+    def _b64u(raw: str) -> str:
+        return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+    for bad_hdr in (
+        '{"alg":"none"}',
+        '{"alg":"None"}',
+        '{"alg":"NONE"}',
+        '{"alg": "none"}',
+        '{"typ":"JWT","alg":"none"}',
+        '{"typ": "JWT", "alg": "none"}',
+        '{"alg":"none","typ":"JWT"}',
+        '{"kid":"1","alg":"none"}',
+    ):
+        assert jwt_re.search(f"Authorization: Bearer {_b64u(bad_hdr)}.eyJzdWIiOiIxIn0."), f"Missed JWT: {bad_hdr}"
+    for good_hdr in (
+        '{"alg":"HS256","typ":"JWT"}',
+        '{"alg":"RS256","typ":"JWT"}',
+        '{"typ":"JWT","alg":"RS256","kid":"none"}',
+    ):
+        assert not jwt_re.search(f"Authorization: Bearer {_b64u(good_hdr)}.eyJzdWIiOiIxIn0.sig"), f"FP JWT: {good_hdr}"
 
 
 def test_zeek_script_decouples_c2_relays_and_bounds_notice_identifiers() -> None:

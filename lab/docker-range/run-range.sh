@@ -120,7 +120,7 @@ def zeek_notes(path: Path) -> set[str]:
 base_sids = suri_sids(out / "suricata_base/eve.json")
 atk_sids = suri_sids(out / "suricata_atk/eve.json")
 assert len(base_sids) == 0, f"Suricata baseline FP alerts: {sorted(base_sids)}"
-assert len(atk_sids) == 15, f"Expected 15/15 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
+assert len(atk_sids) == 17, f"Expected 17/17 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
 
 base_notes = zeek_notes(out / "zeek_base/notice.log")
 atk_notes = zeek_notes(out / "zeek_atk/notice.log")
@@ -128,6 +128,7 @@ assert len(base_notes) == 0, f"Zeek baseline FP notices: {sorted(base_notes)}"
 expected_zeek = {
     "ArtexDefense::Agentic_Harness_UserAgent",
     "ArtexDefense::Agentic_HTTP_Error_Burst",
+    "ArtexDefense::Agentic_ControlPlane_Or_Canary_URI",
     "ArtexDefense::Malicious_LLM_Relay_C2",
     "ArtexDefense::Webhook_Exfil_Traffic",
     "ArtexDefense::Anomalous_LLM_API_Egress",
@@ -142,7 +143,7 @@ assert len(yara_seeded) >= 4, f"Expected >=4 YARA seeded matches, got {yara_seed
 try:
     from artex_defense.detectors import scan_telemetry_file
 except ImportError:
-    print("PASS: Suricata 15/15, Zeek 5/5, YARA 0 FP / seeded OK (install artex-defense to also assert artex-hunt)")
+    print("PASS: Suricata 17/17, Zeek 6/6, YARA 0 FP / seeded OK (install artex-defense to also assert artex-hunt)")
     sys.exit(0)
 
 base_ng = scan_telemetry_file(out / "baseline_nginx.log")
@@ -157,8 +158,8 @@ assert atk_zk and atk_zk[0].risk_score == 100 and atk_zk[0].alert_tier == "alert
 assert "llm_sawtooth_context_flow" in atk_zk[0].reasons, f"Sawtooth missing on real Zeek TLS 1.3: {atk_zk[0].reasons}"
 
 print(
-    f"PASS: Suricata 0 FP / {len(atk_sids)}/15 SIDs | "
-    f"Zeek 0 FP / {len(atk_notes)}/5 notices | "
+    f"PASS: Suricata 0 FP / {len(atk_sids)}/17 SIDs | "
+    f"Zeek 0 FP / {len(atk_notes)}/6 notices | "
     f"YARA 0 FP / {len(yara_seeded)} seeded hits | "
     f"artex-hunt 0 baseline candidates / Nginx risk={atk_ng[0].risk_score} ({len(atk_ng[0].reasons)} reasons) / "
     f"Zeek risk={atk_zk[0].risk_score} ({len(atk_zk[0].reasons)} reasons, incl. llm_sawtooth_context_flow)"

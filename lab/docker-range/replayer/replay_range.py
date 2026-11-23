@@ -106,14 +106,15 @@ def run_attack_behaviors() -> None:
     http_req("/login", ua="artex-judge-r121")
     http_req("/login", ua="LLMLeak-RedTeam/1.0 (authorised-scan)")
 
-    # 2. Canary probes, X-ARTX-KEY, JWT alg:none, LiteLLM MCP RCE probe (Suricata sid:9100009, 9100012, 9100015)
+    # 2. Canary probes (URI + POST body), X-ARTX-KEY, JWT alg:none, LiteLLM MCP RCE probe (Suricata sid:9100009, 9100016, 9100012, 9100015)
     http_req("/zzzrandom98765", ua="Mozilla/5.0 (security-testing; authorized)")
     http_req("/login?user=zz_no_such_user_1a2b&artex=1", method="POST", ua="Mozilla/5.0 (security-testing; authorized)")
+    http_req("/api/v1/comment", method="POST", body=b'{"comment":"ARTEX_WRITE_PROBE"}', ua="python-httpx/0.28.1")
     http_req(
         "/api/v1/status",
         headers={
             "X-ARTX-KEY": "lab-canary",
-            "Authorization": "Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiJsYWIifQ.",
+            "Authorization": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJzdWIiOiJsYWIifQ.",
         },
     )
     http_req("/mcp-rest/test/tools/list", ua="python-httpx/0.28.1")
@@ -147,9 +148,9 @@ def run_attack_behaviors() -> None:
         http_req(f"/api/v1/enum-endpoint-{i:02d}", ua="python-httpx/0.28.1")
         time.sleep(0.05)
 
-    # 7. Local isolated TLS SNI & TLS 1.2 cert issuer checks (Suricata sid:9100007, 9100004, 9100011, 9100013; Zeek C2/OAST/LLM)
+    # 7. Local isolated TLS SNI & TLS 1.2 cert issuer checks (Suricata sid:9100007, 9100004, 9100011, 9100013, 9100017; Zeek C2/OAST/LLM)
     tls_req_with_sni("artex.lol", path="/sync", body_bytes=512, force_tls12=True)
-    for sni in ("api.xcai.pro", "webhook.site", "abc123.oast.live", "api.anthropic.com"):
+    for sni in ("api.xcai.pro", "webhook.site", "abc123.oast.live", "169-254-169-254.sslip.io", "api.anthropic.com"):
         tls_req_with_sni(sni, path="/sync", body_bytes=512)
         time.sleep(0.15)
 
