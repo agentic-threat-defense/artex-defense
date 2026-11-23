@@ -31,7 +31,9 @@ DeviceProcessEvents
         and ProcessCommandLine has "config.bin")
     or (FileName =~ "svchost.exe"
         and not(FolderPath has_any (@"\Windows\System32\", @"\Windows\SysWOW64\", @"\Windows\WinSxS\")))
-    or ProcessCommandLine has_any ("artx5v", "ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "artex-enrich/1.0", "Rex_Enrich", "artex-readonly/1.0", "ARTEX-worker/1.0", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit/", "authorized-security-research/", "ArtexProbe", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "/Inform/logger/", "xcai.com", "xcai.pro", "artex.lol", "sqlserver-sqlite.com", "exploit_agent", "hermes-agent", "agent-zero", "carbonato", "ntlmrelayx", "smbserver.py", "evil-winrm", "netexec", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent")
+    or ProcessCommandLine has_any ("artx5v", "ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "artex-enrich/1.0", "Rex_Enrich", "artex-readonly/1.0", "ARTEX-worker/1.0", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit/", "authorized-security-research/", "ArtexProbe", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "/Inform/logger/", "xcai.com", "xcai.pro", "artex.lol", "sqlserver-sqlite.com", "exploit_agent", "hermes-agent", "agent-zero", "carbonato", "ntlmrelayx", "smbserver.py", "secretsdump", "petitpotam", "certipy", "ldapdomaindump", "evil-winrm", "netexec", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent")
+    or ProcessCommandLine matches regex @"(?i)(?:^|[\s""'/\\])(?:responder[/\\]responder\.py|coercer[/\\]coercer\.py)(?:$|[\s""'])"
+    or ProcessCommandLine matches regex @"(?i)\bcoercer(?:\.py)?\s+(?:coerce|scan|fuzz)\b"
     or (ProcessCommandLine has "chisel" and ProcessCommandLine has "client")
 | project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, ProcessCommandLine
 
@@ -89,14 +91,15 @@ DeviceNetworkEvents
     by DeviceName, InitiatingProcessAccountName, InitiatingProcessFileName
 | order by Hits asc
 
-// T2-B. MDE: Web / App Daemon Spawning Shell — Least-Frequency-of-Occurrence (LFO) Fleet Hunt
-//       (Scopes GCP metadata.google.internal exemption strictly to standalone curl/wget probes; uses matches regex for shell punctuation)
+// T2-B. MDE: Web / App / Ruby Daemon Spawning Shell — Least-Frequency-of-Occurrence (LFO) Fleet Hunt
+//       (Covers Ruby2Shell CVE-2026-132825 parents puma/unicorn/unicorn_rails/passenger + ruby runtime with suspicious shell args;
+//        scopes GCP metadata.google.internal exemption strictly to standalone curl/wget probes)
 DeviceProcessEvents
 | where Timestamp > ago(7d)
 | where
-    (InitiatingProcessFileName in~ ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe")
+    (InitiatingProcessFileName in~ ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe", "puma", "unicorn", "unicorn_rails", "passenger")
      and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh"))
-    or (InitiatingProcessFileName in~ ("java.exe", "java", "node.exe", "node")
+    or (InitiatingProcessFileName in~ ("java.exe", "java", "node.exe", "node", "ruby.exe", "ruby")
         and FileName in~ ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "bash", "sh")
         and (ProcessCommandLine has_any ("whoami", "nltest", "sc query", "Invoke-WebRequest", "base64", "encodedcommand", "/dev/tcp")
              or ProcessCommandLine matches regex @"(?i)(?:\s|^)-enc\s"
@@ -108,10 +111,10 @@ DeviceProcessEvents
     by InitiatingProcessFileName, FileName, ProcessCommandLine
 | order by Hits asc
 
-// T2-C. MDE: Compressed Endpoint Recon Burst (>= 5 Unique Discovery/Cloud Commands in 30s — Windows + Linux Parity)
+// T2-C. MDE: Compressed Endpoint Recon & Tri-Cloud CLI Burst (>= 5 Unique Discovery/Cloud Commands in 30s — Win + Linux Parity)
 DeviceProcessEvents
 | where Timestamp > ago(24h)
-| where ProcessCommandLine matches regex @"(?i)(?:\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|ps\s+(?:aux|-ef)|nltest|net\s+localgroup|aws\s+sts|az\s+account|kubectl\s+get|sc\s+query|tasklist|get-service)\b|/etc/passwd)"
+| where ProcessCommandLine matches regex @"(?i)(?:\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\s+(?:a|addr|route)|ss\s+-|netstat|ps\s+(?:aux|-ef)|nltest|net\s+localgroup|aws\s+sts|az\s+account|gcloud\s+(?:auth|iam|secrets)|kubectl\s+get|sc\s+query|tasklist|get-service)\b|/etc/passwd)"
 | summarize
     CmdCount = count(),
     UniqueCmds = dcount(ProcessCommandLine),
@@ -169,3 +172,77 @@ AuditLogs
 | summarize Ops = make_set(OperationName), UniqueOps = dcount(OperationName), OpCount = count(), SpanSec = datetime_diff('second', max(TimeGenerated), min(TimeGenerated))
     by ActorApp, ActorUser, bin(TimeGenerated, 5m)
 | where UniqueOps >= 2 and SpanSec <= 120
+
+// T2-G. MDE: Server-Role Ephemeral Quick Tunnels (`cloudflared tunnel --url`, Temp-Staged `cloudflared`, `devtunnel host`)
+//       (Uses DeviceInfo server role so developer laptops produce 0 FP; FolderPath catches argv[0]-rewritten temp binaries on Linux & Windows)
+let ServerDevices = DeviceInfo
+| where Timestamp > ago(7d)
+| where DeviceType =~ "Server" or OSPlatform has "Server"
+| distinct DeviceId;
+DeviceProcessEvents
+| where Timestamp > ago(7d)
+| where DeviceId in (ServerDevices)
+| where ProcessCommandLine matches regex @"(?i)\bcloudflared(?:\.exe)?\s+tunnel\b[^\r\n]*--url\b"
+    or (FolderPath matches regex @"(?i)(?:/(?:tmp|dev/shm|var/tmp)/|\\Temp\\)[^\s]*cloudflared" and ProcessCommandLine has "tunnel")
+    or ProcessCommandLine matches regex @"(?i)\bdevtunnel(?:\.exe)?\s+host\b"
+| project Timestamp, DeviceName, AccountName, InitiatingProcessFileName, FileName, FolderPath, ProcessCommandLine
+
+// T2-H. MDE: AI Coding Agent / Harness Spawning Explicit Offensive Pentest Tools (Covers 1-Hop & 2-Hop `agent -> bash -> tool`)
+//       (Excludes Ory Hydra OAuth2 CLI and dev-laptop quick tunnels, which are server-scoped in T2-G; excludes read-only git/rg/grep/pytest)
+DeviceProcessEvents
+| where Timestamp > ago(7d)
+| where not(FileName in~ ("git", "git.exe", "rg", "rg.exe", "grep", "egrep", "fgrep", "pytest", "cat", "less", "vim", "nvim"))
+| where InitiatingProcessFileName in~ ("claude", "claude.exe", "codex", "codex.exe", "opencode", "opencode.exe", "qwen-code", "kimi-cli", "hermes-agent", "agent-zero")
+    or InitiatingProcessParentFileName in~ ("claude", "claude.exe", "codex", "codex.exe", "opencode", "opencode.exe", "qwen-code", "kimi-cli", "hermes-agent", "agent-zero")
+    or ProcessCommandLine has_any ("shell-snapshots", "claude_code_shell_launcher_script")
+| where FileName in~ ("nmap", "nmap.exe", "masscan", "nuclei", "nuclei.exe", "sqlmap", "ffuf", "gobuster", "chisel", "chisel.exe", "ntlmrelayx", "netexec", "nxc", "evil-winrm", "certipy", "bloodhound", "sharphound.exe", "rubeus.exe", "secretsdump", "wpscan", "nikto", "msfconsole", "coercer")
+    or ProcessCommandLine matches regex @"(?i)(?:^|[\s""'/\\])(?:responder[/\\]responder\.py|coercer[/\\]coercer\.py)(?:$|[\s""'])"
+    or ProcessCommandLine matches regex @"(?i)\b(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|ntlmrelayx|netexec|evil-winrm|certipy|secretsdump|wpscan|msfconsole)\b"
+| project Timestamp, DeviceName, AccountName, InitiatingProcessParentFileName, InitiatingProcessFileName, FileName, ProcessCommandLine
+
+// T2-I. Sentinel Entra ID AADServicePrincipalSignInLogs: Storm-0940 Zero-401 Pre-Authorized SP Multi-IP (/16 & IPv6 /48) Replay
+//       (Catches stolen pre-authorized OAuth/SP credentials replayed across rotating external IPv4/IPv6 addresses with ZERO 7000215 failures,
+//        while avoiding FPs on static single-IP, single-/16 SaaS backups, and single-resource multi-region CI/CD OIDC SPs)
+AADServicePrincipalSignInLogs
+| where TimeGenerated > ago(24h)
+| where ResultType == "0" and isnotempty(IPAddress)
+| where iff(IPAddress contains ":",
+    not(ipv6_is_in_range(IPAddress, "::1/128") or ipv6_is_in_range(IPAddress, "fe80::/10") or ipv6_is_in_range(IPAddress, "fc00::/7")),
+    ipv4_is_private(IPAddress) == false)
+| extend NetPrefix = iff(IPAddress contains ":",
+    strcat(split(IPAddress, ":")[0], ":", split(IPAddress, ":")[1], ":", split(IPAddress, ":")[2]),
+    strcat(split(IPAddress, ".")[0], ".", split(IPAddress, ".")[1]))
+| extend IsHighValue = ResourceDisplayName has_any ("Exchange Online", "SharePoint Online", "Microsoft Graph", "Key Vault", "Teams")
+| summarize
+    DistinctIPs = dcount(IPAddress),
+    DistinctPrefixes = dcount(NetPrefix),
+    DistinctResources = dcount(ResourceDisplayName),
+    HighValueHits = countif(IsHighValue),
+    SampleIPs = make_set(IPAddress, 10),
+    Resources = make_set(ResourceDisplayName, 10)
+    by ServicePrincipalName, bin(TimeGenerated, 60m)
+| where (DistinctPrefixes >= 3 and (DistinctResources >= 2 or HighValueHits >= 1))
+    or (DistinctIPs >= 3 and DistinctPrefixes >= 2 and DistinctResources >= 3)
+    or (DistinctIPs >= 3 and DistinctResources >= 4 and HighValueHits >= 1)
+| order by DistinctPrefixes desc, DistinctResources desc
+
+// T2-J. Sentinel GCPAuditLogs: Bitrise ARTEX Multi-SA Single-IP Pivot & PERMISSION_DENIED -> Secret Manager Access
+//       (Extracts CallerIp and StatusCode from dynamic RequestMetadata/Status columns per native Sentinel GCPAuditLogs schema;
+//        scopes multi-SA pivot & PERMISSION_DENIED sweeps to *.gserviceaccount.com to avoid corporate NAT human GCP Console FPs)
+GCPAuditLogs
+| where TimeGenerated > ago(24h)
+| extend CallerIp = tostring(RequestMetadata.callerIp), StatusCodeStr = tostring(Status.code)
+| where isnotempty(CallerIp) and CallerIp !in ("private", "gce-internal-ip")
+| where PrincipalEmail endswith ".gserviceaccount.com"
+| where PrincipalEmail !has_any ("terraform", "ansible", "datadog", "wiz", "prisma", "cspm", "@gcp-sa-", "@cloudservices.gserviceaccount.com", "-system@")
+| extend IsDenied = StatusCodeStr in ("7", "PERMISSION_DENIED") or StatusMessage has "PERMISSION_DENIED"
+| extend IsSecretReadOk = MethodName has "AccessSecretVersion" and (isempty(StatusCodeStr) or StatusCodeStr in ("0", "OK"))
+| summarize
+    DistinctServiceAccounts = dcountif(PrincipalEmail, IsDenied or isempty(StatusCodeStr) or StatusCodeStr in ("0", "OK")),
+    DeniedAPIs = dcountif(MethodName, IsDenied),
+    SecretReadsOk = countif(IsSecretReadOk),
+    SampleSAs = make_set(PrincipalEmail, 10),
+    SampleServices = make_set(ServiceName, 10)
+    by CallerIp, bin(TimeGenerated, 30m)
+| where DistinctServiceAccounts >= 3 or DeniedAPIs >= 5 or (DeniedAPIs >= 3 and SecretReadsOk >= 1)
+| order by DistinctServiceAccounts desc, DeniedAPIs desc

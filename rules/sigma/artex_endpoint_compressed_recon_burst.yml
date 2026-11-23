@@ -46,7 +46,12 @@ detection:
       - 'az'
       - 'account'
       - 'show'
-  condition: (selection_web_parent and selection_shell_child) or selection_nltest or selection_aws_sts or selection_az_acct
+  selection_gcloud_auth:
+    CommandLine|contains|all:
+      - 'gcloud'
+      - 'auth'
+      - 'list'
+  condition: (selection_web_parent and selection_shell_child) or selection_nltest or selection_aws_sts or selection_az_acct or selection_gcloud_auth
 falsepositives:
   - Authorized DevOps automation runners or admin workstations executing cloud CLI diagnostics (correlate >= 5 recon commands in 30s).
 level: medium

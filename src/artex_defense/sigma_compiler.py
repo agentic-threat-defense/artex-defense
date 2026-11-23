@@ -16,7 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Union
 
+from sigma.backends.crowdstrike.logscale import LogScaleBackend
 from sigma.backends.elasticsearch.elasticsearch_esql import ESQLBackend
+from sigma.backends.elasticsearch.elasticsearch_lucene import LuceneBackend
 from sigma.backends.kusto import KustoBackend
 from sigma.backends.sentinelone import SentinelOneBackend
 from sigma.collection import SigmaCollection
@@ -27,7 +29,7 @@ from sigma.plugins import InstalledSigmaPlugins
 from sigma.processing.conditions import IncludeFieldCondition, LogsourceCondition
 from sigma.processing.pipeline import ProcessingItem, ProcessingPipeline
 from sigma.processing.transformations import FieldMappingTransformation, ReplaceStringTransformation
-from sigma.types import SigmaBool, SigmaNumber, SigmaString, SpecialChars
+from sigma.types import SigmaBool, SigmaNumber, SigmaRegularExpression, SigmaString, SpecialChars
 from sigma.validation import SigmaValidator
 from sigma.validators.core import validators as core_validators
 
@@ -45,6 +47,27 @@ def _lowercase_sigma_string(val: SigmaString) -> SigmaString:
     """Return a copy of SigmaString with literal text segments lowercased (preserving wildcards)."""
     out = SigmaString()
     out.s = tuple(part.lower() if isinstance(part, str) else part for part in val.s)
+    return out
+
+
+def _to_lucene_regex(pattern: str) -> str:
+    """Translate PCRE/Sigma regex syntax into Apache Lucene RegExp DFA syntax (full-string match, no `(?:...)` or `^`/`$`)."""
+    out = pattern.replace("(?:", "(")
+    # Convert common boundary groups `(^|[...])` and `([...]|$)` into full-string Lucene DFA equivalents
+    # (Apache Lucene RegExp forbids empty alternation branches `(|...)`; use postfix `?` instead.)
+    out = re.sub(r"\(\^\|(\[[^\]]+\])\)", r"(.*\1)?", out)
+    out = re.sub(r"\((\[[^\]]+\])\|\$\)", r"(\1.*)?", out)
+    # Handle plain leading ^ / trailing $ anchors (Lucene always anchors full-string)
+    anchored_start = out.startswith("^") or bool(re.match(r"^\(\.\*\[[^\]]+\]\)\?", out))
+    if out.startswith("^"):
+        out = out[1:]
+    anchored_end = out.endswith("$") or out.endswith(".*)?")
+    if out.endswith("$"):
+        out = out[:-1]
+    if not anchored_start and not out.startswith(".*"):
+        out = ".*" + out
+    if not anchored_end and not out.endswith(".*"):
+        out = out + ".*"
     return out
 
 
@@ -150,7 +173,13 @@ class HardenedKustoBackend(KustoBackend):
 
 
 class HardenedESQLBackend(ESQLBackend):
-    """ESQLBackend fixed for lowercase `*.caseless` literals and string-typed ECS `keyword` fields."""
+    """ESQLBackend fixed for lowercase `*.caseless` literals, string-typed ECS `keyword` fields, and Lucene-valid `rlike`."""
+
+    def convert_value_re(
+        self, r: SigmaRegularExpression, state: ConversionState
+    ) -> str | DeferredQueryExpression:
+        lucene_re = SigmaRegularExpression(_to_lucene_regex(str(r.regexp)))
+        return super().convert_value_re(lucene_re, state)
 
     def convert_condition_field_eq_val_str(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
@@ -371,9 +400,27 @@ def _build_crowdstrike_linux_basename_pipeline() -> ProcessingPipeline:
     )
 
 
+class HardenedLuceneBackend(LuceneBackend):
+    """LuceneBackend fixed to translate PCRE `|re` patterns into Apache Lucene DFA syntax (no `(?:...)`, `^`, or `$`)."""
+
+    def convert_value_re(
+        self, r: SigmaRegularExpression, state: ConversionState
+    ) -> str | DeferredQueryExpression:
+        lucene_re = SigmaRegularExpression(_to_lucene_regex(str(r.regexp)))
+        return super().convert_value_re(lucene_re, state)
+
+
+class HardenedLogScaleBackend(LogScaleBackend):
+    """LogScaleBackend fixed to escape `/` inside `/regex/` literals (prevents `=//` comment syntax corruption)."""
+
+    re_escape = ["/"]
+
+
 _BACKEND_OVERRIDES: dict[str, type[Any]] = {
     "kusto": HardenedKustoBackend,
     "esql": HardenedESQLBackend,
+    "lucene": HardenedLuceneBackend,
+    "log_scale": HardenedLogScaleBackend,
     "sentinel_one": HardenedSentinelOneBackend,
 }
 

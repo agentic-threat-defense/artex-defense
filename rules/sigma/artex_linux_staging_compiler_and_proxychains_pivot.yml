@@ -60,12 +60,34 @@ detection:
       - 'ligolo-agent'
       - 'ntlmrelayx'
       - 'smbserver.py'
+      - 'secretsdump'
       - 'petitpotam'
       - 'coercer'
       - 'certipy'
       - 'ldapdomaindump'
       - 'evil-winrm'
       - 'netexec'
+      - '/Responder/Responder.py'
+  selection_ruby_web_shell:
+    ParentImage|endswith:
+      - '/puma'
+      - '/unicorn'
+      - '/unicorn_rails'
+      - '/passenger'
+    Image|endswith:
+      - '/sh'
+      - '/bash'
+      - '/dash'
+      - '/zsh'
+  selection_temp_cloudflared:
+    Image|contains:
+      - '/tmp/'
+      - '/dev/shm/'
+      - '/var/tmp/'
+    Image|endswith:
+      - 'cloudflared'
+    CommandLine|contains:
+      - 'tunnel'
   selection_artex_linux_host:
     CommandLine|contains:
       - 'mitmproxy-ca-cert.pem'
@@ -84,7 +106,7 @@ detection:
       - 'RemoteForward'
     CommandLine|contains|all:
       - ':'
-  condition: (selection_compiler and selection_staging_path and not filter_legit_builds) or selection_proxychains or selection_chisel_linux or selection_linux_pivot_tools or selection_artex_linux_host or selection_ssh_reverse_tunnel
+  condition: (selection_compiler and selection_staging_path and not filter_legit_builds) or selection_proxychains or selection_chisel_linux or selection_linux_pivot_tools or selection_ruby_web_shell or selection_temp_cloudflared or selection_artex_linux_host or selection_ssh_reverse_tunnel
 falsepositives:
   - Dedicated CI/CD build servers compiling temporary probes in /tmp (exclude known CI/build hosts).
   - Authorized red-team jump hosts running Proxychains, Chisel, or Impacket.

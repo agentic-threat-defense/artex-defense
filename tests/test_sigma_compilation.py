@@ -129,6 +129,22 @@ def test_compiled_siem_packs_pass_real_wire_schema_and_syntax_linter(tmp_path: P
     for match in re.finditer(r"\b[\w.]+\.caseless\s+in\s*\(([^)]+)\)", esql_text):
         lit_list = match.group(1)
         assert lit_list == lit_list.lower(), f"ES|QL .caseless in(...) contains uppercase chars: {lit_list!r}"
+    # Lucene/ES|QL RLIKE uses Apache Lucene DFA (no PCRE `(?:`, `^`, `$` anchors, or empty `(|` alternation)
+    for match in re.finditer(r'\brlike\s+"([^"]+)"', esql_text):
+        pat = match.group(1)
+        assert "(?:" not in pat and "^" not in pat and "$" not in pat and "(|" not in pat, (
+            f"Invalid Lucene ES|QL rlike regex: {pat!r}"
+        )
+
+    lucene_text = Path(by_key["lucene_ecs"]["exported_file"]).read_text(encoding="utf-8")
+    for match in re.finditer(r":/((?:[^/\\]|\\.)+)/", lucene_text):
+        pat = match.group(1)
+        assert "(?:" not in pat and "^" not in pat and "$" not in pat and "(|" not in pat, (
+            f"Invalid Lucene regex: {pat!r}"
+        )
+
+    cql_text = Path(by_key["crowdstrike_logscale"]["exported_file"]).read_text(encoding="utf-8")
+    assert "=//" not in cql_text, "Unescaped leading '/' in LogScale regex emits '//' single-line comment!"
 
     # 3. SentinelOne S1QL: numeric port list must use exact `In`, and single numeric port must use exact `=`
     s1_text = Path(by_key["sentinelone_s1ql"]["exported_file"]).read_text(encoding="utf-8")

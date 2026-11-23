@@ -34,6 +34,10 @@ detection:
       - '&artex='
       - 'eyJhbGciOiJub25lIn0'
       - 'illegal_redirect_uri_enhanced'
+  selection_bitrise_probe:
+    c-uri|re:
+      - '/_i[0-9]{2,6}_probe(_[a-zA-Z0-9_-]+)?([/?&#]|$)'
+      - '(^|[/_-])i[0-9]{2,6}-probe([/?&#]|$)'
   selection_ua:
     cs-user-agent|contains:
       - 'security-testing; authorized'
@@ -48,7 +52,7 @@ detection:
       - 'Mozilla/5.0 (ARTEX)'
       - 'artex-agent'
       - 'artex-judge-'
-  condition: selection_canary_uri or selection_ua
+  condition: selection_canary_uri or selection_bitrise_probe or selection_ua
 falsepositives:
   - Authorized red-team exercises explicitly using recon-audit or security-testing user agents.
 level: high

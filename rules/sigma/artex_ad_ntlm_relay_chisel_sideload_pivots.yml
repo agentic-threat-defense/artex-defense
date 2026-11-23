@@ -37,12 +37,15 @@ detection:
     CommandLine|contains:
       - 'ntlmrelayx'
       - 'smbserver.py'
+      - 'secretsdump'
       - 'petitpotam'
       - 'coercer'
       - 'certipy'
       - 'ldapdomaindump'
       - 'evil-winrm'
       - 'netexec'
+      - '\Responder\Responder.py'
+      - '/Responder/Responder.py'
   selection_relocated_edge_config:
     Image|endswith:
       - '\edge.exe'

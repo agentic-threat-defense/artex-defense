@@ -17,13 +17,16 @@
 event.type == "DNS Resolved" AND
 event.dns.request matches "(?i)(?:^|\\.)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com|artex\\.noog2infra\\.site|artex\\.ok7777\\.eu\\.cc|artex\\.tokena2b\\.top)$"
 
-// T1-B. Explicit ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Module Loads, Control-Plane URIs, & Framework Artifacts
-//       (Includes module.path for BLOODALCHEMY DLL sideloading; generic ports 8787-8890/18899 & webhook.site are in Tier 2 T2-A)
+// T1-B. Explicit ARTEX / ScopeWeaver / BLOODALCHEMY Staging Paths, Module Loads, Control-Plane/Bitrise URIs, & Framework Artifacts
+//       (Includes module.path for BLOODALCHEMY DLL sideloading & boundary-scoped Responder/Coercer regex; generic ports & webhook.site are in T2-A)
 (tgt.file.path contains:anycase ("ProgramData\\artx5v", "graphics-hook-filter64.dll", "graphics-hook_config.bin", "artex_config.json", "artex.yaml", "xcai-effort-shim.py", "mitmproxy-ca-cert.pem") OR
  module.path contains:anycase ("graphics-hook-filter64.dll", "graphics-hook_config.bin", "ProgramData\\artx5v") OR
  (tgt.file.path contains:anycase "/tasks/" AND tgt.file.path contains:anycase "/cmd-output/") OR
- tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "CyberStrikeAI", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent", "ntlmrelayx") OR
+ tgt.process.cmdline contains:anycase ("ScopeWeaver", "AntiFox", "Pojun", "FORANG", "sco-fix2", "Guanlan SEC", "tomicdd/artex", "congdonglinux/artex", "norma-agent", "norma/0.", "artex-enrich/", "artex-readonly/", "ARTEX-worker/", "artex-selfupdate", "LLMLeak-RedTeam/", "authorized-exposure-audit", "authorized-security-research", "ArtexProbe", "CyberStrikeAI", "lsadump::", "sekurlsa::", "AdaptixC2", "wisp-c2", "ligolo-agent", "ntlmrelayx", "smbserver.py", "secretsdump", "petitpotam", "certipy", "kerbrute", "bloodhound", "ldapdomaindump", "evil-winrm", "netexec") OR
+ tgt.process.cmdline matches "(?i)(?:^|[\\s\"'/\\\\])(?:responder[/\\\\]responder\\.py|coercer[/\\\\]coercer\\.py)(?:$|[\\s\"'])" OR
+ tgt.process.cmdline matches "(?i)\\bcoercer(?:\\.py)?\\s+(?:coerce|scan|fuzz)\\b" OR
  url.address contains:anycase ("/Inform/logger/", "/api/exploration/", "/api/sync/scopesentry", "?artex=", "&artex=") OR
+ url.address matches "(?i)(?:/_i\\d{2,6}_probe(?:_[a-z0-9_-]+)?|(?:^|[/_-])i\\d{2,6}-probe)(?:$|[/?&#])" OR
  url.address matches "(?i)(?:^|\\.|//)(?:xcai\\.(?:com|pro)|lanmao666\\.(?:com|xyz)|artex\\.lol|nginxmysql\\.com|vietnam852\\.com|zhzy999\\.net|sqlserver-sqlite\\.com)(?:[:/]|$)")
 
 // T1-C. Automated EDR Sensor Discovery Probes (Including SentinelAgent / CrowdStrike)
@@ -50,11 +53,12 @@ tgt.process.cmdline contains:anycase ("SentinelAgent", "SentinelOne", "CSFalcon"
  NOT (src.process.name in:anycase ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "postman.exe", "code.exe", "MsSense.exe") OR
       src.process.name startsWith:anycase "ZSA"))
 
-// T2-B. Web / Service Parent Spawning Shell (Post-Exploit Edge/Portal Pivot — scopes GCP metadata.google.internal exemption to standalone curl/wget only)
+// T2-B. Web / Service / Ruby App Parent Spawning Shell (Covers Ruby2Shell CVE-2026-132825 puma/unicorn/passenger + ruby runtime;
+//       scopes GCP metadata.google.internal exemption to standalone curl/wget only)
 event.type == "Process Creation" AND
 tgt.process.name in:anycase ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") AND (
-  src.process.name in:anycase ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe") OR
-  (src.process.name in:anycase ("java", "java.exe", "node", "node.exe") AND (
+  src.process.name in:anycase ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat.exe", "sqlservr.exe", "puma", "unicorn", "unicorn_rails", "passenger") OR
+  (src.process.name in:anycase ("java", "java.exe", "node", "node.exe", "ruby", "ruby.exe") AND (
     tgt.process.cmdline contains:anycase ("whoami", "nltest", "sc query", "Invoke-WebRequest", "-enc ", "-encodedcommand", "base64", "/dev/tcp") OR
     (tgt.process.cmdline contains:anycase ("curl ", "wget ") AND
      NOT (tgt.process.cmdline contains:anycase "metadata.google.internal" AND NOT tgt.process.cmdline contains:anycase ("service-accounts", "/token", "ssh-keys", "kube-env", "recursive=true", "iam/security-credentials", ";", "&&", "||", "|", "`", "$(")))
@@ -66,10 +70,29 @@ event.type == "DNS Resolved" AND
 endpoint.type == "server" AND
 event.dns.request matches "(?i)(?:^|\\.)(?:api\\.anthropic\\.com|api\\.openai\\.com|api\\.deepseek\\.com|open\\.bigmodel\\.cn|api\\.x\\.ai|api\\.moonshot\\.(?:cn|ai)|dashscope\\.aliyuncs\\.com|openrouter\\.ai|api\\.siliconflow\\.cn|sslip\\.io|nip\\.io|xip\\.io|traefik\\.me)$"
 
-// T2-D. Singularity Data Lake PowerQuery: Compressed Endpoint Recon Burst (>= 5 Distinct Discovery Commands in 30s — Win + Linux)
+// T2-D. Singularity Data Lake PowerQuery: Compressed Endpoint Recon & Tri-Cloud CLI Burst (>= 5 Distinct Discovery Cmds in 30s — Win + Linux)
 event.type == "Process Creation"
-| filter tgt.process.cmdline matches "(?i)(?:\\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\\s+(?:a|addr|route)|ss\\s+-|netstat|ps\\s+(?:aux|-ef)|nltest|net\\s+localgroup|aws\\s+sts|az\\s+account|kubectl\\s+get|sc\\s+query|get-service|tasklist)\\b|/etc/passwd)"
+| filter tgt.process.cmdline matches "(?i)(?:\\b(?:whoami|id|uname|hostname|ipconfig|ifconfig|ip\\s+(?:a|addr|route)|ss\\s+-|netstat|ps\\s+(?:aux|-ef)|nltest|net\\s+localgroup|aws\\s+sts|az\\s+account|gcloud\\s+(?:auth|iam|secrets)|kubectl\\s+get|sc\\s+query|get-service|tasklist)\\b|/etc/passwd)"
 | let tb = timebucket(event.time, "30s")
 | group cmd_count = count(), unique_cmds = estimate_distinct(tgt.process.cmdline) by endpoint.name, tgt.process.user, tb
 | filter unique_cmds >= 5
 | sort -unique_cmds
+
+// T2-E. Server-Only Ephemeral Quick Tunnels (`cloudflared tunnel --url`, Temp-Staged `cloudflared`, `devtunnel host`)
+//       (Uses native endpoint.type == "server" so developer laptops produce 0 FP; covers Linux & Windows temp dirs)
+event.type == "Process Creation" AND
+endpoint.type == "server" AND (
+  tgt.process.cmdline matches "(?i)\\bcloudflared(?:\\.exe)?\\s+tunnel\\b[^\\r\\n]*--url\\b" OR
+  (tgt.process.image.path matches "(?i)(?:/(?:tmp|dev/shm|var/tmp)/|\\\\Temp\\\\)[^\\s]*cloudflared" AND tgt.process.cmdline contains:anycase "tunnel") OR
+  tgt.process.cmdline matches "(?i)\\bdevtunnel(?:\\.exe)?\\s+host\\b"
+)
+
+// T2-F. AI Coding Agent / Harness Spawning Explicit Offensive Pentest Tools (Covers 1-Hop & Shell-Wrapper 2-Hop; Excludes git/rg/grep/pytest & Ory Hydra)
+event.type == "Process Creation" AND
+NOT tgt.process.name in:anycase ("git", "git.exe", "rg", "rg.exe", "grep", "egrep", "fgrep", "pytest", "cat", "less", "vim", "nvim") AND
+(src.process.name in:anycase ("claude", "claude.exe", "codex", "codex.exe", "opencode", "opencode.exe", "qwen-code", "kimi-cli", "hermes-agent", "agent-zero") OR
+ tgt.process.cmdline contains:anycase ("shell-snapshots", "claude_code_shell_launcher_script")) AND (
+  tgt.process.name in:anycase ("nmap", "nmap.exe", "masscan", "nuclei", "nuclei.exe", "sqlmap", "ffuf", "gobuster", "chisel", "chisel.exe", "ntlmrelayx", "netexec", "nxc", "evil-winrm", "certipy", "bloodhound", "sharphound.exe", "rubeus.exe", "secretsdump", "wpscan", "nikto", "msfconsole", "coercer") OR
+  tgt.process.cmdline matches "(?i)(?:^|[\\s\"'/\\\\])(?:responder[/\\\\]responder\\.py|coercer[/\\\\]coercer\\.py)(?:$|[\\s\"'])" OR
+  tgt.process.cmdline matches "(?i)\\b(?:nmap|masscan|nuclei|sqlmap|ffuf|gobuster|ntlmrelayx|netexec|evil-winrm|certipy|secretsdump|wpscan|msfconsole)\\b"
+)

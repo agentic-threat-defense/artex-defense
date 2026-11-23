@@ -20,16 +20,18 @@
 any where
   file.path : ("*\\ProgramData\\artx5v\\*", "*ScopeWeaver*", "*AntiFox*", "*Pojun*", "*FORANG*", "*sco-fix2*", "*artex_config.json*", "*artex.yaml*", "*xcai-effort-shim.py*", "*ArtexProbe*", "*artex-probe-*", "*graphics-hook-filter64.dll*", "*graphics-hook_config.bin*", "*/tasks/*/i*/cmd-output/*") or
   dll.name : ("graphics-hook-filter64.dll") or
-  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*evil-winrm*", "*netexec*", "*lsadump::*", "*sekurlsa::*", "*AdaptixC2*", "*wisp-c2*", "*ligolo-agent*", "*CyberStrikeAI*") or
+  process.command_line : ("*tomicdd/artex*", "*congdonglinux/artex*", "*chisel*client*", "*R:*socks*", "*proxychains*", "*ntlmrelayx*", "*smbserver.py*", "*secretsdump*", "*petitpotam*", "*certipy*", "*ldapdomaindump*", "*evil-winrm*", "*netexec*", "*lsadump::*", "*sekurlsa::*", "*AdaptixC2*", "*wisp-c2*", "*ligolo-agent*", "*CyberStrikeAI*", "*/Responder/Responder.py*", "*\\Responder\\Responder.py*", "*/Coercer/coercer.py*", "*\\Coercer\\coercer.py*") or
   url.original : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
   url.full : ("*/Inform/logger/*", "*?artex=*", "*&artex=*") or
+  url.original regex~ ".*/_i[0-9]{2,6}_probe.*" or
+  url.original regex~ "(.*[-_/])?i[0-9]{2,6}-probe([/?&#].*)?" or
   url.domain : ("xcai.com", "*.xcai.com", "xcai.pro", "*.xcai.pro", "artex.lol", "*.artex.lol", "lanmao666.com", "*.lanmao666.com", "lanmao666.xyz", "*.lanmao666.xyz", "nginxmysql.com", "*.nginxmysql.com", "vietnam852.com", "*.vietnam852.com", "zhzy999.net", "*.zhzy999.net", "sqlserver-sqlite.com", "*.sqlserver-sqlite.com", "artex.noog2infra.site", "artex.ok7777.eu.cc", "artex.tokena2b.top") or
   user_agent.original : ("*norma/*", "*norma-agent*", "*artex-enrich/*", "*Rex_Enrich*", "*artex-readonly/*", "*ARTEX-worker/*", "*artex-selfupdate*", "*ArtexProbe*", "*artex-probe*", "*LLMLeak-RedTeam/*", "*authorized-security-research/*", "*authorized-exposure-audit*", "*security-testing; authorized*", "*hermes-agent/*", "*strix/*")
 
 // T1-B. [EQL] Compressed Endpoint Recon + EDR Sensor Discovery Sequence (<= 30s — Windows + Linux Parity)
 sequence by host.name with maxspan=30s
   [process where event.type == "start" and
-   process.command_line : ("*whoami*", "*uname*", "*hostname*", "*nltest*", "*ipconfig*", "*ifconfig*", "*ip addr*", "*ss -*", "*/etc/passwd*", "*net localgroup*", "*aws sts*", "*az account*")]
+   process.command_line : ("*whoami*", "*uname*", "*hostname*", "*nltest*", "*ipconfig*", "*ifconfig*", "*ip addr*", "*ss -*", "*/etc/passwd*", "*net localgroup*", "*aws sts*", "*az account*", "*gcloud auth*")]
   [process where event.type == "start" and
    process.command_line : ("*sc query*", "*Get-Service*", "*tasklist*", "*systemctl status*", "*pgrep*") and
    process.command_line : ("*CSFalcon*", "*falcon-sensor*", "*SentinelAgent*", "*WinDefend*", "*CbDefense*", "*Sysmon*")]
@@ -63,11 +65,12 @@ any where
   or ((dns.question.name : ("webhook.site", "*.webhook.site") or url.domain : ("webhook.site", "*.webhook.site"))
       and (process.name == null or not process.name : ("chrome*", "msedge*", "firefox*", "brave*", "postman*", "code*", "MsSense*", "ZSA*")))
 
-// T2-B. [EQL] Web Server / App Daemon Spawning Interactive Shell (Scopes GCP metadata.google.internal Exemption to Standalone curl/wget)
+// T2-B. [EQL] Web Server / App / Ruby Daemon Spawning Interactive Shell (Covers Ruby2Shell CVE-2026-132825;
+//       scopes GCP metadata.google.internal Exemption to Standalone curl/wget)
 process where event.type == "start" and
   process.name : ("cmd.exe", "powershell.exe", "pwsh.exe", "pwsh", "sh", "bash") and (
-    process.parent.name : ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat", "tomcat.exe", "sqlservr.exe") or
-    (process.parent.name : ("java", "java.exe", "node", "node.exe") and (
+    process.parent.name : ("w3wp.exe", "nginx", "nginx.exe", "httpd", "httpd.exe", "apache2", "php-fpm", "restjavad", "tomcat", "tomcat.exe", "sqlservr.exe", "puma", "unicorn", "unicorn_rails", "passenger") or
+    (process.parent.name : ("java", "java.exe", "node", "node.exe", "ruby", "ruby.exe") and (
       process.command_line : ("*whoami*", "*nltest*", "*sc query*", "*Invoke-WebRequest*", "*-enc *", "*-encodedcommand*", "*base64*", "*/dev/tcp*") or
       (process.command_line : ("*curl *", "*wget *") and
        not (process.command_line : "*metadata.google.internal*" and
@@ -82,14 +85,35 @@ network where
    tls.client.server_name : ("api.anthropic.com", "api.openai.com", "api.deepseek.com", "open.bigmodel.cn", "api.x.ai", "api.moonshot.cn", "api.moonshot.ai", "dashscope.aliyuncs.com", "openrouter.ai", "api.siliconflow.cn", "*.sslip.io", "*.nip.io", "*.xip.io", "*.traefik.me")) and
   (host.name == null or not host.name : ("DEV-AI-GW-*", "WKSTN-*", "LAPTOP-*", "MACBOOK-*", "DESKTOP-*"))
 
-// 6. [ES|QL — TIER 1] ArtexProbe / User-Agents / Task Spill Paths (uses TO_LOWER() because ES|QL RLIKE has no `(?i)` flag)
+// T2-D. [EQL] Server-Scoped Ephemeral Quick Tunnels (`cloudflared tunnel --url`, Temp-Staged `cloudflared`, `devtunnel host`)
+//       (Requires cloudflared/devtunnel executable name so grep/echo docs on servers produce 0 FP; covers Linux & Windows temp dirs)
+process where event.type == "start" and
+  (host.name == null or not host.name : ("DEV-AI-GW-*", "WKSTN-*", "LAPTOP-*", "MACBOOK-*", "DESKTOP-*")) and (
+    (process.name : ("cloudflared", "cloudflared.exe") and process.command_line : "*tunnel*--url*") or
+    (process.name : ("devtunnel", "devtunnel.exe") and process.command_line : "*host*") or
+    (process.executable : ("/tmp/*cloudflared*", "/dev/shm/*cloudflared*", "/var/tmp/*cloudflared*", "*\\Temp\\*cloudflared*") and process.command_line : "*tunnel*")
+  )
+
+// T2-E. [EQL] AI Coding Agent / Harness Spawning Explicit Offensive Pentest Tools (Excludes Read-Only git/rg/grep/pytest & Ory Hydra)
+process where event.type == "start" and
+  not process.name : ("git", "git.exe", "rg", "rg.exe", "grep", "egrep", "fgrep", "pytest", "cat", "less", "vim", "nvim") and
+  (process.parent.name : ("claude", "claude.exe", "codex", "codex.exe", "opencode", "opencode.exe", "qwen-code", "kimi-cli", "hermes-agent", "agent-zero") or
+   process.command_line : ("*shell-snapshots*", "*claude_code_shell_launcher_script*")) and (
+    process.name : ("nmap", "nmap.exe", "masscan", "nuclei", "nuclei.exe", "sqlmap", "ffuf", "gobuster", "chisel", "chisel.exe", "ntlmrelayx", "netexec", "nxc", "evil-winrm", "certipy", "bloodhound", "sharphound.exe", "rubeus.exe", "secretsdump", "wpscan", "nikto", "msfconsole", "coercer") or
+    process.command_line : ("*/Responder/Responder.py*", "*\\Responder\\Responder.py*", "*/Coercer/coercer.py*", "*\\Coercer\\coercer.py*", "*nmap *", "*sqlmap*", "*nuclei *", "*ntlmrelayx*", "*evil-winrm*", "*secretsdump*")
+  )
+
+// 6. [ES|QL — TIER 1] ArtexProbe / User-Agents / Bitrise Task-Iteration Probes / Task Spill Paths
+//    (Uses TO_LOWER() & Lucene full-string DFA syntax — no `(?i)`, no `(?:...)`, no `^`/`$` PCRE anchors)
 // FROM logs-endpoint.events.*, logs-nginx.*, logs-proxy.*
 // | WHERE TO_LOWER(process.command_line) LIKE "*artex-probe-*"
 //      OR TO_LOWER(process.command_line) LIKE "*artexprobe*"
 //      OR file.path RLIKE ".*/tasks/[0-9]+/i[0-9]+/cmd-output/.*"
+//      OR TO_LOWER(url.original) RLIKE ".*/_i[0-9]{2,6}_probe.*"
+//      OR TO_LOWER(url.original) RLIKE "(.*[-_/])?i[0-9]{2,6}-probe([/?&#].*)?"
 //      OR TO_LOWER(file.name) IN ("mitmproxy-ca-cert.pem", "artex_config.json", "artex.yaml", "xcai-effort-shim.py", "graphics-hook-filter64.dll", "graphics-hook_config.bin")
 //      OR TO_LOWER(user_agent.original) RLIKE ".*(norma/[0-9]|artex-(enrich|readonly|worker|audit|pentest|verify|spawn|selfupdate)|artex/1\\.0|spa-api-recon|reconprobe|hexstrike-|cyberstrikeai-|artexprobe).*"
-// | KEEP @timestamp, host.name, user.name, process.command_line, file.path, user_agent.original
+// | KEEP @timestamp, host.name, user.name, process.command_line, file.path, url.original, user_agent.original
 // | SORT @timestamp DESC
 //
 // 7. [ES|QL — TIER 2] AWS CloudWatch FilterLogEvents Secret Search & Multi-API DryRun/AccessDenied Bursts
@@ -135,3 +159,23 @@ network where
 //   BY source.ip, bucket = DATE_TRUNC(15 minutes, @timestamp)
 // | WHERE distinct_identities >= 3 OR userdata_calls >= 4 OR (ec2_role_userdata >= 2 AND ssm_decrypts >= 1) OR (shell_send_cmds >= 1 AND (userdata_calls >= 1 OR ssm_decrypts >= 1))
 // | SORT distinct_identities DESC, calls DESC
+//
+// 10. [ES|QL — TIER 2] GCP Cloud Audit (Bitrise ARTEX TTP): Single-IP Multi-Service-Account Pivot & PERMISSION_DENIED -> Secret Manager
+//     (Excludes internal RFC1918 VPC IPs, human GCP Console users, IaC/CSPM roles, & Google-managed @gcp-sa-* service agents)
+// FROM logs-gcp.audit-*
+// | WHERE source.ip IS NOT NULL
+//   AND NOT CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
+//   AND gcp.audit.authentication_info.principal_email IS NOT NULL
+//   AND TO_LOWER(gcp.audit.authentication_info.principal_email) LIKE "*.gserviceaccount.com"
+//   AND NOT TO_LOWER(gcp.audit.authentication_info.principal_email) RLIKE ".*(terraform|ansible|datadog|wiz|prisma|cspm|@gcp-sa-|@cloudservices\\.gserviceaccount\\.com|-system@).*"
+// | EVAL principal_low = TO_LOWER(gcp.audit.authentication_info.principal_email),
+//        is_denied = TO_STRING(gcp.audit.status.code) IN ("7", "PERMISSION_DENIED") OR (gcp.audit.status.message IS NOT NULL AND TO_LOWER(gcp.audit.status.message) LIKE "*permission_denied*"),
+//        is_secret_ok = TO_LOWER(event.action) LIKE "*accesssecretversion*" AND (gcp.audit.status.code IS NULL OR TO_STRING(gcp.audit.status.code) IN ("0", "OK"))
+// | STATS
+//     calls = COUNT(*),
+//     distinct_sas = COUNT_DISTINCT(principal_low) WHERE is_denied OR gcp.audit.status.code IS NULL OR TO_STRING(gcp.audit.status.code) IN ("0", "OK"),
+//     denied_apis = COUNT_DISTINCT(event.action) WHERE is_denied,
+//     secret_reads_ok = COUNT(*) WHERE is_secret_ok
+//   BY source.ip, bucket = DATE_TRUNC(30 minutes, @timestamp)
+// | WHERE distinct_sas >= 3 OR denied_apis >= 5 OR (denied_apis >= 3 AND secret_reads_ok >= 1)
+// | SORT distinct_sas DESC, denied_apis DESC, calls DESC

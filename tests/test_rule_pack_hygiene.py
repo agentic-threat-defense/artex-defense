@@ -160,17 +160,28 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert "metadata\\.google\\.internal" in cql, "CrowdStrike CQL Query T2-C must exclude routine GCP metadata checks"
     assert "sort(hits, order=asc)" in cql, "CrowdStrike CQL hunts must use LFO ascending sort to avoid 200-row cap"
     assert "not ComputerName=/" in cql
+    assert "(?<!" not in cql, "LogScale CQL uses RE2 and does not support lookbehinds (?<!)"
+    assert "puma|unicorn|unicorn_rails|passenger" in cql and "ruby(\\.exe)?" in cql, "CQL T2-C must cover Ruby2Shell parents"
+    assert "cloudflared(\\.exe)?\\s+tunnel" in cql and "devtunnel(\\.exe)?\\s+host" in cql, "CQL T2-F must cover server ephemeral tunnels"
+    assert "gcloud\\s+(?:auth|iam|secrets)" in cql, "CQL T2-D1 must include GCP CLI recon"
+    assert "responder[\\/\\\\]responder\\.py" in cql, "CQL T1-B must scope Responder.py to tool folder"
     cql_t1 = _tier1_query_code(cql)
     assert "webhook" not in cql_t1.lower() and "8890" not in cql_t1, "Tier 1 CQL must not mix noisy ports/webhook.site with C2 domains"
 
     eql = (RULES_ROOT / "queries" / "elastic_ech_eql.eql").read_text(encoding="utf-8")
     assert "TIER 1" in eql and "TIER 2" in eql, "Elastic EQL must separate Tier 1 triage from Tier 2 hunts"
     assert 'RLIKE "(?i)' not in eql, "ES|QL Lucene Automaton RLIKE does not support (?i) flag"
+    assert "(?<!" not in eql, "Elastic EQL/ES|QL does not support lookbehinds (?<!)"
     assert 'url.path : ("*/Inform/logger/*", "*?artex=*"' not in eql, "ECS url.path excludes query strings"
     assert "BY aws.cloudtrail.user_identity.arn, source.ip, event.action" not in eql, "Grouping by event.action forces COUNT_DISTINCT=1"
     assert 'event.category == "network"' in eql and "destination.ip != null" in eql
     assert "url.full :" in eql and "TO_LOWER(file.name) IN" in eql
     assert "process.name == null or not (destination.port == 8890 and process.name" in eql
+    assert '"puma", "unicorn", "unicorn_rails", "passenger"' in eql and '"ruby", "ruby.exe"' in eql
+    assert "FROM logs-gcp.audit-*" in eql and "accesssecretversion" in eql and "@gcp-sa-" in eql
+    assert "*tunnel*--url*" in eql and "*/Responder/Responder.py*" in eql
+    assert '"*/_i*_probe*"' not in eql, "Broad wildcard */_i*_probe* FPs on /_internal_probe; use EQL regex~"
+    assert "url.original regex~" in eql and "($|" not in eql, "Elastic EQL/ES|QL Lucene DFA does not support PCRE $ anchor"
     eql_t1 = _tier1_query_code(eql)
     assert "webhook.site" not in eql_t1 and "8890" not in eql_t1
 
@@ -178,6 +189,7 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert "TIER 1" in kql and "TIER 2" in kql, "MDE KQL must separate Tier 1 triage from Tier 2 hunts"
     assert 'ResultType in ("500121", "50074")' not in kql, "Entra 50074 is normal MFA challenge, not failure"
     assert 'ResultType == "500121"' in kql
+    assert "(?<!" not in kql, "KQL uses RE2 and does not support lookbehinds (?<!)"
     assert 'RemotePort == 8890 and InitiatingProcessFileName startswith "ZSA"' in kql
     assert 'ProcessCommandLine has "metadata.google.internal"' in kql
     assert '";", "&&"' not in kql, "KQL has_any() only matches alphanumeric terms, never pure punctuation"
@@ -185,6 +197,14 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert 'DeviceType =~ "Server"' in kql, "MDE KQL server LLM hunt must use DeviceInfo server role"
     assert "union isfuzzy=true DeviceImageLoadEvents, DeviceFileEvents" in kql
     assert "/etc/passwd" in kql
+    assert '"puma", "unicorn", "unicorn_rails", "passenger"' in kql and '"ruby.exe", "ruby"' in kql
+    assert "DistinctPrefixes >= 3" in kql and "ipv6_is_in_range" in kql and "not(ipv4_is_private(IPAddress))" not in kql, (
+        "Sentinel KQL T2-I must handle IPv6 explicitly (not(ipv4_is_private) drops IPv6 via bool(null))"
+    )
+    assert "GCPAuditLogs" in kql and "RequestMetadata.callerIp" in kql and "Status.code" in kql and "AccessSecretVersion" in kql and "@gcp-sa-" in kql, (
+        "Sentinel KQL T2-J must extract CallerIp/StatusCode from dynamic RequestMetadata/Status columns"
+    )
+    assert "gcloud\\s+(?:auth|iam|secrets)" in kql
     kql_t1 = _tier1_query_code(kql)
     assert "webhook" not in kql_t1.lower() and "8890" not in kql_t1
 
@@ -198,6 +218,9 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert "src.process.parent.name" not in s1ql, "Inverted S1QL 2.0 parent/child lineage"
     assert 'dst.port.number == 8890 AND src.process.name startsWith:anycase "ZSA"' in s1ql
     assert 'tgt.process.cmdline contains:anycase "metadata.google.internal"' in s1ql
+    assert '"puma", "unicorn", "unicorn_rails", "passenger"' in s1ql and '"ruby", "ruby.exe"' in s1ql
+    assert 'endpoint.type == "server"' in s1ql and "cloudflared" in s1ql and "devtunnel" in s1ql
+    assert "gcloud\\\\s+(?:auth|iam|secrets)" in s1ql and "_i\\\\d{2,6}_probe" in s1ql
     s1ql_t1 = _tier1_query_code(s1ql)
     assert "webhook" not in s1ql_t1.lower() and "8890" not in s1ql_t1
 
