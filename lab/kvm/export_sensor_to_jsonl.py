@@ -242,6 +242,109 @@ def _iter_pcap_tcp_payloads(pcap_path: Path):
             yield ts, src, sport, dst, dport, pkt[pay_off : pay_off + pay_len]
 
 
+_HTTP_METHODS: frozenset[bytes] = frozenset(
+    {b"GET", b"POST", b"PUT", b"DELETE", b"HEAD", b"OPTIONS", b"PATCH", b"CONNECT", b"TRACE"}
+)
+
+
+def parse_http_request_ja4h(payload: bytes) -> tuple[str, str, str]:
+    """Compute spec-compliant FoxIO JA4H (`{m2}{v2}{c|n}{r|n}{hc:02d}{lang4}_{b}_{c}_{d}`) from an HTTP/1.x request.
+
+    Returns `(method, uri, ja4h)` or `("", "", "")` if `payload` is not an HTTP/1.x request header block.
+    """
+    hdr_end = payload.find(b"\r\n\r\n")
+    if hdr_end == -1:
+        return "", "", ""
+    hdr_blob = payload[:hdr_end]
+
+    lines = hdr_blob.split(b"\r\n")
+    if not lines:
+        return "", "", ""
+    parts = lines[0].split(b" ")
+    if len(parts) < 3 or parts[0] not in _HTTP_METHODS or not parts[2].startswith(b"HTTP/"):
+        return "", "", ""
+
+    method = parts[0].decode("ascii", errors="ignore").upper()
+    uri = parts[1].decode("utf-8", errors="ignore")
+    ver_raw = parts[2][5:].decode("ascii", errors="ignore")
+    ver2 = ver_raw.replace(".", "")[:2]
+    if len(ver2) != 2 or not ver2.isdigit():
+        ver2 = "11"
+
+    has_cookie = False
+    has_referer = False
+    hdr_names: list[str] = []
+    lang_raw = ""
+    cookie_pairs: list[tuple[str, str]] = []
+
+    for hline in lines[1:]:
+        if b":" not in hline:
+            continue
+        raw_k, raw_v = hline.split(b":", 1)
+        k = raw_k.decode("latin-1", errors="ignore").strip()
+        v = raw_v.decode("latin-1", errors="ignore").strip()
+        kl = k.lower()
+        if not kl:
+            continue
+        if kl == "cookie":
+            has_cookie = True
+            for item in v.split(";"):
+                item = item.strip()
+                if not item:
+                    continue
+                if "=" in item:
+                    ck, cv = item.split("=", 1)
+                    cookie_pairs.append((ck.strip(), cv.strip()))
+                else:
+                    cookie_pairs.append((item, ""))
+            continue
+        if kl == "referer":
+            has_referer = True
+            continue
+        if kl == "accept-language" and not lang_raw:
+            lang_raw = v
+        hdr_names.append(k)
+
+    # FoxIO JA4H lang: first 4 lowercase alphanumeric chars of primary Accept-Language token, padded with '0'
+    lang_primary = lang_raw.split(",", 1)[0].split(";", 1)[0]
+    lang_alnum = "".join(ch for ch in lang_primary.lower() if ch.isalnum())
+    lang4 = (lang_alnum[:4]).ljust(4, "0") if lang_alnum else "0000"
+
+    m2 = method.lower()[:2].ljust(2, "x")
+    c_flag = "c" if has_cookie else "n"
+    r_flag = "r" if has_referer else "n"
+    hc = min(len(hdr_names), 99)
+    ja4h_a = f"{m2}{ver2}{c_flag}{r_flag}{hc:02d}{lang4}"
+
+    if hdr_names:
+        ja4h_b = hashlib.sha256(",".join(hdr_names).encode("latin-1")).hexdigest()[:12]
+    else:
+        ja4h_b = "000000000000"
+
+    if cookie_pairs:
+        c_names = sorted(ck for ck, _ in cookie_pairs)
+        c_full = sorted(f"{ck}={cv}" if cv != "" else ck for ck, cv in cookie_pairs)
+        ja4h_c = hashlib.sha256(",".join(c_names).encode("latin-1")).hexdigest()[:12]
+        ja4h_d = hashlib.sha256(",".join(c_full).encode("latin-1")).hexdigest()[:12]
+    else:
+        ja4h_c = "000000000000"
+        ja4h_d = "000000000000"
+
+    return method, uri, f"{ja4h_a}_{ja4h_b}_{ja4h_c}_{ja4h_d}"
+
+
+def extract_pcap_http_ja4h(pcap_path: Path) -> dict[tuple[str, int, str, int], list[tuple[str, str, str]]]:
+    """Extract wire-computed `(method, uri, foxio_ja4h)` requests per 4-tuple directly from a PCAP."""
+    out: dict[tuple[str, int, str, int], list[tuple[str, str, str]]] = {}
+    for _, src, sport, dst, dport, payload in _iter_pcap_tcp_payloads(pcap_path):
+        if len(payload) < 16 or payload[0] in (0x14, 0x15, 0x16, 0x17):
+            continue
+        method, uri, ja4h = parse_http_request_ja4h(payload)
+        if ja4h:
+            out.setdefault((src, sport, dst, dport), []).append((method, uri, ja4h))
+    return out
+
+
 def extract_pcap_tls_ja4(
     pcap_path: Path,
     *,
@@ -303,10 +406,12 @@ def convert_zeek_json_lines(
     *,
     ssl_by_uid: dict[str, tuple[str, str]] | None = None,
     ssl_by_tuple: dict[tuple[str, int, str, int], tuple[str, str]] | None = None,
+    http_ja4h_by_tuple: dict[tuple[str, int, str, int], list[tuple[str, str, str]]] | None = None,
     skip_uids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert Zeek JSONL (`conn`, `http`, or `ssl`) into normalized artex-hunt JSONL dicts."""
     out: list[dict[str, Any]] = []
+    http_ja4h_cursors: dict[tuple[str, int, str, int], int] = {}
     for raw in lines:
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -333,6 +438,25 @@ def convert_zeek_json_lines(
         dst = rec.get("host") or rec.get("server_name") or sni_join or resp_h
 
         if kind == "http":
+            ja4h_val = str(rec.get("ja4h") or "")
+            if not ja4h_val and http_ja4h_by_tuple and orig_p is not None and port is not None and resp_h:
+                tkey = (str(src), int(orig_p), str(resp_h), int(port))
+                candidates_h = http_ja4h_by_tuple.get(tkey)
+                if candidates_h:
+                    cur_i = http_ja4h_cursors.get(tkey, 0)
+                    rec_m = str(rec.get("method") or "").upper()
+                    rec_u = str(rec.get("uri") or "")
+                    matched_j = ""
+                    for idx_h in range(cur_i, len(candidates_h)):
+                        cm, cu, cj = candidates_h[idx_h]
+                        if (not rec_m or cm == rec_m) and (not rec_u or cu == rec_u):
+                            matched_j = cj
+                            http_ja4h_cursors[tkey] = idx_h + 1
+                            break
+                    if not matched_j and cur_i < len(candidates_h):
+                        matched_j = candidates_h[cur_i][2]
+                        http_ja4h_cursors[tkey] = cur_i + 1
+                    ja4h_val = matched_j
             out.append(
                 {
                     "timestamp": ts,
@@ -346,7 +470,7 @@ def convert_zeek_json_lines(
                     "http_method": rec.get("method", ""),
                     "http_path": rec.get("uri", ""),
                     "user_agent": rec.get("user_agent", ""),
-                    "ja4h": rec.get("ja4h", ""),
+                    "ja4h": ja4h_val,
                     "bytes_out": rec.get("request_body_len"),
                     "bytes_in": rec.get("response_body_len"),
                     "status_code": rec.get("status_code"),
@@ -635,12 +759,15 @@ def convert_directory(
     else:
         pcaps_to_scan = sorted(input_dir.glob("*.pcap"))
 
-    # Enrich ssl_by_tuple with real wire-computed FoxIO JA4 from PCAP ClientHellos before converting Zeek/turns
+    # Enrich ssl_by_tuple with real wire-computed FoxIO JA4 and HTTP requests with FoxIO JA4H from PCAPs
     extra_ports = {rp for _, _, _, rp in ssl_by_tuple}
+    http_ja4h_by_tuple: dict[tuple[str, int, str, int], list[tuple[str, str, str]]] = {}
     for pfile in pcaps_to_scan:
         for tkey, (psni, pja4) in extract_pcap_tls_ja4(pfile, extra_ports=extra_ports).items():
             prev_tsni, prev_tja4 = ssl_by_tuple.get(tkey, ("", ""))
             ssl_by_tuple[tkey] = (prev_tsni or psni, prev_tja4 or pja4)
+        for hkey, hlist in extract_pcap_http_ja4h(pfile).items():
+            http_ja4h_by_tuple.setdefault(hkey, []).extend(hlist)
 
     for name, kind, skips in (
         # Avoid double-counting connections: HTTP connections use rich http.log rows;
@@ -657,6 +784,7 @@ def convert_directory(
                     kind,
                     ssl_by_uid=ssl_by_uid if kind == "conn" else None,
                     ssl_by_tuple=ssl_by_tuple if kind in ("conn", "ssl") else None,
+                    http_ja4h_by_tuple=http_ja4h_by_tuple if kind == "http" else None,
                     skip_uids=skips,
                 )
             )

@@ -98,8 +98,17 @@ def run_baseline() -> None:
         ("/login", "smartex-judge-prod", 2.3),
         ("/nonexistent-image.png", "Mozilla/5.0 Chrome/131.0.0.0", 3.8),
     ]
+    benign_browser_hdrs = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+    }
     for path, ua, pause in benign_calls:
-        http_req(path, ua=ua)
+        hdrs = benign_browser_hdrs if ("Chrome/" in ua or "Firefox/" in ua) else None
+        http_req(path, ua=ua, headers=hdrs)
         if pause > 0:
             time.sleep(pause)
     # Single consistent benign TLS 1.3 stack -> MUST emit 1 consistent wire JA4 and 0 JA4 FPs!

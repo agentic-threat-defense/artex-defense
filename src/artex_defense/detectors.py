@@ -229,7 +229,9 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "distributed_proxy_pool_probe": 75,
     "multi_account_credential_spray": 75,
     "llm_sawtooth_context_flow": 70,
+    "causal_tls_action_loop": 75,
     "encrypted_tls_agent_turn_loop": 65,
+    "browser_ua_stack_impersonation": 65,
     "web_error_handling_calibration": 70,
     "graphql_or_ai_mcp_discovery_probe": 70,
     "ja4_client_stack_whiplash": 70,
@@ -1047,20 +1049,103 @@ def _detect_sawtooth_context_flow(events: list[dict[str, Any]]) -> list[str]:
     return hits
 
 
-def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]:
-    """Detect autonomous AI agent loops inside persistent TLS 1.2/1.3 (HTTP/2 / Keep-Alive) TCP streams.
+_MODERN_BROWSER_UA_RE = re.compile(r"\b(?:Chrome/(?:9\d|1\d{2})|Firefox/(?:9\d|1\d{2})|Edg/(?:9\d|1\d{2}))\b")
+_HONEST_AUTOMATION_UA_RE = re.compile(
+    r"(?:HeadlessChrome|Electron/|PhantomJS|Playwright|Selenium|Cypress|;\s*wv\)|Googlebot|bingbot|Slackbot|Applebot|DuckDuckBot)",
+    re.IGNORECASE,
+)
+_JA4_A_RE = re.compile(r"^t(\d{2})([di])(\d{2})(\d{2})([a-z0-9]{2})_")
+_JA4H_A_RE = re.compile(r"^([a-z]{2})(\d{2})([cn])([rn])(\d{2})([a-z0-9]{4})_")
+_HEALTH_PROBE_PATH_RE = re.compile(r"^/(?:healthz?|readyz?|livez?|metrics|status|ping)/?$", re.IGNORECASE)
 
-    Separates autonomous tool-calling agents (including fast GPU/vLLM relays, WAN tools taking 1-5s,
-    mid-stream reasoning pauses, and context compaction) from benign REST/analytics traffic and human
-    web-LLM users via 4 invariants:
-      1. Server LLM inference latency >= 0.18s (eliminates 10-80ms REST/analytics APIs).
-      2. Non-trivial prompt + streamed completion payloads (`bytes_out >= 4000`, `bytes_in >= 800`).
-      3. Sidecar- and compaction-resilient monotonic outbound context growth (>=4 main turns, peak >= 10000B,
-         and either a >=4-turn climb >= +2000B, >=75% positive steps totaling >= +2000B, or >=2 compacted climbs).
-      4. Autonomous tool-loop turnaround (>=2 turnarounds <= 5.0s and median turnaround <= 6.0s,
-         accommodating real WAN tools while still rejecting human chat users who pause 8-60s+).
+
+def _is_non_browser_ja4(ja4: str) -> str:
+    """Return a concise mismatch tag if FoxIO `ja4` is impossible for modern Chrome/Firefox/Edge 90+, else ''."""
+    m = _JA4_A_RE.match(ja4.strip().lower())
+    if not m:
+        return ""
+    ver, _, cc_s, ec_s, alpn = m.groups()
+    cc, ec = int(cc_s), int(ec_s)
+    if ver in {"10", "11", "12"}:
+        return f"tls{ver}"
+    if alpn == "00":
+        return "no_alpn"
+    if cc >= 26:
+        return f"openssl_ciphers_{cc}"
+    if ec <= 8:
+        return f"minimal_exts_{ec}"
+    return ""
+
+
+def _is_non_browser_ja4h(ja4h: str) -> str:
+    """Return a concise mismatch tag if FoxIO `ja4h` is a stripped CLI/script HTTP stack, else ''."""
+    m = _JA4H_A_RE.match(ja4h.strip().lower())
+    if not m:
+        return ""
+    m2, _ver, _cf, _rf, hc_s, lang = m.groups()
+    if m2 in {"op", "co"}:  # Skip CORS OPTIONS preflights & corporate proxy HTTP CONNECT tunnels
+        return ""
+    hc = int(hc_s)
+    if lang == "0000" and hc <= 5:
+        return f"stripped_http_hdrs_{hc}_nolang"
+    return ""
+
+
+def _detect_browser_ua_stack_impersonation(events: list[dict[str, Any]]) -> list[str]:
+    """Time-independent lie detector: claims modern Chrome/Firefox/Edge 90+ UA on a non-browser JA4/JA4H stack.
+
+    Catches slow stealth agents (even 1 request every 30 minutes) using `curl -A Chrome/...` or Python/Go HTTP
+    clients with spoofed browser User-Agents, while staying 0 FP on real browsers, Playwright/HeadlessChrome,
+    honest monitoring UAs, and single-URL dev `/healthz` checks.
     """
-    by_stream: dict[tuple[str, str], list[tuple[float, int, int, float, float | None]]] = {}
+    impersonated_paths: set[str] = set()
+    impersonated_count = 0
+    sample_reasons: set[str] = set()
+    sample_ua = ""
+
+    for ev in events:
+        ua = str(ev.get("user_agent") or "")
+        if not ua or not _MODERN_BROWSER_UA_RE.search(ua) or _HONEST_AUTOMATION_UA_RE.search(ua):
+            continue
+        raw_path = str(ev.get("http_path") or "")
+        path_base = raw_path.split("?", 1)[0] if raw_path else ""
+        if path_base and (STATIC_ASSET_PATH_RE.search(path_base) or _HEALTH_PROBE_PATH_RE.match(path_base)):
+            continue
+
+        ja4 = str(ev.get("ja4") or "")
+        ja4h = str(ev.get("ja4h") or "")
+        why = _is_non_browser_ja4(ja4) or _is_non_browser_ja4h(ja4h)
+        if not why:
+            continue
+
+        impersonated_count += 1
+        sample_reasons.add(why)
+        if not sample_ua:
+            m_ua = _MODERN_BROWSER_UA_RE.search(ua)
+            sample_ua = m_ua.group(0) if m_ua else ua[:24]
+        norm_p = _normalize_api_path(path_base) if path_base else str(ev.get("dest_host") or "/")
+        impersonated_paths.add(norm_p)
+
+    # Require >=2 distinct non-asset/non-health paths (or >=3 requests with >=1 non-asset path) for 0 FP on one-offs
+    if len(impersonated_paths) >= 2 or (impersonated_count >= 3 and len(impersonated_paths) >= 1):
+        why_csv = ",".join(sorted(sample_reasons)[:3])
+        return [f"ua_stack_impersonation:{sample_ua}_via_{why_csv}(reqs={impersonated_count},paths={len(impersonated_paths)})"]
+    return []
+
+
+def _extract_monotonic_tls_streams(
+    events: list[dict[str, Any]],
+    *,
+    min_compact_peak: int = 4000,
+    min_compact_growth: int = 2000,
+    min_compact_expansion: float = 2.0,
+) -> list[tuple[str, str, int | None, list[tuple[float, float, float, float, int, int, float, float | None]], int, int]]:
+    """Extract persistent TLS streams passing substantive monotonic LLM context growth invariants.
+
+    Returns list of `(dest, stream_id, dest_port, main_turns, pos_growth, peak_out)` where each turn tuple is
+    `(o_start, o_end, in_start, in_end, b_out, b_in, inf_lat, turnaround)`.
+    """
+    by_stream: dict[tuple[str, str], tuple[int | None, list[tuple[float, float, float, float, int, int, float, float | None]]]] = {}
     for ev in events:
         if ev.get("action") != "tls_persistent_turn" and ev.get("appliance") != "pcap_tls_turn":
             continue
@@ -1072,7 +1157,6 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
                 raw = {}
         if not isinstance(raw, dict):
             raw = {}
-        # Support either nested raw_json dict or top-level serialized event dict
         meta = raw.get("raw_json") if isinstance(raw.get("raw_json"), dict) else raw
         dest = str(ev.get("dest_host") or "")
         stream_id = str(meta.get("stream_id") or dest)
@@ -1083,41 +1167,40 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
         turnaround = meta.get("client_turnaround_s")
         if not dest or b_out is None or b_in is None or ts is None or inf_lat is None:
             continue
-        by_stream.setdefault((dest, stream_id), []).append(
-            (
-                float(ts),
-                int(b_out),
-                int(b_in),
-                float(inf_lat),
-                float(turnaround) if turnaround is not None else None,
-            )
+        o_start = float(ts)
+        o_dur = max(0.0, float(meta.get("out_duration_s") or 0.0))
+        i_dur = max(0.0, float(meta.get("in_duration_s") or 0.0))
+        lat_f = max(0.0, float(inf_lat))
+        o_end = o_start + o_dur
+        i_start = o_end + lat_f
+        i_end = i_start + i_dur
+        dp = ev.get("dest_port")
+        dp_int = int(dp) if dp is not None else None
+        bucket = by_stream.setdefault((dest, stream_id), (dp_int, []))
+        bucket[1].append(
+            (o_start, o_end, i_start, i_end, int(b_out), int(b_in), lat_f, float(turnaround) if turnaround is not None else None)
         )
 
-    hits: list[str] = []
-    seen_dests: set[str] = set()
-    for (dest, stream_id), pts in by_stream.items():
-        if dest in seen_dests or _is_known_llm_api_dest(dest):
+    qualified: list[tuple[str, str, int | None, list[tuple[float, float, float, float, int, int, float, float | None]], int, int]] = []
+    for (dest, stream_id), (dp_int, pts) in by_stream.items():
+        if _is_known_llm_api_dest(dest):
             continue
         pts.sort(key=lambda x: x[0])
-        # Filter to substantive LLM-like turns (non-trivial prompt/response + real server inference latency).
-        # Supports both large cloud contexts (>=10KB) and compact local/vLLM tool-calling loops (1KB->4KB+, 400B+ tool JSON).
-        llm_turns = [p for p in pts if p[1] >= 1000 and p[2] >= 400 and p[3] >= 0.18]
+        llm_turns = [p for p in pts if p[4] >= 1000 and p[5] >= 400 and p[6] >= 0.18]
         if len(llm_turns) < 4:
             continue
 
-        # Sidecar filter: drop small auxiliary calls (<40% of running main-thread context once >=10KB)
-        main_turns: list[tuple[float, int, int, float, float | None]] = []
+        main_turns: list[tuple[float, float, float, float, int, int, float, float | None]] = []
         running_peak = 0
         for p in llm_turns:
-            if running_peak >= 10000 and p[1] < running_peak * 0.40:
+            if running_peak >= 10000 and p[4] < running_peak * 0.40:
                 continue
             main_turns.append(p)
-            running_peak = max(running_peak, p[1])
-
+            running_peak = max(running_peak, p[4])
         if len(main_turns) < 4:
             continue
 
-        outs = [p[1] for p in main_turns]
+        outs = [p[4] for p in main_turns]
         climbs: list[list[int]] = []
         cur_climb = [outs[0]]
         for b in outs[1:]:
@@ -1142,22 +1225,147 @@ def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]
             or (len(compacted_climbs) >= 2)
         )
         compact_ctx_ok = (
-            4000 <= peak_out < 10000
+            min_compact_peak <= peak_out < 10000
             and (len(best_climb) >= 4 or mono_ratio >= 0.80)
-            and pos_growth >= 2000
-            and expansion_ratio >= 2.0
+            and pos_growth >= min_compact_growth
+            and expansion_ratio >= min_compact_expansion
         )
-        growth_ok = large_ctx_ok or compact_ctx_ok
+        if large_ctx_ok or compact_ctx_ok:
+            qualified.append((dest, stream_id, dp_int, main_turns, pos_growth, peak_out))
+    return qualified
 
-        # Evaluate autonomous client turnaround across turns (accommodates 1-5s WAN tools, rejects >=8s human chat)
-        turnarounds = [p[4] for p in main_turns[1:] if p[4] is not None]
+
+def _detect_causal_tls_action_loop(events: list[dict[str, Any]], *, max_gap_s: float = 600.0) -> list[str]:
+    """Detect slow/jittered autonomous agents via cross-channel causal coupling (`TLS_IN -> Action -> TLS_OUT`).
+
+    Breaks past the <=6s turnaround ceiling by proving that monotonically growing encrypted LLM turns are
+    causally interleaved with host/network tool executions (HTTP probes, SSH/DB connections, or process runs),
+    even when the attacker sleeps 10-600s between turns — while rejecting human chat users (0 tool actions)
+    and noisy background telemetry daemons (actions firing during inference or repeating 1 health URL).
+    """
+    # Corroborated causal loops prove >=3 interleaved tool actions across >=2 distinct targets + zero inference noise,
+    # safely allowing compact low-output stealth sessions (e.g., 1.3KB -> 3.2KB across 6 turns) without TLS-only FPs.
+    streams = _extract_monotonic_tls_streams(
+        events, min_compact_peak=2500, min_compact_growth=1200, min_compact_expansion=1.8
+    )
+    if not streams:
+        return []
+
+    hits: list[str] = []
+    seen_dests: set[str] = set()
+    for dest, stream_id, llm_port, main_turns, pos_growth, peak_out in streams:
+        if dest in seen_dests:
+            continue
+        # Parse LLM destination IP from stream_id (`src:sp->dst:dp`) when dest_host is an SNI hostname
+        llm_ip = ""
+        if "->" in stream_id:
+            rhs = stream_id.split("->", 1)[1]
+            llm_ip = rhs.rsplit(":", 1)[0] if ":" in rhs else rhs
+
+        # Collect candidate tool actions from the same timeline, excluding the LLM stream itself and health probes
+        actions: list[tuple[float, str]] = []
+        for ev in events:
+            if ev.get("action") == "tls_persistent_turn" or ev.get("appliance") == "pcap_tls_turn":
+                continue
+            ts = ev.get("ts_epoch")
+            if ts is None:
+                continue
+            ev_dest = str(ev.get("dest_host") or "")
+            ev_port = ev.get("dest_port")
+            ev_path = str(ev.get("http_path") or "")
+            path_base = ev_path.split("?", 1)[0] if ev_path else ""
+            if path_base and (STATIC_ASSET_PATH_RE.search(path_base) or _HEALTH_PROBE_PATH_RE.match(path_base)):
+                continue
+            # Exclude connections to the LLM endpoint itself (strip optional :port suffix on Host headers)
+            ev_dest_host = ev_dest.rsplit(":", 1)[0] if (":" in ev_dest and not ev_dest.startswith("[")) else ev_dest
+            if ev_port is not None and llm_port is not None and int(ev_port) == llm_port and ev_dest_host in {dest, llm_ip}:
+                continue
+            ev_type = str(ev.get("event_type") or "")
+            if ev_type == "http" or ev_path:
+                target_key = f"http:{ev_dest}:{ev_port or ''}:{_normalize_api_path(path_base) if path_base else '/'}"
+                actions.append((float(ts), target_key))
+            elif ev_type == "process" and ev.get("command_line"):
+                cmd_key = f"proc:{_normalize_shell_cmd(str(ev['command_line']))[:48]}"
+                actions.append((float(ts), cmd_key))
+            elif ev_type == "network" and ev_dest:
+                net_key = f"net:{ev_dest}:{ev_port or ''}"
+                actions.append((float(ts), net_key))
+
+        if len(actions) < 3:
+            continue
+
+        total_gaps = len(main_turns) - 1
+        bracketed_gaps = 0
+        tight_coupled_gaps = 0
+        distinct_action_targets: set[str] = set()
+        total_inf_actions = 0
+        total_inf_sec = 0.0
+
+        for idx_t, turn in enumerate(main_turns):
+            o_s, o_e, i_s, i_e, _, _, inf_lat, _ = turn
+            if inf_lat >= 0.25:
+                total_inf_sec += inf_lat
+                total_inf_actions += sum(1 for a_ts, _ in actions if (o_e + 0.05) < a_ts < (i_s - 0.05))
+            if idx_t + 1 >= len(main_turns):
+                continue
+            next_o_s = main_turns[idx_t + 1][0]
+            gap = next_o_s - i_e
+            if gap < -0.25 or gap > max_gap_s:
+                continue
+            gap_acts = [(a_ts, a_key) for a_ts, a_key in actions if (i_e - 0.25) <= a_ts <= (next_o_s + 0.25)]
+            if 1 <= len(gap_acts) <= 8:
+                bracketed_gaps += 1
+                for _, a_key in gap_acts:
+                    distinct_action_targets.add(a_key)
+                # Tight causal handoff: tool dispatched <=3s after LLM reply OR tool output fed back <=3s before next turn
+                first_act_ts = min(a_ts for a_ts, _ in gap_acts)
+                last_act_ts = max(a_ts for a_ts, _ in gap_acts)
+                if (first_act_ts - i_e) <= 3.0 or (next_o_s - last_act_ts) <= 3.0:
+                    tight_coupled_gaps += 1
+
+        bracket_ratio = bracketed_gaps / max(total_gaps, 1)
+        inf_rate = total_inf_actions / max(total_inf_sec, 0.25)
+        # Reject constant background chatter (actions firing during inference), single-URL periodic heartbeats,
+        # and long-horizon human chat where unrelated events happen far from LLM turn boundaries (tight_coupled_gaps == 0).
+        noise_clean = (total_inf_actions == 0) or (inf_rate < 0.4)
+        if (
+            bracketed_gaps >= 3
+            and bracket_ratio >= 0.60
+            and tight_coupled_gaps >= 2
+            and len(distinct_action_targets) >= 2
+            and noise_clean
+        ):
+            seen_dests.add(dest)
+            hits.append(
+                f"causal_tls_action_loop:{dest}(gaps={bracketed_gaps}/{total_gaps},targets={len(distinct_action_targets)},growth=+{pos_growth}B,peak={peak_out}B)"
+            )
+    return hits
+
+
+def _detect_persistent_tls_agent_loop(events: list[dict[str, Any]]) -> list[str]:
+    """Detect autonomous AI agent loops inside persistent TLS 1.2/1.3 (HTTP/2 / Keep-Alive) TCP streams.
+
+    Separates autonomous tool-calling agents (including fast GPU/vLLM relays, WAN tools taking 1-5s,
+    mid-stream reasoning pauses, and context compaction) from benign REST/analytics traffic and human
+    web-LLM users via 4 invariants:
+      1. Server LLM inference latency >= 0.18s (eliminates 10-80ms REST/analytics APIs).
+      2. Non-trivial prompt + streamed completion payloads (`bytes_out >= 1000`, `bytes_in >= 400`).
+      3. Sidecar- and compaction-resilient monotonic outbound context growth (large >=10KB or compact 4KB-10KB >=2x).
+      4. Autonomous tool-loop turnaround (>=2 turnarounds <= 5.0s and median turnaround <= 6.0s,
+         accommodating real WAN tools while still rejecting human chat users who pause 8-60s+).
+    """
+    hits: list[str] = []
+    seen_dests: set[str] = set()
+    for dest, _stream_id, _dp, main_turns, pos_growth, peak_out in _extract_monotonic_tls_streams(events):
+        if dest in seen_dests:
+            continue
+        turnarounds = [p[7] for p in main_turns[1:] if p[7] is not None]
         if not turnarounds:
             continue
         sorted_ta = sorted(turnarounds)
         med_ta = sorted_ta[len(sorted_ta) // 2]
         fast_ta = sum(1 for t in turnarounds if t <= 5.0)
-
-        if growth_ok and fast_ta >= 2 and med_ta <= 6.0:
+        if fast_ta >= 2 and med_ta <= 6.0:
             seen_dests.add(dest)
             hits.append(
                 f"tls_agent_loop:{dest}(turns={len(main_turns)},growth=+{pos_growth}B,peak={peak_out}B,med_turn={med_ta:.2f}s)"
@@ -2205,8 +2413,8 @@ def _inspect_window_signals(
         reasons.add("endpoint_compressed_recon_burst")
         indicators.add(f"recon_cmd_variety:{len(recon_cmds)}")
 
-    # Zero-IOC Detector 1: Self-hosted LLM proxy sawtooth growing-context flow (multi-conn + persistent TLS 1.3)
-    # Note: KNOWN_LLM_API_DOMAINS are skipped inside both detectors; explicit authorized_llm_hosts also skips
+    # Zero-IOC Detector 1: Self-hosted LLM proxy sawtooth growing-context flow (multi-conn + persistent TLS 1.3 + causal coupling)
+    # Note: KNOWN_LLM_API_DOMAINS are skipped inside these detectors; explicit authorized_llm_hosts also skips
     # self-hosted/internal LLM gateways, while compromised workstations talking to rogue VPS proxies still alert.
     if not is_explicit_authorized_llm_host:
         sawtooth_hits = _detect_sawtooth_context_flow(events)
@@ -2217,6 +2425,16 @@ def _inspect_window_signals(
         if tls_loop_hits:
             reasons.add("encrypted_tls_agent_turn_loop")
             indicators.update(tls_loop_hits)
+        causal_tls_hits = _detect_causal_tls_action_loop(events)
+        if causal_tls_hits:
+            reasons.add("causal_tls_action_loop")
+            indicators.update(causal_tls_hits)
+
+    # Zero-IOC Detector 1b: Time-independent browser UA vs wire JA4/JA4H stack impersonation
+    ua_imp_hits = _detect_browser_ua_stack_impersonation(events)
+    if ua_imp_hits:
+        reasons.add("browser_ua_stack_impersonation")
+        indicators.update(ua_imp_hits)
 
     # Zero-IOC Detector 2: Multi-worker redundant read-only recon collision
     repeated_recon = {cmd: cnt for cmd, cnt in readonly_recon_counts.items() if cnt >= 2}
@@ -3473,6 +3691,70 @@ def scan_telemetry_file(
                     unique_targets=int(mi_ids),
                 ),
                 sample_events=[],
+            )
+        )
+
+    # Tenth pass: Long-Horizon Host-Wide Low-and-Slow Pass (breaks the 60s session-gap ceiling)
+    # Catches ultra-slow agents sleeping >60s between turns (up to 600s per turn) on a persistent TLS socket
+    # or spacing UA-spoofed CLI probes 10-30 minutes apart across separate DuckDB session windows.
+    hosts_with_causal = {c.source_host for c in candidates if "causal_tls_action_loop" in c.reasons}
+    hosts_with_ua_imp = {c.source_host for c in candidates if "browser_ua_stack_impersonation" in c.reasons}
+    by_host_all: dict[str, list[dict[str, Any]]] = {}
+    for ev in events:
+        sh = str(ev.get("source_host") or "")
+        if sh:
+            by_host_all.setdefault(sh, []).append(ev)
+
+    lh_idx = 0
+    for sh, h_events in by_host_all.items():
+        if _is_allowlisted_scanner_ip(sh, authorized_scanner_ips):
+            continue
+        h_events.sort(key=lambda e: float(e["ts_epoch"]))
+        lh_reasons: list[str] = []
+        lh_indicators: list[str] = []
+        if sh not in hosts_with_causal and not _is_allowlisted_host_or_ip(sh, authorized_llm_hosts):
+            c_hits = _detect_causal_tls_action_loop(h_events, max_gap_s=600.0)
+            if c_hits:
+                lh_reasons.append("causal_tls_action_loop")
+                lh_indicators.extend(c_hits)
+        if sh not in hosts_with_ua_imp:
+            u_hits = _detect_browser_ua_stack_impersonation(h_events)
+            if u_hits:
+                lh_reasons.append("browser_ua_stack_impersonation")
+                lh_indicators.extend(u_hits)
+        if not lh_reasons:
+            continue
+        lh_idx += 1
+        lh_min = float(h_events[0]["ts_epoch"])
+        lh_max = float(h_events[-1]["ts_epoch"])
+        lh_span = max(lh_max - lh_min, 1.0)
+        lh_risk, lh_tier = compute_risk_score(lh_reasons)
+        lh_surf: SurfaceType = "network" if "causal_tls_action_loop" in lh_reasons else "web_portal"
+        candidates.append(
+            CandidateWindow(
+                window_id=f"LONGHORIZON{lh_idx:03d}-{sh}",
+                source_host=sh,
+                actor=sh,
+                surface=lh_surf,
+                appliance=None,
+                start_time=datetime.fromtimestamp(lh_min, tz=timezone.utc),
+                end_time=datetime.fromtimestamp(lh_max, tz=timezone.utc),
+                reasons=sorted(lh_reasons),
+                risk_score=lh_risk,
+                alert_tier=lh_tier,  # type: ignore[arg-type]
+                matched_indicators=sorted(set(lh_indicators)),
+                cadence=CadenceStats(
+                    event_count=len(h_events),
+                    window_seconds=round(lh_span, 2),
+                    events_per_minute=round((len(h_events) / lh_span) * 60.0, 2),
+                    error_count=sum(1 for e in h_events if (e.get("status_code") or 0) >= 400),
+                    error_ratio=round(sum(1 for e in h_events if (e.get("status_code") or 0) >= 400) / max(len(h_events), 1), 3),
+                    unique_targets=len({e.get("http_path") or e.get("dest_host") for e in h_events if e.get("http_path") or e.get("dest_host")}),
+                ),
+                sample_events=[
+                    {k: v for k, v in ev.items() if k not in {"ts_epoch", "raw_json"} and v not in ("", None)}
+                    for ev in h_events[:max_sample_events]
+                ],
             )
         )
 

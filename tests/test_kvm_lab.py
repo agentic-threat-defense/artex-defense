@@ -755,3 +755,308 @@ def test_motd_cloaking_and_fast_40ms_think_act_evasion_regressions(tmp_path: Pat
     assert tcands and "think_act_bimodal_cadence" in tcands[0].reasons
 
 
+def test_wire_http_ja4h_and_browser_ua_stack_impersonation(tmp_path: Path) -> None:
+    """Time-independent ceiling breaker: real wire FoxIO JA4H + UA-vs-stack impersonation (30-min paced TP & 0 FP)."""
+    exporter = _load_exporter()
+
+    # 1. Pure-Python FoxIO JA4H spec verification on curl vs real Chrome 131 HTTP/1.1 requests
+    curl_req = (
+        b"GET /api/v1/jobs HTTP/1.1\r\n"
+        b"Host: 192.0.2.20:8088\r\n"
+        b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0\r\n"
+        b"Accept: */*\r\n\r\n"
+    )
+    m_c, u_c, ja4h_curl = exporter.parse_http_request_ja4h(curl_req)
+    assert m_c == "GET" and u_c == "/api/v1/jobs"
+    assert ja4h_curl.startswith("ge11nn030000_"), f"Unexpected curl JA4H: {ja4h_curl}"
+
+    chrome_req = (
+        b"GET /dashboard HTTP/1.1\r\n"
+        b"Host: app.example.test\r\n"
+        b"Connection: keep-alive\r\n"
+        b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0\r\n"
+        b"Accept: text/html,application/xhtml+xml\r\n"
+        b"Accept-Encoding: gzip, deflate, br\r\n"
+        b"Accept-Language: en-US,en;q=0.9\r\n"
+        b"Sec-Fetch-Site: none\r\n"
+        b"Sec-Fetch-Mode: navigate\r\n"
+        b"Sec-Fetch-Dest: document\r\n"
+        b"Cookie: session=abc; theme=dark\r\n"
+        b"Referer: https://app.example.test/\r\n\r\n"
+    )
+    m_b, u_b, ja4h_chrome = exporter.parse_http_request_ja4h(chrome_req)
+    assert m_b == "GET" and u_b == "/dashboard"
+    assert ja4h_chrome.startswith("ge11cr09enus_"), f"Unexpected Chrome JA4H: {ja4h_chrome}"
+
+    # 1b. Fragmented/incomplete TCP HTTP header without `\r\n\r\n` must NOT emit a fabricated stripped JA4H
+    trunc_req = b"GET /dashboard HTTP/1.1\r\nHost: app.example.test\r\nUser-Agent: Mozilla/5.0 Chrome/131.0.0.0\r\n"
+    assert exporter.parse_http_request_ja4h(trunc_req) == ("", "", "")
+
+    # 1c. Corporate proxy HTTP CONNECT tunnel (`co11nn030000_...`) from real Chrome 131 must NOT trigger impersonation
+    conn_req = (
+        b"CONNECT portal.corp.example:443 HTTP/1.1\r\n"
+        b"Host: portal.corp.example:443\r\n"
+        b"Proxy-Connection: keep-alive\r\n"
+        b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0\r\n\r\n"
+    )
+    m_co, _, ja4h_connect = exporter.parse_http_request_ja4h(conn_req)
+    assert m_co == "CONNECT" and ja4h_connect.startswith("co11nn030000_")
+
+    # 2. TP A: Ultra-slow curl spoofing Chrome/131 spaced 30 MINUTES apart across 2 non-asset paths -> MUST fire!
+    slow_spoof = tmp_path / "slow_30m_spoof.jsonl"
+    slow_spoof.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {
+                    "timestamp": "2026-11-23T01:00:00.000Z",
+                    "source_host": "192.0.2.50",
+                    "actor": "192.0.2.50",
+                    "event_type": "http",
+                    "surface": "web_portal",
+                    "dest_host": "app.example.test",
+                    "dest_port": 8088,
+                    "http_method": "GET",
+                    "http_path": "/api/v1/jobs",
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0",
+                    "ja4h": ja4h_curl,
+                    "status_code": 200,
+                },
+                {
+                    "timestamp": "2026-11-23T01:30:00.000Z",
+                    "source_host": "192.0.2.50",
+                    "actor": "192.0.2.50",
+                    "event_type": "http",
+                    "surface": "web_portal",
+                    "dest_host": "app.example.test",
+                    "dest_port": 8088,
+                    "http_method": "GET",
+                    "http_path": "/.env",
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0",
+                    "ja4h": ja4h_curl,
+                    "status_code": 200,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cands_spoof = scan_telemetry_file(slow_spoof)
+    assert cands_spoof and "browser_ua_stack_impersonation" in cands_spoof[0].reasons
+
+    # 3. TP B: Python OpenSSL JA4 (`t13d311100_...`, no ALPN + 31 ciphers) claiming Firefox/132 across 2 paths -> fires!
+    tls_spoof = tmp_path / "tls_ua_spoof.jsonl"
+    tls_spoof.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {
+                    "timestamp": "2026-11-23T02:00:00.000Z",
+                    "source_host": "192.0.2.51",
+                    "actor": "192.0.2.51",
+                    "event_type": "http",
+                    "surface": "web_portal",
+                    "dest_host": "app.example.test",
+                    "dest_port": 443,
+                    "http_method": "GET",
+                    "http_path": "/api/v1/status",
+                    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0",
+                    "ja4": "t13d311100_e8f1e7e78f70_d41ae481755e",
+                    "status_code": 200,
+                },
+                {
+                    "timestamp": "2026-11-23T02:15:00.000Z",
+                    "source_host": "192.0.2.51",
+                    "actor": "192.0.2.51",
+                    "event_type": "http",
+                    "surface": "web_portal",
+                    "dest_host": "app.example.test",
+                    "dest_port": 443,
+                    "http_method": "GET",
+                    "http_path": "/api/v1/jobs",
+                    "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0",
+                    "ja4": "t13d311100_e8f1e7e78f70_d41ae481755e",
+                    "status_code": 200,
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cands_tls = scan_telemetry_file(tls_spoof)
+    assert cands_tls and "browser_ua_stack_impersonation" in cands_tls[0].reasons
+
+    # 4. FP Guards: Real Chrome 131 + honest curl/8.5.0 + single dev curl -A Chrome on /healthz -> ALL 0 FP!
+    benign_j = tmp_path / "benign_ua_stacks.jsonl"
+    benign_j.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                # Real Chrome 131
+                {"timestamp": "2026-11-23T03:00:00.000Z", "source_host": "192.0.2.60", "actor": "192.0.2.60", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/dashboard", "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0", "ja4": "t13d1516h2_8daaf6152771_e5627efa2ab1", "ja4h": ja4h_chrome, "status_code": 200},
+                {"timestamp": "2026-11-23T03:00:08.000Z", "source_host": "192.0.2.60", "actor": "192.0.2.60", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/api/v1/jobs", "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0", "ja4": "t13d1516h2_8daaf6152771_e5627efa2ab1", "ja4h": ja4h_chrome, "status_code": 200},
+                # Honest curl
+                {"timestamp": "2026-11-23T03:01:00.000Z", "source_host": "192.0.2.61", "actor": "192.0.2.61", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/api/v1/status", "user_agent": "curl/8.5.0", "ja4h": ja4h_curl, "status_code": 200},
+                {"timestamp": "2026-11-23T03:01:10.000Z", "source_host": "192.0.2.61", "actor": "192.0.2.61", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/api/v1/jobs", "user_agent": "curl/8.5.0", "ja4h": ja4h_curl, "status_code": 200},
+                # Single dev curl -A Chrome on /healthz
+                {"timestamp": "2026-11-23T03:02:00.000Z", "source_host": "192.0.2.62", "actor": "192.0.2.62", "event_type": "http", "surface": "web_portal", "dest_host": "app.example.test", "http_method": "GET", "http_path": "/healthz", "user_agent": "Mozilla/5.0 Chrome/131.0.0.0", "ja4h": ja4h_curl, "status_code": 200},
+                # Real Chrome 131 routing HTTPS via corporate HTTP CONNECT proxy tunnels
+                {"timestamp": "2026-11-23T03:03:00.000Z", "source_host": "192.0.2.63", "actor": "192.0.2.63", "event_type": "http", "surface": "web_portal", "dest_host": "portal.corp.example", "http_method": "CONNECT", "http_path": "portal.corp.example:443", "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0", "ja4h": ja4h_connect, "status_code": 200},
+                {"timestamp": "2026-11-23T03:03:12.000Z", "source_host": "192.0.2.63", "actor": "192.0.2.63", "event_type": "http", "surface": "web_portal", "dest_host": "api.corp.example", "http_method": "CONNECT", "http_path": "api.corp.example:443", "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0", "ja4h": ja4h_connect, "status_code": 200},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(benign_j) == []
+
+
+def test_causal_tls_action_loop_beats_slow_jitter_and_rejects_human_chat_noise(tmp_path: Path) -> None:
+    """Causal coupling ceiling breaker: catches 15s & 90s ultra-slow agents while 0 FP on human chat + background chatter."""
+    from datetime import datetime, timezone
+
+    def _iso(ep: float) -> str:
+        return datetime.fromtimestamp(ep, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    def _make_tls_turn(src: str, dest: str, ep: float, ob: int, ib: int, lat: float, ta: float | None) -> dict:
+        return {
+            "timestamp": _iso(ep),
+            "source_host": src,
+            "actor": src,
+            "event_type": "network",
+            "surface": "network",
+            "appliance": "pcap_tls_turn",
+            "dest_host": dest,
+            "dest_port": 8443,
+            "bytes_out": ob,
+            "bytes_in": ib,
+            "action": "tls_persistent_turn",
+            "raw_json": {
+                "stream_id": f"{src}:50000->198.51.100.20:8443",
+                "inference_latency_s": lat,
+                "client_turnaround_s": ta,
+                "out_duration_s": 0.01,
+                "in_duration_s": 0.01,
+            },
+        }
+
+    # 1. TP A: 15s-jittered stealth agent (evades <=6s encrypted_tls_agent_turn_loop!) with TLS_IN -> curl/ssh -> TLS_OUT
+    evs_15s: list[dict] = []
+    t = 1795410000.0
+    actions_spec = [
+        ("http", "/api/v1/status", 8088),
+        ("http", "/api/v1/jobs", 8088),
+        ("http", "/config.json", 8088),
+        ("network", "", 22),
+    ]
+    for i, (ob, ib) in enumerate([(1320, 680), (2150, 740), (2890, 760), (3650, 720), (4520, 790)]):
+        evs_15s.append(_make_tls_turn("192.0.2.70", "relay-slow.example.test", t, ob, ib, 0.55, 15.0 if i > 0 else None))
+        if i < len(actions_spec):
+            atype, apath, aport = actions_spec[i]
+            # Agent sleeps 14.5s, executes tool, then sends result to LLM 0.5s later
+            act_t = t + 0.57 + 14.5
+            evs_15s.append(
+                {
+                    "timestamp": _iso(act_t),
+                    "source_host": "192.0.2.70",
+                    "actor": "192.0.2.70",
+                    "event_type": atype,
+                    "surface": "web_portal" if atype == "http" else "network",
+                    "dest_host": "198.51.100.99",
+                    "dest_port": aport,
+                    "http_method": "GET" if atype == "http" else "",
+                    "http_path": apath,
+                    "status_code": 200 if atype == "http" else None,
+                    "action": "zeek_http" if atype == "http" else "zeek_conn_SF",
+                }
+            )
+            t = act_t + 0.5
+    p_15s = tmp_path / "causal_15s.jsonl"
+    p_15s.write_text("\n".join(json.dumps(e) for e in evs_15s) + "\n", encoding="utf-8")
+    c_15s = scan_telemetry_file(p_15s)
+    assert c_15s and "causal_tls_action_loop" in c_15s[0].reasons
+    assert "encrypted_tls_agent_turn_loop" not in c_15s[0].reasons
+
+    # 2. TP B: 90s ultra-slow agent crossing the 60s DuckDB session boundary -> Pass 10 long-horizon catches it!
+    evs_90s: list[dict] = []
+    t = 1795420000.0
+    for i, (ob, ib) in enumerate([(1350, 690), (2200, 750), (3100, 770), (3950, 730), (4800, 800)]):
+        evs_90s.append(_make_tls_turn("192.0.2.71", "relay-90s.example.test", t, ob, ib, 0.60, 90.0 if i > 0 else None))
+        if i < len(actions_spec):
+            atype, apath, aport = actions_spec[i]
+            act_t = t + 0.62 + 89.2
+            evs_90s.append(
+                {
+                    "timestamp": _iso(act_t),
+                    "source_host": "192.0.2.71",
+                    "actor": "192.0.2.71",
+                    "event_type": atype,
+                    "surface": "web_portal" if atype == "http" else "network",
+                    "dest_host": "198.51.100.99",
+                    "dest_port": aport,
+                    "http_method": "GET" if atype == "http" else "",
+                    "http_path": apath,
+                    "status_code": 200 if atype == "http" else None,
+                    "action": "zeek_http" if atype == "http" else "zeek_conn_SF",
+                }
+            )
+            t = act_t + 0.8
+    p_90s = tmp_path / "causal_90s.jsonl"
+    p_90s.write_text("\n".join(json.dumps(e) for e in evs_90s) + "\n", encoding="utf-8")
+    c_90s = scan_telemetry_file(p_90s)
+    assert c_90s and any("causal_tls_action_loop" in c.reasons for c in c_90s)
+
+    # 3. FP Guard: Human chatting with self-hosted LLM (15s pauses) + noisy 1Hz background telemetry daemon -> 0 FP!
+    evs_fp: list[dict] = []
+    t = 1795430000.0
+    for i, (ob, ib) in enumerate([(1400, 900), (2400, 1100), (3500, 1200), (4700, 1300), (6100, 1400)]):
+        evs_fp.append(_make_tls_turn("192.0.2.72", "internal-chat.example.test", t, ob, ib, 1.4, 15.0 if i > 0 else None))
+        # Constant 1Hz background daemon hitting one telemetry endpoint during BOTH inference and pauses
+        for sec in range(16):
+            evs_fp.append(
+                {
+                    "timestamp": _iso(t + sec + 0.5),
+                    "source_host": "192.0.2.72",
+                    "actor": "192.0.2.72",
+                    "event_type": "http",
+                    "surface": "web_portal",
+                    "dest_host": "telemetry.example.test",
+                    "dest_port": 443,
+                    "http_method": "POST",
+                    "http_path": "/v1/metrics",
+                    "status_code": 200,
+                    "action": "zeek_http",
+                }
+            )
+        t += 16.4
+    p_fp = tmp_path / "causal_fp_noisy_human.jsonl"
+    p_fp.write_text("\n".join(json.dumps(e) for e in evs_fp) + "\n", encoding="utf-8")
+    assert all("causal_tls_action_loop" not in c.reasons for c in scan_telemetry_file(p_fp))
+
+    # 4. FP Guard B: Long-horizon human chat (180s pauses) + 4 unrelated events 90s away from every LLM turn
+    #    (tight_coupled_gaps == 0, total_inf_actions == 0) -> MUST produce 0 FP!
+    evs_fp_slow: list[dict] = []
+    t = 1795440000.0
+    unrelated = ["mail.corp.example", "calendar.corp.example", "intranet.corp.example", "ntp.corp.example"]
+    for i, (ob, ib) in enumerate([(1400, 900), (2400, 1100), (3500, 1200), (4700, 1300), (6100, 1400)]):
+        evs_fp_slow.append(_make_tls_turn("192.0.2.73", "internal-chat.example.test", t, ob, ib, 0.6, 180.0 if i > 0 else None))
+        if i < len(unrelated):
+            evs_fp_slow.append(
+                {
+                    "timestamp": _iso(t + 90.0),
+                    "source_host": "192.0.2.73",
+                    "actor": "192.0.2.73",
+                    "event_type": "network",
+                    "surface": "network",
+                    "dest_host": unrelated[i],
+                    "dest_port": 443,
+                    "action": "zeek_conn_SF",
+                }
+            )
+        t += 180.6
+    p_fp_slow = tmp_path / "causal_fp_long_horizon_human.jsonl"
+    p_fp_slow.write_text("\n".join(json.dumps(e) for e in evs_fp_slow) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(p_fp_slow) == []
+
+
+
