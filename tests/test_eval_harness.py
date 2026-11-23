@@ -11,9 +11,9 @@ def test_eval_harness_achieves_perfect_precision_and_recall_on_synthetic_suite()
     report = run_evaluation(rules_dir=RULES_DIR, with_gemma4=False)
     metrics = report["metrics"]
 
-    assert metrics["tp"] == 18, f"Expected all 18 synthetic scenarios detected: {report['scenarios']}"
+    assert metrics["tp"] == 19, f"Expected all 19 synthetic scenarios detected: {report['scenarios']}"
     assert metrics["fp"] == 0, f"Unexpected false positives on benign baselines: {report['scenarios']}"
-    assert metrics["tn"] == 16
+    assert metrics["tn"] == 17
     assert metrics["fn"] == 0
     assert metrics["precision"] == 1.0
     assert metrics["recall"] == 1.0
@@ -26,7 +26,7 @@ def test_eval_harness_achieves_perfect_precision_and_recall_on_synthetic_suite()
         assert scenario["kill_chain_ok"] is True, f"{scenario['dataset']} failed kill-chain correlation"
 
     # Every Sigma rule must be syntactically valid, hit >=1 synthetic attack, and have 0 baseline FPs
-    assert len(report["sigma_rules"]) >= 19
+    assert len(report["sigma_rules"]) >= 21
     for rule in report["sigma_rules"]:
         assert rule["valid"] is True, f"Invalid Sigma YAML {rule['file']}: {rule['errors']}"
         assert rule["synthetic_attack_hits"] >= 1, (

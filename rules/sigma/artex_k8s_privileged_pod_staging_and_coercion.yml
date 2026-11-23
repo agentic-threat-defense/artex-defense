@@ -1,0 +1,85 @@
+title: Autonomous Agentic Privileged Kubernetes Pod Staging & Coercion Payload
+id: 7d2e8a41-5c9b-4f13-b602-8a4e91c7d305
+status: experimental
+description: >
+  Detects Kubernetes audit events creating or patching privileged Pods (including containers
+  and initContainers) with host namespace escape settings combined with inline base64 shell
+  payloads or Active Directory / EFSRPC / SQL coercion and relay tooling.
+references:
+  - https://www.ic3.gov
+  - https://kubernetes.io/docs/concepts/security/pod-security-standards/
+author: ARTEX Defensive Research Workbench
+date: 2026-11-22
+tags:
+  - attack.execution
+  - attack.privilege_escalation
+  - attack.defense_evasion
+  - attack.t1610
+  - attack.t1611
+  - attack.t1027
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  selection_k8s_pod_verb:
+    verb:
+      - 'create'
+      - 'patch'
+      - 'update'
+    objectRef.resource: 'pods'
+  selection_priv_containers:
+    requestObject.spec.containers.securityContext.privileged: true
+  selection_priv_init:
+    requestObject.spec.initContainers.securityContext.privileged: true
+  selection_inline_args:
+    requestObject.spec.containers.args|contains:
+      - 'base64 -d'
+      - 'base64 --decode'
+      - 'ntlmrelayx'
+      - 'petitpotam'
+      - 'efsrpc'
+      - 'coercer'
+      - 'smbserver.py'
+      - 'chisel client'
+  selection_inline_init_args:
+    requestObject.spec.initContainers.args|contains:
+      - 'base64 -d'
+      - 'base64 --decode'
+      - 'ntlmrelayx'
+      - 'petitpotam'
+      - 'efsrpc'
+      - 'coercer'
+      - 'smbserver.py'
+      - 'chisel client'
+  selection_inline_cmd:
+    requestObject.spec.containers.command|contains:
+      - 'base64 -d'
+      - 'base64 --decode'
+      - 'ntlmrelayx'
+      - 'petitpotam'
+      - 'efsrpc'
+      - 'coercer'
+      - 'smbserver.py'
+      - 'chisel client'
+  selection_inline_init_cmd:
+    requestObject.spec.initContainers.command|contains:
+      - 'base64 -d'
+      - 'base64 --decode'
+      - 'ntlmrelayx'
+      - 'petitpotam'
+      - 'efsrpc'
+      - 'coercer'
+      - 'smbserver.py'
+      - 'chisel client'
+  filter_benign_system_images:
+    requestObject.spec.containers.image|contains:
+      - 'kube-proxy'
+      - 'cilium'
+      - 'calico/node'
+      - 'fluent-bit'
+      - 'datadog/agent'
+  condition: selection_k8s_pod_verb and (selection_priv_containers or selection_priv_init) and (selection_inline_args or selection_inline_init_args or selection_inline_cmd or selection_inline_init_cmd) and not filter_benign_system_images
+falsepositives:
+  - Custom administrative troubleshooting Pods running inline base64 scripts with privileged:true (review namespace and initiating user).
+level: critical

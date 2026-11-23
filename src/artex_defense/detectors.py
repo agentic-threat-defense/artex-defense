@@ -193,6 +193,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "idp_mfa_fatigue_or_2fa_tampering": 90,
     "idp_sp_secret_guess_then_success": 90,
     "agentic_server_callback_on_probe": 90,
+    "k8s_privileged_pod_staging": 90,
     "dll_sideload_relocated_binary_with_config": 90,
     "cloud_ec2_role_external_replay": 90,
     "cloud_multi_identity_from_single_ip": 90,
@@ -1184,6 +1185,130 @@ def _count_think_act_cycles(
     return cycles
 
 
+SOAP_OSEXECUTE_RE = re.compile(
+    r"<(?:[a-z0-9_-]+:)?OSExecute(?:\s|>|/)|/SAPControl\b.*OSExecute|SOAPAction[\"':=\s]+[^\s\"']*OSExecute",
+    re.IGNORECASE,
+)
+K8S_INLINE_STAGING_PAYLOAD_RE = re.compile(
+    r"(?:\bbase64\s+(?:-d|--decode)\b|\bntlmrelayx\b|\bpetitpotam\b|\befsrpc\b|\bcoercer\b|\bsmbserver\.py\b|\bchisel\s+client\b)",
+    re.IGNORECASE,
+)
+K8S_OFFENSIVE_TOOL_RE = re.compile(
+    r"(?:\bntlmrelayx\b|\bpetitpotam\b|\befsrpc\b|\bcoercer\b|\bsmbserver\.py\b|\bchisel\s+client\b)",
+    re.IGNORECASE,
+)
+K8S_BENIGN_DAEMONSET_IMAGES: tuple[str, ...] = (
+    "kube-proxy",
+    "cilium",
+    "calico/node",
+    "fluent-bit",
+    "datadog/agent",
+    "node-exporter",
+)
+
+
+def _parse_raw_dict(ev: dict[str, Any]) -> dict[str, Any]:
+    raw = ev.get("raw_json")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                return obj
+        except ValueError:
+            pass
+    return {}
+
+
+def _check_k8s_privileged_pod_staging(ev: dict[str, Any], raw_obj: dict[str, Any], searchable: str) -> str | None:
+    """Detect Kubernetes audit/manifest privileged Pod staging with inline base64 or coercion/relay payloads."""
+    obj_ref = raw_obj.get("objectRef") if isinstance(raw_obj.get("objectRef"), dict) else {}
+    req_obj = raw_obj.get("requestObject") if isinstance(raw_obj.get("requestObject"), dict) else {}
+    spec = (
+        req_obj.get("spec")
+        if isinstance(req_obj.get("spec"), dict)
+        else (raw_obj.get("spec") if isinstance(raw_obj.get("spec"), dict) else {})
+    )
+    is_pod_ev = (
+        str(obj_ref.get("resource", "")).lower() == "pods"
+        or str(raw_obj.get("kind", "")).lower() == "pod"
+        or str(req_obj.get("kind", "")).lower() == "pod"
+    )
+    if not is_pod_ev or not spec:
+        return None
+
+    verb = str(raw_obj.get("verb") or ev.get("action") or "").lower()
+    if verb and verb not in {"create", "patch", "update", "k8s_audit", "pod_create"}:
+        return None
+
+    containers: list[Any] = []
+    for cfield in ("containers", "initContainers", "ephemeralContainers"):
+        cval = spec.get(cfield)
+        if isinstance(cval, list):
+            containers.extend(cval)
+    volumes = spec.get("volumes") if isinstance(spec.get("volumes"), list) else []
+    has_host_root_mount = any(
+        isinstance(v, dict)
+        and isinstance(v.get("hostPath"), dict)
+        and str(v["hostPath"].get("path", "")).strip() == "/"
+        for v in volumes
+    )
+    has_host_ns = bool(spec.get("hostPID")) or bool(spec.get("hostNetwork")) or has_host_root_mount
+
+    for ctr in containers:
+        if not isinstance(ctr, dict):
+            continue
+        sec_ctx = ctr.get("securityContext") if isinstance(ctr.get("securityContext"), dict) else {}
+        is_priv = bool(sec_ctx.get("privileged"))
+        if not (is_priv or has_host_ns):
+            continue
+        image_low = str(ctr.get("image") or "").lower()
+        cmd_parts: list[str] = []
+        for field in ("command", "args"):
+            val = ctr.get(field)
+            if isinstance(val, list):
+                cmd_parts.extend(str(x) for x in val)
+            elif isinstance(val, str):
+                cmd_parts.append(val)
+        cmd_blob = " ".join(cmd_parts) + " " + str(ev.get("command_line") or "")
+        m_pay = K8S_INLINE_STAGING_PAYLOAD_RE.search(cmd_blob)
+        if not m_pay:
+            continue
+        if any(img in image_low for img in K8S_BENIGN_DAEMONSET_IMAGES) and not K8S_OFFENSIVE_TOOL_RE.search(cmd_blob):
+            continue
+        meta = req_obj.get("metadata") if isinstance(req_obj.get("metadata"), dict) else {}
+        pod_name = str(meta.get("name") or obj_ref.get("name") or ctr.get("name") or "pod")[:40]
+        return f"k8s_priv_pod:{pod_name}:{m_pay.group(0)[:30]}"
+    return None
+
+
+def _check_scoped_msedge_dll_or_cookie_exporter(ev: dict[str, Any], raw_obj: dict[str, Any], proc_and_cmd: str) -> str | None:
+    """Signer-scoped msedge.dll sideloading & cookie_exporter.exe masquerading (0 FP on Microsoft-signed WebView2/Edge)."""
+    orig_fname = str(raw_obj.get("OriginalFileName") or raw_obj.get("original_filename") or "").strip().lower()
+    if orig_fname == "cookie_exporter.exe" or "cookie_exporter.exe" in proc_and_cmd.lower():
+        return "masqueraded_cookie_exporter.exe"
+
+    img_loaded = str(
+        raw_obj.get("ImageLoaded")
+        or raw_obj.get("FileName")
+        or raw_obj.get("module_path")
+        or ev.get("process")
+        or ""
+    ).strip().lower()
+    if img_loaded == "msedge.dll" or img_loaded.endswith(("\\msedge.dll", "/msedge.dll")):
+        signed_val = raw_obj.get("Signed")
+        sig_status = str(raw_obj.get("SignatureStatus") or "").strip().lower()
+        signer = str(raw_obj.get("Signature") or raw_obj.get("Signer") or "").strip()
+        if signed_val is False or (isinstance(signed_val, str) and signed_val.strip().lower() == "false"):
+            return "msedge_dll_unsigned"
+        if sig_status in {"expired", "invalid", "untrusted", "revoked", "unsigned"}:
+            return f"msedge_dll_sig_{sig_status}"
+        if signer and "microsoft corporation" not in signer.lower():
+            return f"msedge_dll_non_ms_signer:{signer[:40]}"
+    return None
+
+
 def _ua_client_family(ua: str) -> str:
     """Collapse minor browser version drift while distinguishing true HTTP client stacks."""
     low = ua.strip().lower()
@@ -1397,8 +1522,26 @@ def _inspect_window_signals(
             reasons.add("jwt_alg_none_spray")
             indicators.add("jwt_alg_none_header")
 
+        raw_obj = _parse_raw_dict(ev)
+        soap_blob = searchable + " " + " ".join(
+            str(raw_obj.get(k) or "") for k in ("request_body", "body", "payload", "http_body")
+        )
+        if SOAP_OSEXECUTE_RE.search(soap_blob):
+            reasons.add("web_ssrf_or_upload_webshell")
+            indicators.add("soap_osexecute_rce")
+
+        k8s_hit = _check_k8s_privileged_pod_staging(ev, raw_obj, searchable)
+        if k8s_hit:
+            reasons.add("k8s_privileged_pod_staging")
+            indicators.add(k8s_hit)
+
         # Generalized DLL sideloading outside standard install paths + adjacent config.bin
+        # plus signer-scoped msedge.dll / cookie_exporter.exe masquerading (0 FP on Microsoft-signed Edge/WebView2)
         proc_and_cmd = f"{ev.get('process', '')} {ev.get('command_line', '')}"
+        scoped_sideload = _check_scoped_msedge_dll_or_cookie_exporter(ev, raw_obj, proc_and_cmd)
+        if scoped_sideload:
+            reasons.add("dll_sideload_relocated_binary_with_config")
+            indicators.add(scoped_sideload)
         if SIDELOAD_HOST_BIN_RE.search(proc_and_cmd) and not STANDARD_WIN_INSTALL_PATH_RE.search(proc_and_cmd):
             if any(tok in proc_and_cmd.lower() for tok in ("\\programdata\\", "\\users\\public\\", "\\temp\\", "/tmp/", "i4")):
                 saw_relocated_sideload_host = True

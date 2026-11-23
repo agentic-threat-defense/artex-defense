@@ -588,6 +588,10 @@ def _flatten_suricata_eve_record(record: dict[str, Any]) -> tuple[dict[str, Any]
             flat["status_code"] = http_obj["status"]
         if http_obj.get("ja4h") and not flat.get("ja4h"):
             flat["ja4h"] = http_obj["ja4h"]
+        if http_obj.get("http_request_body") and not flat.get("request_body"):
+            flat["request_body"] = http_obj["http_request_body"]
+    if record.get("payload_printable") and not flat.get("request_body"):
+        flat["request_body"] = record["payload_printable"]
     dns_obj = record.get("dns")
     if isinstance(dns_obj, dict) and dns_obj.get("rrname") and not flat.get("dest_host"):
         flat["dest_host"] = dns_obj["rrname"]
@@ -605,8 +609,56 @@ def _flatten_suricata_eve_record(record: dict[str, Any]) -> tuple[dict[str, Any]
     return flat, True
 
 
+def _normalize_k8s_audit_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Normalize native Kubernetes `audit.k8s.io/v1` Event JSON into canonical event dict."""
+    ts_raw = _extract_first(record, ("requestReceivedTimestamp", "stageTimestamp", "timestamp"))
+    if ts_raw is None:
+        raise ValueError("Kubernetes audit record missing timestamp field")
+    ts = parse_timestamp(ts_raw)
+    source_ips = record.get("sourceIPs")
+    src_ip = ""
+    if isinstance(source_ips, list):
+        for ip in source_ips:
+            if isinstance(ip, str) and ip.strip():
+                src_ip = ip.strip()
+                break
+    source_host = str(record.get("source_host") or src_ip or "k8s-apiserver")
+    user_obj = record.get("user") if isinstance(record.get("user"), dict) else {}
+    actor = str(user_obj.get("username") or record.get("actor") or source_host)
+    obj_ref = record.get("objectRef") if isinstance(record.get("objectRef"), dict) else {}
+    ns = str(obj_ref.get("namespace") or "")
+    res = str(obj_ref.get("resource") or "")
+    name = str(obj_ref.get("name") or "")
+    dest_host = "/".join(p for p in (ns, res, name) if p) or "kubernetes"
+    resp_status = record.get("responseStatus") if isinstance(record.get("responseStatus"), dict) else {}
+    code_raw = resp_status.get("code")
+    status_code = int(code_raw) if isinstance(code_raw, int) and not isinstance(code_raw, bool) else None
+    return _make_event(
+        ts=ts,
+        source_host=source_host,
+        actor=actor,
+        event_type="k8s_audit",
+        surface="cloud_iam",
+        appliance="kubernetes_audit",
+        dest_host=dest_host,
+        http_path=str(record.get("requestURI") or ""),
+        user_agent=str(record.get("userAgent") or ""),
+        status_code=status_code,
+        action=str(record.get("verb") or record.get("action") or "k8s_audit"),
+        raw=record,
+    )
+
+
 def normalize_json_record(record: dict[str, Any]) -> dict[str, Any]:
-    """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, Suricata EVE, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
+    """Normalize JSONL records (generic, Sysmon, MDE, CrowdStrike, S1, Zscaler NSS, Suricata EVE, Kubernetes audit, CloudTrail, YAF/IPFIX, Okta, Entra, Duo, PingFederate, Google Workspace)."""
+    # Detect native Kubernetes `audit.k8s.io/v1` Event JSON
+    if (
+        str(record.get("apiVersion", "")).startswith("audit.k8s.io/")
+        or (record.get("kind") == "Event" and isinstance(record.get("objectRef"), dict))
+        or ("requestReceivedTimestamp" in record and isinstance(record.get("objectRef"), dict))
+    ):
+        return _normalize_k8s_audit_record(record)
+
     # Detect native AWS CloudTrail JSON (eventSource + eventName + userIdentity / *.amazonaws.com[.cn])
     if (
         "eventName" in record
@@ -1173,9 +1225,19 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
             whole = json.loads(raw_text)
         except json.JSONDecodeError:
             whole = None
-        if isinstance(whole, dict) and isinstance(whole.get("Records"), list):
+        if isinstance(whole, dict) and (
+            isinstance(whole.get("Records"), list)
+            or (
+                isinstance(whole.get("items"), list)
+                and (
+                    whole.get("kind") == "EventList"
+                    or str(whole.get("apiVersion", "")).startswith("audit.k8s.io/")
+                )
+            )
+        ):
+            batch = whole["Records"] if isinstance(whole.get("Records"), list) else whole["items"]
             events: list[dict[str, Any]] = []
-            for rec in whole["Records"]:
+            for rec in batch:
                 if isinstance(rec, dict):
                     try:
                         events.append(normalize_json_record(rec))
@@ -1191,6 +1253,11 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
                     except (ValueError, KeyError, TypeError):
                         continue
             return events
+        if isinstance(whole, dict):
+            try:
+                return [normalize_json_record(whole)]
+            except (ValueError, KeyError, TypeError):
+                return []
 
     # Resilient per-line JSONL parsing: skip individual malformed/truncated lines instead of aborting the whole file.
     events = []
@@ -1203,6 +1270,16 @@ def parse_auto(file_path: str | Path, fmt: str = "auto") -> list[dict[str, Any]]
             if isinstance(record, dict):
                 if isinstance(record.get("Records"), list):
                     for sub in record["Records"]:
+                        if isinstance(sub, dict):
+                            try:
+                                events.append(normalize_json_record(sub))
+                            except (ValueError, KeyError, TypeError):
+                                continue
+                elif isinstance(record.get("items"), list) and (
+                    record.get("kind") == "EventList"
+                    or str(record.get("apiVersion", "")).startswith("audit.k8s.io/")
+                ):
+                    for sub in record["items"]:
                         if isinstance(sub, dict):
                             try:
                                 events.append(normalize_json_record(sub))

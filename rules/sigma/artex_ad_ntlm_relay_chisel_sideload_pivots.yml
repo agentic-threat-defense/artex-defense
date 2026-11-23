@@ -49,6 +49,11 @@ detection:
       - '\msedge.exe'
     CommandLine|contains:
       - 'config.bin'
+  selection_masqueraded_cookie_exporter:
+    - Image|endswith:
+        - '\cookie_exporter.exe'
+    - CommandLine|contains:
+        - 'cookie_exporter.exe'
   selection_relocated_svchost:
     Image|endswith:
       - '\svchost.exe'
@@ -61,7 +66,7 @@ detection:
       - '\Windows\WinSxS\'
       - '\AppData\Local\Microsoft\Edge\Application\'
       - '\AppData\Local\Microsoft\EdgeUpdate\'
-  condition: selection_chisel or selection_tunnel_tools or selection_ad_abuse or ((selection_relocated_edge_config or selection_relocated_svchost) and not filter_legit_paths)
+  condition: selection_chisel or selection_tunnel_tools or selection_ad_abuse or selection_masqueraded_cookie_exporter or ((selection_relocated_edge_config or selection_relocated_svchost) and not filter_legit_paths)
 falsepositives:
   - Authorized internal red-team or purple-team exercises using Chisel, Ligolo, NetExec, or Impacket.
 level: high

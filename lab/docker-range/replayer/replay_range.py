@@ -117,10 +117,17 @@ def run_attack_behaviors() -> None:
     http_req("/login", ua="artex-judge-r121")
     http_req("/login", ua="LLMLeak-RedTeam/1.0 (authorised-scan)")
 
-    # 2. Canary probes (URI + POST body), X-ARTX-KEY, JWT alg:none, LiteLLM MCP RCE probe (Suricata sid:9100009, 9100016, 9100012, 9100015)
+    # 2. Canary probes (URI + POST body), SOAP OSExecute, X-ARTX-KEY, JWT alg:none, LiteLLM MCP RCE probe (Suricata sid:9100009, 9100016, 9100018, 9100012, 9100015)
     http_req("/zzzrandom98765", ua="Mozilla/5.0 (security-testing; authorized)")
     http_req("/login?user=zz_no_such_user_1a2b&artex=1", method="POST", ua="Mozilla/5.0 (security-testing; authorized)")
     http_req("/api/v1/comment", method="POST", body=b'{"comment":"ARTEX_WRITE_PROBE"}', ua="python-httpx/0.28.1")
+    http_req(
+        "/SAPControl",
+        method="POST",
+        body=b"<soapenv:Envelope><soapenv:Body><urn:OSExecute><command>id</command></urn:OSExecute></soapenv:Body></soapenv:Envelope>",
+        headers={"Content-Type": "text/xml"},
+        ua="python-httpx/0.28.1",
+    )
     http_req(
         "/api/v1/status",
         headers={

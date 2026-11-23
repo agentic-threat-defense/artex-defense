@@ -87,6 +87,21 @@ CA_STORE_RELPATHS: tuple[str, ...] = (
     "etc/pki/ca-trust/source/anchors",
     "etc/ssl/certs",
 )
+SYSTEMD_UNIT_RELPATHS: tuple[str, ...] = (
+    "etc/systemd/system",
+    "etc/systemd/user",
+)
+SYSTEMD_EXECSTART_RE = re.compile(r"^\s*ExecStart\s*=\s*[-+@!:]*\s*(.+)$", re.IGNORECASE)
+SYSTEMD_LINE_CONT_RE = re.compile(r"\\\r?\n[ \t]*")
+SYSTEMD_SSH_REVERSE_RE = re.compile(
+    r"(?:^|[/\s\"'])ssh(?=\s|$).*(?:\s-[A-Za-z0-9]*R(?=\s|$|\d|:)|(?:^|[\s\"']|-o\s*)RemoteForward(?:\s|=|$))",
+    re.IGNORECASE,
+)
+SYSTEMD_VOLATILE_BIN_RE = re.compile(r"(?:^|[\s\"'=])(?:/tmp/|/var/tmp/|/dev/shm/)", re.IGNORECASE)
+SYSTEMD_TUNNEL_TOOL_RE = re.compile(
+    r"\b(?:chisel|ligolo-agent|scopeweaver|antifox|artex-(?:server|worker|agent))\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -508,6 +523,68 @@ def check_postgres_dual_graph(pg_schema_file: Path | None) -> list[TriageFinding
     return []
 
 
+def check_systemd_persistence(fs_root: Path) -> list[TriageFinding]:
+    """Read-only, symlink-safe scan of custom systemd service units for SSH reverse tunnels or volatile-path staging."""
+    findings: list[TriageFinding] = []
+    for rel in SYSTEMD_UNIT_RELPATHS:
+        unit_dir = fs_root / rel
+        if not unit_dir.is_dir():
+            continue
+        try:
+            entries = sorted(unit_dir.iterdir(), key=lambda p: p.name)
+        except OSError:
+            continue
+        for item in entries:
+            if item.is_symlink() or not item.is_file() or item.suffix.lower() != ".service":
+                continue
+            try:
+                if item.stat().st_size > 256 * 1024:
+                    continue
+                text = item.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            unfolded = SYSTEMD_LINE_CONT_RE.sub(" ", text)
+            for line in unfolded.splitlines():
+                m = SYSTEMD_EXECSTART_RE.match(line)
+                if not m:
+                    continue
+                exec_cmd = m.group(1).strip()
+                if SYSTEMD_TUNNEL_TOOL_RE.search(exec_cmd):
+                    findings.append(
+                        TriageFinding(
+                            check="systemd_persistence",
+                            severity="critical",
+                            summary="Systemd service ExecStart invokes ARTEX/Chisel/Ligolo tunnel or harness binary",
+                            evidence=f"unit={item.name} exec={exec_cmd[:160]}",
+                            path_or_pid=str(item),
+                        )
+                    )
+                    break
+                if SYSTEMD_SSH_REVERSE_RE.search(exec_cmd):
+                    findings.append(
+                        TriageFinding(
+                            check="systemd_persistence",
+                            severity="high",
+                            summary="Systemd service ExecStart configures persistent SSH reverse port-forwarding (-R)",
+                            evidence=f"unit={item.name} exec={exec_cmd[:160]}",
+                            path_or_pid=str(item),
+                        )
+                    )
+                    break
+                if SYSTEMD_VOLATILE_BIN_RE.search(exec_cmd):
+                    findings.append(
+                        TriageFinding(
+                            check="systemd_persistence",
+                            severity="high",
+                            summary="Systemd service ExecStart launches binary from volatile staging path (/tmp, /var/tmp, /dev/shm)",
+                            evidence=f"unit={item.name} exec={exec_cmd[:160]}",
+                            path_or_pid=str(item),
+                        )
+                    )
+                    break
+    return findings
+
+
 def _default_live_scan_specs(max_depth: int) -> list[tuple[Path, int]]:
     """Return bounded high-yield live Linux scan roots with tighter depth on /root and /home."""
     specs: list[tuple[Path, int]] = []
@@ -546,6 +623,7 @@ def run_host_triage(
         "proc_proxy_ca_injection",
         "filesystem_artifacts",
         "installed_ca_certs",
+        "systemd_persistence",
     ]
     findings: list[TriageFinding] = []
 
@@ -555,6 +633,7 @@ def run_host_triage(
     for scan_root, depth_limit in scan_specs:
         findings.extend(check_filesystem_artifacts([scan_root], max_depth=depth_limit))
     findings.extend(check_installed_ca_certs(root_path))
+    findings.extend(check_systemd_persistence(root_path))
 
     if pg_schema_file is not None:
         checks_run.append("postgres_dual_graph")

@@ -73,7 +73,18 @@ detection:
       - '/cmd-output/'
       - 'tomicdd/artex'
       - 'congdonglinux/artex'
-  condition: (selection_compiler and selection_staging_path and not filter_legit_builds) or selection_proxychains or selection_chisel_linux or selection_linux_pivot_tools or selection_artex_linux_host
+  selection_ssh_reverse_tunnel:
+    Image|endswith:
+      - '/ssh'
+    CommandLine|contains:
+      - ' -R '
+      - ' -NR '
+      - ' -fNR '
+      - ' -NTR '
+      - 'RemoteForward'
+    CommandLine|contains|all:
+      - ':'
+  condition: (selection_compiler and selection_staging_path and not filter_legit_builds) or selection_proxychains or selection_chisel_linux or selection_linux_pivot_tools or selection_artex_linux_host or selection_ssh_reverse_tunnel
 falsepositives:
   - Dedicated CI/CD build servers compiling temporary probes in /tmp (exclude known CI/build hosts).
   - Authorized red-team jump hosts running Proxychains, Chisel, or Impacket.

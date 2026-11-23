@@ -236,3 +236,171 @@ def test_sigma_rules_match_unmodified_raw_vendor_json_without_parser() -> None:
         (RULES_DIR / "artex_entra_sp_secret_abuse_and_mfa_tampering.yml").read_text(encoding="utf-8")
     )
     assert evaluate_sigma_rule_on_events(entra_rule, raw_entra) == 2
+
+
+def test_k8s_privileged_pod_staging_scoped_msedge_dll_and_soap_osexecute_with_zero_fp(tmp_path: Path) -> None:
+    """Validate unmodified native audit.k8s.io/v1 Event & EventList, initContainers, signer-scoped msedge.dll, and SOAP OSExecute."""
+    # 1. Benign native audit.k8s.io/v1 DaemonSet (kube-proxy, NO inline base64/coercion) + Microsoft-signed msedge.dll -> 0 FP!
+    benign_k8s_native = {
+        "kind": "Event",
+        "apiVersion": "audit.k8s.io/v1",
+        "stage": "ResponseComplete",
+        "requestReceivedTimestamp": "2026-11-22T22:00:00.000000Z",
+        "stageTimestamp": "2026-11-22T22:00:00.100000Z",
+        "verb": "create",
+        "user": {"username": "system:serviceaccount:kube-system:daemon-set-controller"},
+        "sourceIPs": ["10.40.0.5"],
+        "userAgent": "kube-controller-manager/v1.31.0",
+        "requestURI": "/api/v1/namespaces/kube-system/pods",
+        "objectRef": {"resource": "pods", "namespace": "kube-system", "name": "kube-proxy-abc"},
+        "responseStatus": {"code": 201},
+        "requestObject": {
+            "kind": "Pod",
+            "metadata": {"name": "kube-proxy-abc"},
+            "spec": {
+                "hostNetwork": True,
+                "containers": [
+                    {
+                        "name": "kube-proxy",
+                        "image": "registry.k8s.io/kube-proxy:v1.31.0",
+                        "securityContext": {"privileged": True},
+                        "command": ["/usr/local/bin/kube-proxy", "--config=/var/lib/kube-proxy/config.conf"],
+                    }
+                ],
+            },
+        },
+    }
+    benign_msedge = {
+        "timestamp": "2026-11-22T22:00:05.000Z",
+        "source_host": "win-wks-01",
+        "actor": "alice",
+        "event_type": "image_load",
+        "surface": "endpoint",
+        "process": r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\134.0\msedge.dll",
+        "ImageLoaded": r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\134.0\msedge.dll",
+        "Signed": True,
+        "Signature": "Microsoft Corporation",
+        "SignatureStatus": "Valid",
+    }
+    benign_path = tmp_path / "benign_k8s_edge.jsonl"
+    benign_path.write_text(json.dumps(benign_k8s_native) + "\n" + json.dumps(benign_msedge) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(benign_path) == []
+
+    # 2. TP: Unmodified native `audit.k8s.io/v1` Event JSON (NO synthetic timestamp/actor/source_host!)
+    k8s_tp_native = {
+        "kind": "Event",
+        "apiVersion": "audit.k8s.io/v1",
+        "stage": "ResponseComplete",
+        "requestReceivedTimestamp": "2026-11-22T22:05:00.000000Z",
+        "stageTimestamp": "2026-11-22T22:05:00.120000Z",
+        "verb": "create",
+        "user": {"username": "ci-deployer"},
+        "sourceIPs": ["198.51.100.77"],
+        "userAgent": "kubectl/v1.31.0",
+        "requestURI": "/api/v1/namespaces/default/pods",
+        "objectRef": {"resource": "pods", "namespace": "default", "name": "diag-runner"},
+        "responseStatus": {"code": 201},
+        "requestObject": {
+            "kind": "Pod",
+            "metadata": {"name": "diag-runner"},
+            "spec": {
+                "hostPID": True,
+                "hostNetwork": True,
+                "volumes": [{"name": "host-root", "hostPath": {"path": "/"}}],
+                "containers": [
+                    {
+                        "name": "runner",
+                        "image": "python:3.12-slim",
+                        "securityContext": {"privileged": True},
+                        "command": ["/bin/sh", "-c"],
+                        "args": ["echo ZWNobyB0ZXN0 | base64 -d | sh"],
+                    }
+                ],
+            },
+        },
+    }
+    k8s_path = tmp_path / "k8s_tp_native.jsonl"
+    k8s_path.write_text(json.dumps(k8s_tp_native) + "\n", encoding="utf-8")
+    k8s_cands = scan_telemetry_file(k8s_path)
+    assert k8s_cands and "k8s_privileged_pod_staging" in k8s_cands[0].reasons
+    assert k8s_cands[0].alert_tier == "alert"
+    assert k8s_cands[0].actor == "ci-deployer" and k8s_cands[0].source_host == "198.51.100.77"
+
+    # 2b. TP: Native `audit.k8s.io/v1` EventList wrapper with privileged `initContainers` bypass test!
+    k8s_init_event = {
+        "kind": "Event",
+        "apiVersion": "audit.k8s.io/v1",
+        "requestReceivedTimestamp": "2026-11-22T22:05:30.000000Z",
+        "verb": "create",
+        "user": {"username": "svc-cicd"},
+        "sourceIPs": ["198.51.100.78"],
+        "requestURI": "/api/v1/namespaces/prod/pods",
+        "objectRef": {"resource": "pods", "namespace": "prod", "name": "init-stage-01"},
+        "requestObject": {
+            "kind": "Pod",
+            "metadata": {"name": "init-stage-01"},
+            "spec": {
+                "initContainers": [
+                    {
+                        "name": "bootstrap",
+                        "image": "alpine:3.20",
+                        "securityContext": {"privileged": True},
+                        "command": ["/bin/sh", "-c"],
+                        "args": ["echo ZWNobyB0ZXN0 | base64 -d | sh"],
+                    }
+                ],
+                "containers": [{"name": "sleep", "image": "alpine:3.20", "command": ["sleep", "3600"]}],
+            },
+        },
+    }
+    k8s_list_path = tmp_path / "k8s_eventlist.json"
+    k8s_list_path.write_text(
+        json.dumps({"apiVersion": "audit.k8s.io/v1", "kind": "EventList", "items": [benign_k8s_native, k8s_init_event]}),
+        encoding="utf-8",
+    )
+    list_cands = scan_telemetry_file(k8s_list_path)
+    assert len(list_cands) == 1
+    assert "k8s_privileged_pod_staging" in list_cands[0].reasons
+    assert list_cands[0].actor == "svc-cicd"
+
+    # 3. TP: Expired non-Microsoft msedge.dll + masqueraded cookie_exporter.exe -> dll_sideload_relocated_binary_with_config
+    dll_tp = {
+        "timestamp": "2026-11-22T22:06:00.000Z",
+        "source_host": "win-srv-02",
+        "actor": "svc_deploy",
+        "event_type": "image_load",
+        "surface": "endpoint",
+        "process": r"C:\Users\Public\stage\msedge.dll",
+        "ImageLoaded": r"C:\Users\Public\stage\msedge.dll",
+        "Signed": True,
+        "Signature": "ThirdParty Publisher Inc.",
+        "SignatureStatus": "Expired",
+    }
+    dll_path = tmp_path / "dll_tp.jsonl"
+    dll_path.write_text(json.dumps(dll_tp) + "\n", encoding="utf-8")
+    dll_cands = scan_telemetry_file(dll_path)
+    assert dll_cands and "dll_sideload_relocated_binary_with_config" in dll_cands[0].reasons
+
+    # 4. TP: SOAP OSExecute request envelope (including nested Suricata EVE http.http_request_body) -> web_ssrf_or_upload_webshell
+    soap_tp = {
+        "timestamp": "2026-11-22T22:07:00.000000+0000",
+        "event_type": "http",
+        "src_ip": "198.51.100.88",
+        "dest_ip": "10.0.0.25",
+        "dest_port": 50013,
+        "http": {
+            "hostname": "sap-app.corp.local",
+            "url": "/SAPControl",
+            "http_method": "POST",
+            "status": 200,
+            "http_request_body": "<soapenv:Envelope><soapenv:Body><urn:OSExecute><command>whoami</command></urn:OSExecute></soapenv:Body></soapenv:Envelope>",
+        },
+    }
+    soap_path = tmp_path / "soap_tp.jsonl"
+    soap_path.write_text(json.dumps(soap_tp) + "\n", encoding="utf-8")
+    soap_cands = scan_telemetry_file(soap_path)
+    assert soap_cands and "web_ssrf_or_upload_webshell" in soap_cands[0].reasons
+
+    # 5. Sigma YAML matches raw K8s audit JSON directly (both containers & initContainers; skips benign DaemonSet)
+    k8s_rule = yaml.safe_load((RULES_DIR / "artex_k8s_privileged_pod_staging_and_coercion.yml").read_text(encoding="utf-8"))
+    assert evaluate_sigma_rule_on_events(k8s_rule, [benign_k8s_native, k8s_tp_native, k8s_init_event]) == 2

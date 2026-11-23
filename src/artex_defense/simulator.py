@@ -1408,6 +1408,93 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
         ],
     }
 
+    # Baseline 17: Benign Kubernetes system DaemonSet in NATIVE unmodified `audit.k8s.io/v1` Event JSON -> 0 FPs
+    cur = t0 + timedelta(hours=22)
+    k8s_benign: list[dict[str, Any]] = [
+        {
+            "kind": "Event",
+            "apiVersion": "audit.k8s.io/v1",
+            "stage": "ResponseComplete",
+            "requestReceivedTimestamp": _iso(cur),
+            "stageTimestamp": _iso(cur),
+            "verb": "create",
+            "user": {"username": "system:serviceaccount:kube-system:daemon-set-controller"},
+            "sourceIPs": ["10.40.0.5"],
+            "userAgent": "kube-controller-manager/v1.31.0",
+            "requestURI": "/api/v1/namespaces/kube-system/pods",
+            "objectRef": {"resource": "pods", "namespace": "kube-system", "name": "kube-proxy-xyz"},
+            "responseStatus": {"code": 201},
+            "requestObject": {
+                "kind": "Pod",
+                "metadata": {"name": "kube-proxy-xyz"},
+                "spec": {
+                    "hostNetwork": True,
+                    "containers": [
+                        {
+                            "name": "kube-proxy",
+                            "image": "registry.k8s.io/kube-proxy:v1.31.0",
+                            "securityContext": {"privileged": True},
+                            "command": ["/usr/local/bin/kube-proxy", "--config=/var/lib/kube-proxy/config.conf"],
+                        }
+                    ],
+                },
+            },
+        }
+    ]
+    p = _write_jsonl(base_dir / "baseline_k8s_daemonset_normal.jsonl", k8s_benign)
+    manifest["baseline_k8s_daemonset_normal"] = {
+        "path": str(p),
+        "expected_positive": False,
+        "format": "jsonl",
+        "surface": "cloud_iam",
+        "expected_reasons": [],
+    }
+
+    # Scenario 19: Privileged Kubernetes Pod Staging in NATIVE unmodified `audit.k8s.io/v1` Event JSON
+    cur = t0 + timedelta(hours=23)
+    k8s_attack: list[dict[str, Any]] = [
+        {
+            "kind": "Event",
+            "apiVersion": "audit.k8s.io/v1",
+            "stage": "ResponseComplete",
+            "requestReceivedTimestamp": _iso(cur),
+            "stageTimestamp": _iso(cur),
+            "verb": "create",
+            "user": {"username": "compromised-deployer"},
+            "sourceIPs": ["198.51.100.77"],
+            "userAgent": "kubectl/v1.31.0",
+            "requestURI": "/api/v1/namespaces/default/pods",
+            "objectRef": {"resource": "pods", "namespace": "default", "name": "stage-worker-01"},
+            "responseStatus": {"code": 201},
+            "requestObject": {
+                "kind": "Pod",
+                "metadata": {"name": "stage-worker-01"},
+                "spec": {
+                    "hostPID": True,
+                    "hostNetwork": True,
+                    "volumes": [{"name": "host-root", "hostPath": {"path": "/"}}],
+                    "containers": [
+                        {
+                            "name": "worker",
+                            "image": "python:3.12-slim",
+                            "securityContext": {"privileged": True},
+                            "command": ["/bin/sh", "-c"],
+                            "args": ["echo ZWNobyByZWxheQ== | base64 -d | sh"],
+                        }
+                    ],
+                },
+            },
+        }
+    ]
+    p = _write_jsonl(base_dir / "scenario_k8s_privileged_pod_staging.jsonl", k8s_attack)
+    manifest["scenario_k8s_privileged_pod_staging"] = {
+        "path": str(p),
+        "expected_positive": True,
+        "format": "jsonl",
+        "surface": "cloud_iam",
+        "expected_reasons": ["k8s_privileged_pod_staging"],
+    }
+
     manifest_path = base_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
