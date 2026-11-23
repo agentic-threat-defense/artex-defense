@@ -193,6 +193,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "idp_spray_then_success": 95,
     "idp_mfa_fatigue_or_2fa_tampering": 90,
     "idp_sp_secret_guess_then_success": 90,
+    "idp_sp_multi_ip_replay": 85,
     "agentic_server_callback_on_probe": 90,
     "k8s_privileged_pod_staging": 90,
     "dll_sideload_relocated_binary_with_config": 90,
@@ -424,20 +425,6 @@ RECON_CMD_RE = re.compile(
 )
 
 # High-confidence web/appliance daemon parents (any shell spawn is suspicious)
-WEB_PARENT_PROCESSES: tuple[str, ...] = (
-    "w3wp.exe",
-    "nginx",
-    "httpd",
-    "apache2",
-    "php-fpm",
-    "tomcat",
-    "nitro",
-    "restjavad",
-    "sqlservr.exe",
-    "puma",
-    "unicorn",
-    "passenger",
-)
 # Exact / versioned daemon basename matcher (prevents path-substring FPs like /home/passenger/deploy.sh or /srv/puma-docs/build.sh)
 WEB_PARENT_BASE_RE = re.compile(
     r"^(?:w3wp\.exe|nginx(?:\.exe)?|httpd(?:\.exe)?|apache\d*(?:\.exe)?|php-fpm[\d.]*|tomcat\d*(?:\.exe)?|nitro|restjavad|sqlservr\.exe|puma|unicorn|unicorn_rails|passenger)$",
@@ -824,6 +811,28 @@ INTERNAL_OR_IMDS_IPV4_NETS: tuple[ipaddress.IPv4Network, ...] = (
 )
 
 
+def _is_external_non_rfc1918_ip(host: str) -> bool:
+    """Return True if `host` is a valid non-RFC1918 / non-local IPv4 or IPv6 address (includes TEST-NET ranges for lab testing)."""
+    try:
+        ip = ipaddress.ip_address(host.strip("[] "))
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv4Address):
+        return not any(ip in net for net in INTERNAL_OR_IMDS_IPV4_NETS)
+    return not (ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip in ipaddress.IPv6Network("fc00::/7"))
+
+
+def _ip_prefix_bucket(host: str) -> str:
+    """Return coarse /16 (IPv4) or /48 (IPv6) network bucket to distinguish residential proxy rotation from single-region SaaS egress."""
+    try:
+        ip = ipaddress.ip_address(host.strip("[] "))
+    except ValueError:
+        return host
+    if isinstance(ip, ipaddress.IPv4Address):
+        return str(ipaddress.ip_network(f"{ip}/16", strict=False))
+    return str(ipaddress.ip_network(f"{ip}/48", strict=False))
+
+
 def _is_wildcard_ip_dns_fqdn(fqdn: str) -> bool:
     """Return True if an FQDN belongs to a wildcard IP-reflecting DNS service."""
     host = fqdn.strip().rstrip(".").lower()
@@ -921,7 +930,8 @@ SIDELOAD_CONFIG_OR_DLL_RE = re.compile(
 # Internal AD NTLM capture/relay, EPA probing, Kerberos/LDAP enum, SAMR/SRVSVC RPC, & offline Impacket wheel staging
 AD_NTLM_RELAY_OR_ENUM_RE = re.compile(
     r"(\bntlmrelayx\b|\bsmbserver\.py\b|\bsecretsdump\b|\bpetitpotam\b|"
-    r"(?:^|[\s/\\])coercer(?:\.py)?\s+(?:coerce|scan|fuzz)\b|(?<![a-z0-9_-])coercer[/\\]coercer\.py\b|\bcertipy\b|"
+    r"(?:^|[\s/\\])coercer(?:\.py)?\s+(?:coerce|scan|fuzz)\b|(?<![a-z0-9_-])coercer[/\\]coercer\.py\b|"
+    r"(?<![a-z0-9_-])responder[/\\]responder\.py\b|\bcertipy\b|"
     r"\bkerbrute\b|\bbloodhound\b|\bldapdomaindump\b|ntlm[-_ ]?(?:relay|epa|capture|coerce)|"
     r"ldapsearch\s+[^|;\n]*-x\b.*(?:-b\s|namingcontexts|rootdse|samaccountname)|"
     r"(?:samr|srvsvc|lsarpc)[-_ ]?(?:probe|enum|dump)|"
@@ -933,6 +943,17 @@ AD_NTLM_RELAY_OR_ENUM_RE = re.compile(
 SOCKS_CHISEL_PIVOT_RE = re.compile(
     r"(\bchisel(?:\.exe)?\s+(?:client|server)\b|\bligolo[-_ ]?(?:agent|proxy)\b|\bfrpc\b|"
     r"\bproxychains4?\s+-f\s+\S+|\bsocks5?[-_ ]?proxy\b|r:socks\b)",
+    re.IGNORECASE,
+)
+# Ephemeral TryCloudflare Quick Tunnels (`cloudflared tunnel --url`), temp-staged cloudflared, or devtunnel host on non-workstation servers
+SERVER_EPHEMERAL_TUNNEL_RE = re.compile(
+    r"(\bcloudflared(?:\.exe)?\s+tunnel\b[^|;\n]*--url\b|"
+    r"(?:^|[\s'\"])(?:/(?:tmp|dev/shm|var/tmp)/|[^\s'\"]*(?:\\temp\\|\\programdata\\|\\users\\public\\))\S*cloudflared(?:\.exe)?(?:\s+\S*cloudflared(?:\.exe)?)?\s+tunnel\b|"
+    r"\bdevtunnel(?:\.exe)?\s+host\b)",
+    re.IGNORECASE,
+)
+HIGH_VALUE_M365_SP_RESOURCE_RE = re.compile(
+    r"(?:key\s*vault|microsoft\s*graph|exchange\s*online|sharepoint)",
     re.IGNORECASE,
 )
 
@@ -2026,6 +2047,11 @@ def _inspect_window_signals(
         if m_piv:
             reasons.add("socks_chisel_pivot_tunnel_mesh")
             indicators.add(f"socks_pivot:{m_piv.group(0)[:60]}")
+        elif not is_workstation and ev.get("surface") == "endpoint":
+            m_ephem_tun = SERVER_EPHEMERAL_TUNNEL_RE.search(f"{ev.get('process', '')} {ev.get('command_line', '')}")
+            if m_ephem_tun:
+                reasons.add("socks_chisel_pivot_tunnel_mesh")
+                indicators.add(f"server_ephemeral_tunnel:{m_ephem_tun.group(0)[:60]}")
         if not is_workstation and ON_BOX_STAGING_COMPILER_RE.search(ev.get("command_line", "")):
             reasons.add("on_box_compiler_in_staging_path")
             indicators.add(f"staging_compiler:{ev.get('command_line', '')[:70]}")
@@ -3901,6 +3927,101 @@ def scan_telemetry_file(
                 sample_events=[],
             )
         )
+
+    # Pass 9b: Pre-Authorized Service Principal Compromise (Storm-0940 / ConnectWise Cloud Backup M365 pattern)
+    # Catches ZERO-401 stolen OAuth/SP sign-ins across 60-minute windows without FPing single-IP or single-/16 SaaS backups:
+    # (A) idp_sp_multi_ip_replay: >=3 external /16 prefixes, OR >=3 external IPs across >=2 /16s + >=3 resources,
+    #     OR >=3 external IPs + >=4 distinct resources incl. high-value M365/Vault
+    # (B) idp_sp_multi_resource_fanout: >=2 distinct external IPs + >=4 distinct resources incl. high-value M365/Vault
+    sp_fanout_existing = {
+        c.actor for c in candidates if "idp_sp_multi_resource_fanout" in c.reasons
+    }
+    sp_ok_rows = con.execute(
+        """
+        SELECT actor, source_host, dest_host, ts_epoch, appliance
+        FROM events
+        WHERE event_type = 'idp_sp_auth'
+          AND actor <> ''
+          AND source_host <> ''
+          AND actor <> source_host
+          AND (status_code IS NULL OR (status_code >= 200 AND status_code < 300))
+        ORDER BY actor ASC, ts_epoch ASC
+        """
+    ).fetchall()
+    sp_by_actor: dict[str, list[tuple[float, str, str, str]]] = {}
+    for sp_act, sp_ip, sp_res, sp_ts, sp_app in sp_ok_rows:
+        if not _is_external_non_rfc1918_ip(str(sp_ip)):
+            continue
+        if _is_allowlisted_scanner_ip(str(sp_ip), authorized_scanner_ips):
+            continue
+        sp_by_actor.setdefault(str(sp_act), []).append((float(sp_ts), str(sp_ip), str(sp_res or ""), str(sp_app or "")))
+
+    sp_idx = 0
+    for sp_act, sp_evs in sp_by_actor.items():
+        # Evaluate every 60-minute (3600s) sliding window per SP actor so a high-volume benign window
+        # earlier in the day cannot mask a compact 3-4 event external replay/fanout window later.
+        best_match: tuple[int, list[str], list[str], list[tuple[float, str, str, str]], set[str], set[str]] | None = None
+        left = 0
+        for right in range(len(sp_evs)):
+            while sp_evs[right][0] - sp_evs[left][0] > 3600.0:
+                left += 1
+            cur_win = sp_evs[left : right + 1]
+            ext_ips = {ip for _, ip, _, _ in cur_win}
+            ext_prefixes = {_ip_prefix_bucket(ip) for ip in ext_ips}
+            sp_res_set = {res for _, _, res, _ in cur_win if res}
+            has_hv_m365 = any(HIGH_VALUE_M365_SP_RESOURCE_RE.search(r) for r in sp_res_set)
+
+            sp_reasons: list[str] = []
+            sp_inds: list[str] = []
+            if (
+                len(ext_prefixes) >= 3
+                or (len(ext_ips) >= 3 and len(ext_prefixes) >= 2 and len(sp_res_set) >= 3)
+                or (len(ext_ips) >= 3 and len(sp_res_set) >= 4 and has_hv_m365)
+            ):
+                sp_reasons.append("idp_sp_multi_ip_replay")
+                sp_inds.append(f"sp_external_ips:{len(ext_ips)},prefixes:{len(ext_prefixes)}")
+            if len(ext_ips) >= 2 and len(sp_res_set) >= 4 and has_hv_m365 and sp_act not in sp_fanout_existing:
+                sp_reasons.append("idp_sp_multi_resource_fanout")
+                sp_inds.append(f"sp_distinct_resources:{len(sp_res_set)}")
+
+            if sp_reasons:
+                score_key = len(sp_reasons) * 100 + len(ext_ips) * 10 + len(sp_res_set)
+                if best_match is None or score_key > best_match[0]:
+                    best_match = (score_key, sp_reasons, sp_inds, cur_win, ext_ips, sp_res_set)
+
+        if best_match is not None:
+            _, sp_reasons, sp_inds, matched_win, ext_ips, sp_res_set = best_match
+            sp_idx += 1
+            sp_min = matched_win[0][0]
+            sp_max = matched_win[-1][0]
+            sp_span = max(sp_max - sp_min, 1.0)
+            sp_risk, sp_tier = compute_risk_score(sp_reasons)
+            sp_apps = [app for _, _, _, app in matched_win if app]
+            sp_appliance = Counter(sp_apps).most_common(1)[0][0] if sp_apps else "entra_id"
+            candidates.append(
+                CandidateWindow(
+                    window_id=f"SPABUSE{sp_idx:03d}-{sp_act[:24]}",
+                    source_host=sorted(ext_ips)[0],
+                    actor=sp_act,
+                    surface="cloud_iam",
+                    appliance=sp_appliance,
+                    start_time=datetime.fromtimestamp(sp_min, tz=timezone.utc),
+                    end_time=datetime.fromtimestamp(sp_max, tz=timezone.utc),
+                    reasons=sorted(sp_reasons),
+                    risk_score=sp_risk,
+                    alert_tier=sp_tier,  # type: ignore[arg-type]
+                    matched_indicators=sp_inds + [f"sp_resources:{','.join(sorted(sp_res_set))[:120]}"],
+                    cadence=CadenceStats(
+                        event_count=len(matched_win),
+                        window_seconds=round(sp_span, 2),
+                        events_per_minute=round((len(matched_win) / sp_span) * 60.0, 2),
+                        error_count=0,
+                        error_ratio=0.0,
+                        unique_targets=len(sp_res_set),
+                    ),
+                    sample_events=[],
+                )
+            )
 
     # Tenth pass: Long-Horizon Host-Wide Low-and-Slow Pass (breaks the 60s session-gap ceiling)
     # Catches ultra-slow agents sleeping >60s between turns (up to 600s per turn) on a persistent TLS socket

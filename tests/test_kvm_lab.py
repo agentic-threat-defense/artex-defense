@@ -1667,6 +1667,71 @@ def test_ruby2shell_parent_shell_spawn_and_5xx_heap_grooming_zero_fp(tmp_path: P
     assert c_slow_pre and "web_memory_corruption_crash_loop" in c_slow_pre[0].reasons
 
 
+def test_storm0940_preauth_sp_replay_and_server_ephemeral_tunnel_and_responder_zero_fp(tmp_path: Path) -> None:
+    """Adversarial mutation matrix regressions: Storm-0940 zero-401 SP replay, server cloudflared --url, and Responder/Responder.py."""
+    # 1. TP: Storm-0940 / ConnectWise Cloud Backup zero-401 SP replay across rotating external IPs + 4 M365 resources
+    #    preceded earlier in the day by 10 benign single-IP/single-resource events (verifies sliding-window non-masking!).
+    p_sp = tmp_path / "storm0940_sp.jsonl"
+    sp_rows = [
+        {"createdDateTime": f"2026-11-23T02:00:{i*3:02d}Z", "ipAddress": "198.51.100.10", "servicePrincipalName": "Backup-Connector-SP", "isInteractive": False, "resourceDisplayName": "Office 365 Exchange Online", "status": {"errorCode": 0}}
+        for i in range(10)
+    ] + [
+        {"createdDateTime": f"2026-11-23T05:0{i}:00Z", "ipAddress": f"198.51.100.{50+i}", "servicePrincipalName": "Backup-Connector-SP", "isInteractive": False, "resourceDisplayName": res, "status": {"errorCode": 0}}
+        for i, res in enumerate(["Microsoft Graph", "Office 365 Exchange Online", "Office 365 SharePoint Online", "Azure Key Vault"])
+    ]
+    p_sp.write_text("\n".join(json.dumps(r) for r in sp_rows) + "\n", encoding="utf-8")
+    c_sp = scan_telemetry_file(p_sp)
+    sp_reasons = {r for c in c_sp for r in c.reasons}
+    assert {"idp_sp_multi_ip_replay", "idp_sp_multi_resource_fanout"}.issubset(sp_reasons)
+
+    # 2. TN (0 FP): Single-IP static SaaS backup touching 4 M365 resources, single-/16 cloud backup cluster touching 3 M365 resources, & RFC1918 SP
+    p_sp_ok = tmp_path / "benign_saas_sp.jsonl"
+    sp_ok_rows = [
+        {"createdDateTime": f"2026-11-23T06:00:0{i}Z", "ipAddress": "203.0.113.50", "servicePrincipalName": "Veeam-O365-Backup-SP", "isInteractive": False, "resourceDisplayName": res, "status": {"errorCode": 0}}
+        for i, res in enumerate(["Microsoft Graph", "Office 365 Exchange Online", "Office 365 SharePoint Online", "Microsoft Teams Services"])
+    ] + [
+        {"createdDateTime": f"2026-11-23T06:00:1{i}Z", "ipAddress": f"20.80.{i}.10", "servicePrincipalName": "Azure-Same16-Backup-SP", "isInteractive": False, "resourceDisplayName": res, "status": {"errorCode": 0}}
+        for i, res in enumerate(["Microsoft Graph", "Office 365 Exchange Online", "Office 365 SharePoint Online"])
+    ] + [
+        {"createdDateTime": f"2026-11-23T06:01:0{i}Z", "ipAddress": f"10.50.0.{10+i}", "servicePrincipalName": "Internal-Sync-SP", "isInteractive": False, "resourceDisplayName": res, "status": {"errorCode": 0}}
+        for i, res in enumerate(["Microsoft Graph", "Office 365 Exchange Online", "Office 365 SharePoint Online", "Azure Key Vault"])
+    ]
+    p_sp_ok.write_text("\n".join(json.dumps(r) for r in sp_ok_rows) + "\n", encoding="utf-8")
+    assert scan_telemetry_file(p_sp_ok) == []
+
+    # 3. TP: Server-side ephemeral cloudflared --url tunnel, argv[0]-rewritten /tmp cloudflared, & standalone Responder/Responder.py
+    p_srv = tmp_path / "server_tunnel_and_responder.jsonl"
+    p_srv.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T07:00:00Z", "source_host": "app-prod-07", "actor": "uid:33", "event_type": "process", "surface": "endpoint", "parent_process": "/bin/sh", "process": "/tmp/.cache/cloudflared", "command_line": "cloudflared tunnel run"},
+                {"timestamp": "2026-11-23T07:00:02Z", "source_host": "app-prod-07", "actor": "uid:33", "event_type": "process", "surface": "endpoint", "parent_process": "/bin/bash", "process": "/usr/bin/python3", "command_line": "python3 /opt/tools/Responder/Responder.py -I eth0"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    c_srv = scan_telemetry_file(p_srv)
+    assert c_srv and {"socks_chisel_pivot_tunnel_mesh", "ad_ntlm_relay_or_ldap_kerb_enum"}.issubset(set(c_srv[0].reasons))
+
+    # 4. TN (0 FP): Dev workstation running cloudflared --url + prod server running named cloudflared tunnel run + autoresponder/responder.py
+    p_srv_ok = tmp_path / "benign_tunnels_and_autoresponder.jsonl"
+    p_srv_ok.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {"timestamp": "2026-11-23T07:05:00Z", "source_host": "laptop-dev-04", "actor": "alice", "event_type": "process", "surface": "endpoint", "parent_process": "/bin/zsh", "process": "/usr/bin/cloudflared", "command_line": "cloudflared tunnel --url http://localhost:3000"},
+                {"timestamp": "2026-11-23T07:05:05Z", "source_host": "edge-prod-01", "actor": "cloudflared", "event_type": "process", "surface": "endpoint", "parent_process": "/sbin/init", "process": "/usr/bin/cloudflared", "command_line": "/usr/bin/cloudflared tunnel run prod-ingress"},
+                {"timestamp": "2026-11-23T07:05:10Z", "source_host": "app-prod-07", "actor": "deploy", "event_type": "process", "surface": "endpoint", "parent_process": "/bin/bash", "process": "/usr/bin/python3", "command_line": "python3 /srv/mail/autoresponder/responder.py --check"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(p_srv_ok) == []
+
+
 
 
 
