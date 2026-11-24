@@ -140,7 +140,7 @@
         "  HAVING COUNT(DISTINCT principal_email) >= 3\n",
         "      OR COUNT(DISTINCT CASE WHEN grpc_code = 7 THEN method_name END) >= 5\n",
         "      OR (COUNT(DISTINCT CASE WHEN grpc_code = 7 THEN method_name END) >= 3 AND SUM(CASE WHEN LOWER(method_name) LIKE '%accesssecretversion%' AND grpc_code = 0 THEN 1 ELSE 0 END) >= 1)\n",
-        ")\n",
+        "),\n",
         "all_hunts AS (\n",
         "  SELECT * FROM h01 UNION ALL SELECT * FROM h02 UNION ALL SELECT * FROM h03 UNION ALL SELECT * FROM h04\n",
         "  UNION ALL SELECT * FROM h05 UNION ALL SELECT * FROM h06 UNION ALL SELECT * FROM h07 UNION ALL SELECT * FROM h08\n",
@@ -383,18 +383,18 @@
               }
             ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
               "encodings": {
                 "columns": [
-                  { "fieldName": "risk_score", "displayName": "Risk", "displayAs": "number", "visible": true, "order": 0, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "alert_tier", "displayName": "Tier", "displayAs": "string", "visible": true, "order": 1, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "surface", "displayName": "Surface", "displayAs": "string", "visible": true, "order": 2, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "hunt_id", "displayName": "Hunt ID", "displayAs": "string", "visible": true, "order": 3, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "src_ip", "displayName": "Source IP", "displayAs": "string", "visible": true, "order": 4, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "target", "displayName": "Target", "displayAs": "string", "visible": true, "order": 5, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "event_count", "displayName": "Events", "displayAs": "number", "visible": true, "order": 6, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "evidence", "displayName": "Evidence", "displayAs": "string", "visible": true, "order": 7, "alignContent": "left", "allowSearch": true, "allowHTML": false }
+                  { "fieldName": "risk_score", "title": "Risk", "displayAs": "number", "visible": true },
+                  { "fieldName": "alert_tier", "title": "Tier", "displayAs": "string", "visible": true },
+                  { "fieldName": "surface", "title": "Surface", "displayAs": "string", "visible": true },
+                  { "fieldName": "hunt_id", "title": "Hunt ID", "displayAs": "string", "visible": true },
+                  { "fieldName": "src_ip", "title": "Source IP", "displayAs": "string", "visible": true },
+                  { "fieldName": "target", "title": "Target", "displayAs": "string", "visible": true },
+                  { "fieldName": "event_count", "title": "Events", "displayAs": "number", "visible": true },
+                  { "fieldName": "evidence", "title": "Evidence", "displayAs": "string", "visible": true }
                 ]
               },
               "frame": { "showTitle": true, "title": "Unified RBA Triage Queue (0 Benign FPs)" }
@@ -459,15 +459,15 @@
               }
             ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
               "encodings": {
                 "columns": [
-                  { "fieldName": "service_principal_name", "displayName": "Service Principal", "displayAs": "string", "visible": true, "order": 0, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "sign_ins", "displayName": "Sign-Ins", "displayAs": "number", "visible": true, "order": 1, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "distinct_ips", "displayName": "Distinct IPs", "displayAs": "number", "visible": true, "order": 2, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "distinct_16_prefixes", "displayName": "Distinct /16s", "displayAs": "number", "visible": true, "order": 3, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "distinct_resources", "displayName": "Resources", "displayAs": "number", "visible": true, "order": 4, "alignContent": "right", "allowSearch": false, "allowHTML": false }
+                  { "fieldName": "service_principal_name", "title": "Service Principal", "displayAs": "string", "visible": true },
+                  { "fieldName": "sign_ins", "title": "Sign-Ins", "displayAs": "number", "visible": true },
+                  { "fieldName": "distinct_ips", "title": "Distinct IPs", "displayAs": "number", "visible": true },
+                  { "fieldName": "distinct_16_prefixes", "title": "Distinct /16s", "displayAs": "number", "visible": true },
+                  { "fieldName": "distinct_resources", "title": "Resources", "displayAs": "number", "visible": true }
                 ]
               },
               "frame": { "showTitle": true, "title": "Entra ID Service Principal — /16 Prefix Diversity (Storm-0940)" }
@@ -496,16 +496,16 @@
               }
             ],
             "spec": {
-              "version": 1,
+              "version": 2,
               "widgetType": "table",
               "encodings": {
                 "columns": [
-                  { "fieldName": "caller_ip", "displayName": "Caller IP", "displayAs": "string", "visible": true, "order": 0, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "principal_email", "displayName": "Principal", "displayAs": "string", "visible": true, "order": 1, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "service_name", "displayName": "Service", "displayAs": "string", "visible": true, "order": 2, "alignContent": "left", "allowSearch": true, "allowHTML": false },
-                  { "fieldName": "total_calls", "displayName": "Calls", "displayAs": "number", "visible": true, "order": 3, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "permission_denied_calls", "displayName": "PERMISSION_DENIED", "displayAs": "number", "visible": true, "order": 4, "alignContent": "right", "allowSearch": false, "allowHTML": false },
-                  { "fieldName": "secret_reads_ok", "displayName": "Secrets OK", "displayAs": "number", "visible": true, "order": 5, "alignContent": "right", "allowSearch": false, "allowHTML": false }
+                  { "fieldName": "caller_ip", "title": "Caller IP", "displayAs": "string", "visible": true },
+                  { "fieldName": "principal_email", "title": "Principal", "displayAs": "string", "visible": true },
+                  { "fieldName": "service_name", "title": "Service", "displayAs": "string", "visible": true },
+                  { "fieldName": "total_calls", "title": "Calls", "displayAs": "number", "visible": true },
+                  { "fieldName": "permission_denied_calls", "title": "PERMISSION_DENIED", "displayAs": "number", "visible": true },
+                  { "fieldName": "secret_reads_ok", "title": "Secrets OK", "displayAs": "number", "visible": true }
                 ]
               },
               "frame": { "showTitle": true, "title": "GCP Cloud Audit — Multi-SA & PERMISSION_DENIED Activity (Bitrise TTP)" }

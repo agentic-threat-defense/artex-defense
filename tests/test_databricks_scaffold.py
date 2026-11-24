@@ -94,9 +94,10 @@ def test_databricks_notebook_and_ipynb_contain_zero_write_sql_in_hunts() -> None
                     )
             spec = widget.get("spec", {})
             if spec.get("widgetType") == "table":
+                assert spec.get("version") == 2, f"Lakeview table widget {widget['name']} must use version 2"
                 for col in spec["encodings"]["columns"]:
-                    assert "displayAs" in col and "type" not in col, (
-                        f"Lakeview table widget {widget['name']} column must use 'displayAs', not 'type'"
+                    assert "displayAs" in col and "title" in col and "type" not in col and "displayName" not in col, (
+                        f"Lakeview table widget {widget['name']} column must use 'title' + 'displayAs'"
                     )
 
 
@@ -184,3 +185,40 @@ def test_databricks_72h_dashboard_seeder_triggers_11_of_11_hunts_with_zero_fps()
         assert src not in {"198.51.100.250", "198.51.100.210", "198.51.100.211", "198.51.100.212", "198.51.100.220", "198.51.100.221", "198.51.100.222", "198.51.100.223", "198.51.100.120", "198.51.100.200", "203.0.113.15"}
     flagged_targets = {f["target"] for f in findings}
     assert not (flagged_targets & {"Veeam-O365-Backup-SP", "Same16-Worker-SP", "Internal-Sync-SP", "d111111abcdef8.cloudfront.net", "api.stripe.example"})
+
+    # Also execute EVERY Lakeview .lvdash.json dataset SQL query against the 72h seeded DuckDB tables
+    # (translating Spark-only table prefixes / GET(SPLIT) / UNIX_TIMESTAMP / RLIKE so any SQL syntax bug fails CI!)
+    lv = json.loads(LAKEVIEW_JSON.read_text(encoding="utf-8"))
+    tbl_map = {
+        "workspace.default.artex_ipfix_flows": "default_ipfix_flows",
+        "workspace.default.artex_ssl_flows": "ssl_flows",
+        "workspace.default.artex_http_flows": "http_flows",
+        "workspace.default.artex_dns_flows": "dns_flows",
+        "workspace.default.artex_entra_sp_logs": "entra_sp_logs",
+        "workspace.default.artex_gcp_audit_logs": "gcp_audit_logs",
+    }
+
+    def _spark_to_duck(sql_text: str) -> str:
+        out = sql_text
+        for k, v in tbl_map.items():
+            out = out.replace(k, v)
+        out = re.sub(
+            r"GET\(SPLIT\(([^,]+),\s*'([^']+)'\),\s*(\d+)\)",
+            lambda m: f"SPLIT_PART({m.group(1)}, '{m.group(2).replace(chr(92) + chr(92) + '.', '.')}', {int(m.group(3)) + 1})",
+            out,
+        )
+        out = re.sub(r"UNIX_TIMESTAMP\(([^()]+(?:\([^()]*\)[^()]*)*)\)", r"EXTRACT(EPOCH FROM \1)", out)
+        out = re.sub(
+            r"\bRLIKE\s+'([^']+)'",
+            lambda m: f"~ '{m.group(1).replace(chr(92) + chr(92) + '.', chr(92) + '.')}'",
+            out,
+        )
+        return out
+
+    for ds in lv["datasets"]:
+        duck_sql = _spark_to_duck("".join(ds["queryLines"]))
+        rows = con.execute(duck_sql).fetchall()
+        assert len(rows) > 0, f"Lakeview dataset {ds['name']} returned 0 rows!"
+        if ds["name"] == "ds_unified_rba_findings":
+            lv_hunts = {r[0] for r in rows}
+            assert len(lv_hunts) == 11, f"Expected all 11 hunts in ds_unified_rba_findings, got {sorted(lv_hunts)}"
