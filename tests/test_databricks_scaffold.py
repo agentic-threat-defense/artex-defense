@@ -84,6 +84,20 @@ def test_databricks_notebook_and_ipynb_contain_zero_write_sql_in_hunts() -> None
             f"Lakeview dataset {ds['name']} used ANSI-unsafe SPLIT()[idx] bracket indexing; use GET(SPLIT(...), idx)"
         )
         assert "workspace.default.artex_" in sql
+    for page in lv["pages"]:
+        for item in page["layout"]:
+            widget = item["widget"]
+            for q in widget.get("queries", []):
+                for f in q.get("query", {}).get("fields", []):
+                    assert "COUNT_IF(" not in f.get("expression", ""), (
+                        f"Lakeview widget {widget['name']} uses unsupported COUNT_IF() expression"
+                    )
+            spec = widget.get("spec", {})
+            if spec.get("widgetType") == "table":
+                for col in spec["encodings"]["columns"]:
+                    assert "displayAs" in col and "type" not in col, (
+                        f"Lakeview table widget {widget['name']} column must use 'displayAs', not 'type'"
+                    )
 
 
 def test_databricks_scaffold_runs_all_11_hunts_locally_with_zero_benign_fps(tmp_path: Path) -> None:
