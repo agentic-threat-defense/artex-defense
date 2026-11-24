@@ -84,21 +84,33 @@ def test_databricks_notebook_and_ipynb_contain_zero_write_sql_in_hunts() -> None
             f"Lakeview dataset {ds['name']} used ANSI-unsafe SPLIT()[idx] bracket indexing; use GET(SPLIT(...), idx)"
         )
         assert "workspace.default.artex_" in sql
+    filter_count = 0
     for page in lv["pages"]:
         for item in page["layout"]:
             widget = item["widget"]
+            spec = widget.get("spec", {})
+            wtype = spec.get("widgetType", "")
+            is_filter = wtype.startswith("filter-")
+            if is_filter:
+                filter_count += 1
+                assert spec.get("version") == 2
+                qnames = {q["name"] for q in widget.get("queries", [])}
+                for ef in spec["encodings"]["fields"]:
+                    assert ef["queryName"] in qnames, f"Filter {widget['name']} references unknown queryName {ef['queryName']}"
             for q in widget.get("queries", []):
                 for f in q.get("query", {}).get("fields", []):
-                    assert "COUNT_IF(" not in f.get("expression", ""), (
-                        f"Lakeview widget {widget['name']} uses unsupported COUNT_IF() expression"
-                    )
-            spec = widget.get("spec", {})
-            if spec.get("widgetType") == "table":
+                    expr = f.get("expression", "")
+                    if not is_filter:
+                        assert "COUNT_IF(" not in expr, (
+                            f"Lakeview widget {widget['name']} uses unsupported COUNT_IF() expression"
+                        )
+            if wtype == "table":
                 assert spec.get("version") == 2, f"Lakeview table widget {widget['name']} must use version 2"
                 for col in spec["encodings"]["columns"]:
                     assert "displayAs" in col and "title" in col and "type" not in col and "displayName" not in col, (
                         f"Lakeview table widget {widget['name']} column must use 'title' + 'displayAs'"
                     )
+    assert filter_count == 6, f"Expected 6 multi-select filter widgets across 2 pages, got {filter_count}"
 
 
 def test_databricks_scaffold_runs_all_11_hunts_locally_with_zero_benign_fps(tmp_path: Path) -> None:

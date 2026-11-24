@@ -224,6 +224,93 @@
         },
         {
           "widget": {
+            "name": "flt_surface",
+            "queries": [
+              {
+                "name": "q_flt_surface",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "surface", "expression": "`surface`" },
+                    { "name": "surface_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  { "fieldName": "surface", "displayName": "Surface", "queryName": "q_flt_surface" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Surface" }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 2, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "flt_alert_tier",
+            "queries": [
+              {
+                "name": "q_flt_alert_tier",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "alert_tier", "expression": "`alert_tier`" },
+                    { "name": "alert_tier_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  { "fieldName": "alert_tier", "displayName": "Alert Tier", "queryName": "q_flt_alert_tier" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Alert Tier" }
+            }
+          },
+          "position": { "x": 2, "y": 2, "width": 2, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "flt_src_ip",
+            "queries": [
+              {
+                "name": "q_flt_src_ip",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "src_ip", "expression": "`src_ip`" },
+                    { "name": "src_ip_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  { "fieldName": "src_ip", "displayName": "Source IP", "queryName": "q_flt_src_ip" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Source IP" }
+            }
+          },
+          "position": { "x": 4, "y": 2, "width": 2, "height": 2 }
+        },
+        {
+          "widget": {
             "name": "kpi_alerts",
             "queries": [
               {
@@ -246,7 +333,7 @@
               "frame": { "showTitle": true, "title": "Tier A Alerts (>=70)" }
             }
           },
-          "position": { "x": 0, "y": 2, "width": 2, "height": 3 }
+          "position": { "x": 0, "y": 4, "width": 2, "height": 3 }
         },
         {
           "widget": {
@@ -272,7 +359,7 @@
               "frame": { "showTitle": true, "title": "Unique Candidate Sources" }
             }
           },
-          "position": { "x": 2, "y": 2, "width": 2, "height": 3 }
+          "position": { "x": 2, "y": 4, "width": 2, "height": 3 }
         },
         {
           "widget": {
@@ -298,7 +385,7 @@
               "frame": { "showTitle": true, "title": "Active Hunts Triggered" }
             }
           },
-          "position": { "x": 4, "y": 2, "width": 2, "height": 3 }
+          "position": { "x": 4, "y": 4, "width": 2, "height": 3 }
         },
         {
           "widget": {
@@ -328,7 +415,7 @@
               "frame": { "showTitle": true, "title": "Findings by Behavioral Hunt" }
             }
           },
-          "position": { "x": 0, "y": 5, "width": 3, "height": 6 }
+          "position": { "x": 0, "y": 7, "width": 3, "height": 6 }
         },
         {
           "widget": {
@@ -358,7 +445,7 @@
               "frame": { "showTitle": true, "title": "72-Hour Multi-Surface Telemetry Volume" }
             }
           },
-          "position": { "x": 3, "y": 5, "width": 3, "height": 6 }
+          "position": { "x": 3, "y": 7, "width": 3, "height": 6 }
         },
         {
           "widget": {
@@ -400,7 +487,7 @@
               "frame": { "showTitle": true, "title": "Unified RBA Triage Queue (0 Benign FPs)" }
             }
           },
-          "position": { "x": 0, "y": 11, "width": 6, "height": 8 }
+          "position": { "x": 0, "y": 13, "width": 6, "height": 8 }
         }
       ]
     },
@@ -409,6 +496,93 @@
       "displayName": "Network, Entra & GCP Deep Dive",
       "pageType": "PAGE_TYPE_CANVAS",
       "layout": [
+        {
+          "widget": {
+            "name": "flt_t2_sp",
+            "queries": [
+              {
+                "name": "q_flt_t2_sp",
+                "query": {
+                  "datasetName": "ds_entra_sp_summary",
+                  "fields": [
+                    { "name": "service_principal_name", "expression": "`service_principal_name`" },
+                    { "name": "sp_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  { "fieldName": "service_principal_name", "displayName": "Entra Service Principal", "queryName": "q_flt_t2_sp" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Entra Service Principal" }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 2, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "flt_t2_gcp_ip",
+            "queries": [
+              {
+                "name": "q_flt_t2_gcp_ip",
+                "query": {
+                  "datasetName": "ds_gcp_audit_activity",
+                  "fields": [
+                    { "name": "caller_ip", "expression": "`caller_ip`" },
+                    { "name": "gcp_ip_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  { "fieldName": "caller_ip", "displayName": "GCP Caller IP", "queryName": "q_flt_t2_gcp_ip" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "GCP Caller IP" }
+            }
+          },
+          "position": { "x": 2, "y": 0, "width": 2, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "flt_t2_gcp_svc",
+            "queries": [
+              {
+                "name": "q_flt_t2_gcp_svc",
+                "query": {
+                  "datasetName": "ds_gcp_audit_activity",
+                  "fields": [
+                    { "name": "service_name", "expression": "`service_name`" },
+                    { "name": "gcp_svc_associativity", "expression": "COUNT_IF(`associative_filter_predicate_group`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  { "fieldName": "service_name", "displayName": "GCP Service", "queryName": "q_flt_t2_gcp_svc" }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "GCP Service" }
+            }
+          },
+          "position": { "x": 4, "y": 0, "width": 2, "height": 2 }
+        },
         {
           "widget": {
             "name": "line_sawtooth",
@@ -437,7 +611,7 @@
               "frame": { "showTitle": true, "title": "Encrypted TLS 1.3 Sawtooth Growth (10.20.30.40) vs Flat S3 Upload (10.90.1.5)" }
             }
           },
-          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+          "position": { "x": 0, "y": 2, "width": 6, "height": 6 }
         },
         {
           "widget": {
@@ -473,7 +647,7 @@
               "frame": { "showTitle": true, "title": "Entra ID Service Principal — /16 Prefix Diversity (Storm-0940)" }
             }
           },
-          "position": { "x": 0, "y": 6, "width": 3, "height": 6 }
+          "position": { "x": 0, "y": 8, "width": 3, "height": 6 }
         },
         {
           "widget": {
@@ -511,7 +685,7 @@
               "frame": { "showTitle": true, "title": "GCP Cloud Audit — Multi-SA & PERMISSION_DENIED Activity (Bitrise TTP)" }
             }
           },
-          "position": { "x": 3, "y": 6, "width": 3, "height": 6 }
+          "position": { "x": 3, "y": 8, "width": 3, "height": 6 }
         }
       ]
     }
