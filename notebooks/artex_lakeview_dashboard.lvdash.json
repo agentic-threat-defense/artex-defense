@@ -1,0 +1,515 @@
+{
+  "datasets": [
+    {
+      "name": "ds_unified_rba_findings",
+      "displayName": "Unified RBA Behavioral Findings (All 11 Hunts)",
+      "queryLines": [
+        "WITH h01_ord AS (\n",
+        "  SELECT src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip) AS target, flow_ts, octetTotalCount AS b_out,\n",
+        "         LAG(octetTotalCount) OVER (PARTITION BY src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip) ORDER BY flow_ts) AS prev_out\n",
+        "  FROM workspace.default.artex_ipfix_flows\n",
+        "  WHERE dst_port = 443 AND reverseOctetTotalCount BETWEEN 300 AND 50000\n",
+        "),\n",
+        "h01 AS (\n",
+        "  SELECT 'HUNT_01_SAWTOOTH_LLM_PROXY' AS hunt_id, 'Network / IPFIX' AS surface, 70 AS risk_score, 'alert' AS alert_tier,\n",
+        "         src_ip, target, COUNT(*) AS event_count,\n",
+        "         CAST(SUM(CASE WHEN prev_out IS NOT NULL AND (b_out - prev_out) >= 1500 THEN 1 ELSE 0 END) AS STRING) || ' growing turns, peak=' || CAST(MAX(b_out) AS STRING) || 'B' AS evidence\n",
+        "  FROM h01_ord\n",
+        "  GROUP BY src_ip, target\n",
+        "  HAVING SUM(CASE WHEN prev_out IS NOT NULL AND (b_out - prev_out) >= 1500 THEN 1 ELSE 0 END) >= 4\n",
+        "     AND MAX(b_out) >= 12000 AND (MAX(b_out) * 1.0 / GREATEST(MIN(b_out), 1)) >= 2.5\n",
+        "),\n",
+        "h02 AS (\n",
+        "  SELECT 'HUNT_02_CONSOLE_RAW_IP_TLS' AS hunt_id, 'Network / IPFIX' AS surface, 75 AS risk_score, 'alert' AS alert_tier,\n",
+        "         src_ip, dst_ip || ':' || CAST(dst_port AS STRING) AS target, COUNT(*) AS event_count,\n",
+        "         'app=' || CAST(MAX(silkAppLabel) AS STRING) || ', ja4=' || COALESCE(MAX(ja4), '') AS evidence\n",
+        "  FROM workspace.default.artex_ipfix_flows\n",
+        "  WHERE (silkAppLabel IN (80, 443) AND dst_port IN (8787, 8788, 8790, 8890, 18899))\n",
+        "     OR (SUBSTRING(ja4, 4, 1) = 'i' AND dst_port = 443 AND octetTotalCount >= 12000)\n",
+        "  GROUP BY src_ip, dst_ip, dst_port\n",
+        "),\n",
+        "h03 AS (\n",
+        "  SELECT 'HUNT_03_JA4_WHIPLASH' AS hunt_id, 'Web / JA4+' AS surface, 70 AS risk_score, 'alert' AS alert_tier,\n",
+        "         src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip) AS target, COUNT(*) AS event_count,\n",
+        "         'ja4=' || CAST(COUNT(DISTINCT ja4) AS STRING) || ', uas=' || CAST(COUNT(DISTINCT http_ua) AS STRING) || ', errs=' || CAST(SUM(CASE WHEN http_status >= 400 THEN 1 ELSE 0 END) AS STRING) AS evidence\n",
+        "  FROM workspace.default.artex_http_flows\n",
+        "  WHERE src_ip NOT IN ('198.51.100.250')\n",
+        "  GROUP BY src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip)\n",
+        "  HAVING (COUNT(DISTINCT ja4) >= 3 OR COUNT(DISTINCT ja4h) >= 3)\n",
+        "     AND (COUNT(DISTINCT http_ua) <= 1 OR SUM(CASE WHEN http_status >= 400 THEN 1 ELSE 0 END) >= 3)\n",
+        "),\n",
+        "h04 AS (\n",
+        "  SELECT 'HUNT_04_JA4X_SELF_SIGNED' AS hunt_id, 'TLS / Certs' AS surface, 65 AS risk_score, 'hunt' AS alert_tier,\n",
+        "         MIN(src_ip) AS src_ip, 'ja4x_c=' || COALESCE(GET(SPLIT(ja4x, '_'), 2), '') || ' | ja4s=' || COALESCE(ja4s, '') AS target, COUNT(DISTINCT dst_ip) AS event_count,\n",
+        "         'self_signed_cluster_ips=' || CAST(COUNT(DISTINCT dst_ip) AS STRING) AS evidence\n",
+        "  FROM workspace.default.artex_ssl_flows\n",
+        "  WHERE ja4x IS NOT NULL AND ja4x <> ''\n",
+        "    AND COALESCE(GET(SPLIT(ja4x, '_'), 2), '') <> ''\n",
+        "    AND GET(SPLIT(ja4x, '_'), 0) = GET(SPLIT(ja4x, '_'), 1)\n",
+        "  GROUP BY COALESCE(GET(SPLIT(ja4x, '_'), 2), ''), COALESCE(ja4s, '')\n",
+        "),\n",
+        "h05 AS (\n",
+        "  SELECT 'HUNT_05_SERVER_CALLBACK' AS hunt_id, 'Cross-Direction' AS surface, 90 AS risk_score, 'alert' AS alert_tier,\n",
+        "         out_f.src_ip AS src_ip, in_h.src_ip || ':' || CAST(MAX(out_f.dst_port) AS STRING) AS target, COUNT(*) AS event_count,\n",
+        "         'probing_ip=' || in_h.src_ip || ' probed ' || MAX(in_h.http_path) AS evidence\n",
+        "  FROM workspace.default.artex_http_flows in_h\n",
+        "  JOIN workspace.default.artex_ipfix_flows out_f\n",
+        "    ON out_f.src_ip = in_h.dst_ip AND out_f.dst_ip = in_h.src_ip\n",
+        "   AND out_f.flow_ts >= in_h.flow_ts AND (UNIX_TIMESTAMP(out_f.flow_ts) - UNIX_TIMESTAMP(in_h.flow_ts)) <= 600\n",
+        "  GROUP BY out_f.src_ip, in_h.src_ip\n",
+        "),\n",
+        "h06 AS (\n",
+        "  SELECT 'HUNT_06_OOB_DNS_CALLBACK' AS hunt_id, 'DNS OOB' AS surface, 85 AS risk_score, 'alert' AS alert_tier,\n",
+        "         d.src_ip AS src_ip, d.dns_query AS target, COUNT(*) AS event_count,\n",
+        "         'after_probe_by=' || MIN(h.src_ip) AS evidence\n",
+        "  FROM workspace.default.artex_http_flows h\n",
+        "  JOIN workspace.default.artex_dns_flows d\n",
+        "    ON d.src_ip = h.dst_ip AND d.flow_ts >= h.flow_ts AND (UNIX_TIMESTAMP(d.flow_ts) - UNIX_TIMESTAMP(h.flow_ts)) <= 90\n",
+        "  WHERE LOWER(COALESCE(GET(SPLIT(d.dns_query, '\\\\.'), 0), '')) RLIKE '^[a-f0-9]{10,}$'\n",
+        "    AND LOWER(d.dns_query) NOT LIKE '%.cloudfront.net'\n",
+        "    AND LOWER(d.dns_query) NOT LIKE '%.amazonaws.com'\n",
+        "  GROUP BY d.src_ip, d.dns_query\n",
+        "),\n",
+        "h07 AS (\n",
+        "  SELECT 'HUNT_07_LATERAL_FANOUT' AS hunt_id, 'Lateral / SMB' AS surface, 80 AS risk_score, 'alert' AS alert_tier,\n",
+        "         src_ip, CAST(COUNT(DISTINCT dst_ip) AS STRING) || ' internal peers' AS target, COUNT(*) AS event_count,\n",
+        "         'span_s=' || CAST(CAST(UNIX_TIMESTAMP(MAX(flow_ts)) - UNIX_TIMESTAMP(MIN(flow_ts)) AS INT) AS STRING) AS evidence\n",
+        "  FROM workspace.default.artex_ipfix_flows\n",
+        "  WHERE dst_port IN (445, 5985, 5986, 135, 3389, 22) AND src_ip <> dst_ip\n",
+        "  GROUP BY src_ip\n",
+        "  HAVING COUNT(DISTINCT dst_ip) >= 4 AND (UNIX_TIMESTAMP(MAX(flow_ts)) - UNIX_TIMESTAMP(MIN(flow_ts))) <= 120\n",
+        "),\n",
+        "h08_tag AS (\n",
+        "  SELECT src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip) AS target, NULLIF(ja4, '') AS ja4, NULLIF(ja4h, '') AS ja4h, http_status,\n",
+        "         CASE WHEN LOWER(http_ua) LIKE '%curl/%' THEN 'curl' WHEN LOWER(http_ua) LIKE '%python-httpx%' THEN 'python' WHEN LOWER(http_ua) LIKE '%go-http-client%' THEN 'go' WHEN LOWER(http_ua) LIKE '%chrome/%' OR LOWER(http_ua) LIKE '%firefox/%' THEN 'browser' ELSE 'other' END AS ua_fam,\n",
+        "         CASE WHEN LOWER(http_ua) LIKE '%mozilla/5.0%' AND LOWER(ja4h) RLIKE '^[a-z]{2}[0-9]{2}nn0[0-5]0000_' AND UPPER(http_method) <> 'CONNECT' THEN 1 ELSE 0 END AS is_imp\n",
+        "  FROM workspace.default.artex_http_flows\n",
+        "  WHERE src_ip NOT IN ('198.51.100.250')\n",
+        "),\n",
+        "h08 AS (\n",
+        "  SELECT 'HUNT_08_JA4_PROXY_OR_IMPERSONATION' AS hunt_id, 'Web / JA4+' AS surface, 75 AS risk_score, 'alert' AS alert_tier,\n",
+        "         src_ip, target, COUNT(*) AS event_count,\n",
+        "         CASE WHEN COUNT(DISTINCT ja4) = 1 AND COUNT(DISTINCT ja4h) >= 3 THEN 'JA4_PROXY_COLLAPSE' ELSE 'BROWSER_UA_IMPERSONATION' END AS evidence\n",
+        "  FROM h08_tag\n",
+        "  GROUP BY src_ip, target\n",
+        "  HAVING (COUNT(DISTINCT ja4) = 1 AND COUNT(DISTINCT ja4h) >= 3 AND COUNT(DISTINCT ua_fam) >= 3 AND SUM(CASE WHEN http_status BETWEEN 400 AND 499 THEN 1 ELSE 0 END) >= 3)\n",
+        "      OR SUM(is_imp) >= 2\n",
+        "),\n",
+        "h09_ord AS (\n",
+        "  SELECT src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip) || http_path AS target, flow_ts, http_status, bytes_out,\n",
+        "         LAG(bytes_out) OVER (PARTITION BY src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip), http_path ORDER BY flow_ts) AS prev_b,\n",
+        "         LAG(http_status) OVER (PARTITION BY src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip), http_path ORDER BY flow_ts) AS prev_s\n",
+        "  FROM workspace.default.artex_http_flows\n",
+        "  WHERE http_status IN (200, 500, 502)\n",
+        "),\n",
+        "h09 AS (\n",
+        "  SELECT 'HUNT_09_RUBY2SHELL_CRASH_LOOP' AS hunt_id, 'Web / App' AS surface, 80 AS risk_score, 'alert' AS alert_tier,\n",
+        "         src_ip, target, COUNT(*) AS event_count,\n",
+        "         'monotonic_5xx_crashes=' || CAST(SUM(CASE WHEN http_status IN (500, 502) THEN 1 ELSE 0 END) AS STRING) AS evidence\n",
+        "  FROM h09_ord\n",
+        "  GROUP BY src_ip, target\n",
+        "  HAVING SUM(CASE WHEN http_status IN (500, 502) THEN 1 ELSE 0 END) >= 3\n",
+        "     AND SUM(CASE WHEN http_status IN (500, 502) AND prev_s IN (500, 502) AND bytes_out > prev_b THEN 1 ELSE 0 END) >= 2\n",
+        "     AND SUM(CASE WHEN http_status = 200 AND prev_s IN (500, 502) THEN 1 ELSE 0 END) >= 1\n",
+        "),\n",
+        "h10_ext AS (\n",
+        "  SELECT service_principal_name AS sp_name, ip_address AS src_ip, resource_display_name AS res,\n",
+        "         CASE WHEN ip_address LIKE '%:%' THEN COALESCE(GET(SPLIT(ip_address, ':'), 0), '') || ':' || COALESCE(GET(SPLIT(ip_address, ':'), 1), '') || ':' || COALESCE(GET(SPLIT(ip_address, ':'), 2), '') ELSE COALESCE(GET(SPLIT(ip_address, '\\\\.'), 0), '') || '.' || COALESCE(GET(SPLIT(ip_address, '\\\\.'), 1), '') END AS net_prefix\n",
+        "  FROM workspace.default.artex_entra_sp_logs\n",
+        "  WHERE result_type IN ('0', '200') AND NOT (ip_address RLIKE '^(10\\\\.|127\\\\.|169\\\\.254\\\\.|192\\\\.168\\\\.|172\\\\.(1[6-9]|2[0-9]|3[0-1])\\\\.|::1$|fe80:|f[cd][0-9a-f]{2}:)')\n",
+        "),\n",
+        "h10 AS (\n",
+        "  SELECT 'HUNT_10_STORM0940_SP_REPLAY' AS hunt_id, 'Identity / Entra' AS surface, 85 AS risk_score, 'alert' AS alert_tier,\n",
+        "         MIN(src_ip) AS src_ip, sp_name AS target, COUNT(*) AS event_count,\n",
+        "         'prefixes=' || CAST(COUNT(DISTINCT net_prefix) AS STRING) || ', resources=' || CAST(COUNT(DISTINCT res) AS STRING) AS evidence\n",
+        "  FROM h10_ext\n",
+        "  GROUP BY sp_name\n",
+        "  HAVING COUNT(DISTINCT net_prefix) >= 3 AND COUNT(DISTINCT res) >= 2\n",
+        "),\n",
+        "h11 AS (\n",
+        "  SELECT 'HUNT_11_GCP_BITRISE_MULTI_SA' AS hunt_id, 'Cloud / GCP' AS surface, 90 AS risk_score, 'alert' AS alert_tier,\n",
+        "         caller_ip AS src_ip, CAST(COUNT(DISTINCT principal_email) AS STRING) || ' GCP SAs' AS target, COUNT(*) AS event_count,\n",
+        "         'denied=' || CAST(COUNT(DISTINCT CASE WHEN grpc_code = 7 THEN method_name END) AS STRING) || ', secret_ok=' || CAST(SUM(CASE WHEN LOWER(method_name) LIKE '%accesssecretversion%' AND grpc_code = 0 THEN 1 ELSE 0 END) AS STRING) AS evidence\n",
+        "  FROM workspace.default.artex_gcp_audit_logs\n",
+        "  WHERE LOWER(principal_email) LIKE '%.gserviceaccount.com'\n",
+        "    AND LOWER(principal_email) NOT LIKE '%terraform%'\n",
+        "    AND LOWER(principal_email) NOT LIKE '%@gcp-sa-%'\n",
+        "    AND LOWER(principal_email) NOT LIKE '%@cloudservices.gserviceaccount.com'\n",
+        "    AND LOWER(principal_email) NOT LIKE '%-system@%'\n",
+        "  GROUP BY caller_ip\n",
+        "  HAVING COUNT(DISTINCT principal_email) >= 3\n",
+        "      OR COUNT(DISTINCT CASE WHEN grpc_code = 7 THEN method_name END) >= 5\n",
+        "      OR (COUNT(DISTINCT CASE WHEN grpc_code = 7 THEN method_name END) >= 3 AND SUM(CASE WHEN LOWER(method_name) LIKE '%accesssecretversion%' AND grpc_code = 0 THEN 1 ELSE 0 END) >= 1)\n",
+        ")\n",
+        "SELECT * FROM h01 UNION ALL SELECT * FROM h02 UNION ALL SELECT * FROM h03 UNION ALL SELECT * FROM h04\n",
+        "UNION ALL SELECT * FROM h05 UNION ALL SELECT * FROM h06 UNION ALL SELECT * FROM h07 UNION ALL SELECT * FROM h08\n",
+        "UNION ALL SELECT * FROM h09 UNION ALL SELECT * FROM h10 UNION ALL SELECT * FROM h11\n",
+        "ORDER BY risk_score DESC, hunt_id ASC\n"
+      ]
+    },
+    {
+      "name": "ds_hourly_volume",
+      "displayName": "72-Hour Multi-Surface Telemetry Volume",
+      "queryLines": [
+        "SELECT DATE_TRUNC('HOUR', flow_ts) AS hour_bucket, 'IPFIX / Network' AS surface, COUNT(*) AS events FROM workspace.default.artex_ipfix_flows GROUP BY 1, 2\n",
+        "UNION ALL\n",
+        "SELECT DATE_TRUNC('HOUR', flow_ts) AS hour_bucket, 'HTTP / JA4+' AS surface, COUNT(*) AS events FROM workspace.default.artex_http_flows GROUP BY 1, 2\n",
+        "UNION ALL\n",
+        "SELECT DATE_TRUNC('HOUR', created_ts) AS hour_bucket, 'Entra SP' AS surface, COUNT(*) AS events FROM workspace.default.artex_entra_sp_logs GROUP BY 1, 2\n",
+        "UNION ALL\n",
+        "SELECT DATE_TRUNC('HOUR', event_ts) AS hour_bucket, 'GCP Audit' AS surface, COUNT(*) AS events FROM workspace.default.artex_gcp_audit_logs GROUP BY 1, 2\n",
+        "ORDER BY hour_bucket ASC\n"
+      ]
+    },
+    {
+      "name": "ds_sawtooth_profile",
+      "displayName": "Sawtooth TLS 1.3 Context Growth vs Benign Baseline",
+      "queryLines": [
+        "SELECT flow_ts, src_ip, COALESCE(NULLIF(sslServerName, ''), dst_ip) AS target, octetTotalCount AS bytes_out, reverseOctetTotalCount AS bytes_in\n",
+        "FROM workspace.default.artex_ipfix_flows\n",
+        "WHERE src_ip IN ('10.20.30.40', '10.90.1.5') AND dst_port = 443\n",
+        "ORDER BY flow_ts ASC\n"
+      ]
+    },
+    {
+      "name": "ds_gcp_audit_activity",
+      "displayName": "GCP Cloud Audit — Service Account Activity & PERMISSION_DENIED Breakdown",
+      "queryLines": [
+        "SELECT caller_ip, principal_email, service_name,\n",
+        "       COUNT(*) AS total_calls,\n",
+        "       SUM(CASE WHEN grpc_code = 7 THEN 1 ELSE 0 END) AS permission_denied_calls,\n",
+        "       SUM(CASE WHEN LOWER(method_name) LIKE '%accesssecretversion%' AND grpc_code = 0 THEN 1 ELSE 0 END) AS secret_reads_ok\n",
+        "FROM workspace.default.artex_gcp_audit_logs\n",
+        "GROUP BY caller_ip, principal_email, service_name\n",
+        "ORDER BY permission_denied_calls DESC, secret_reads_ok DESC, total_calls DESC\n"
+      ]
+    },
+    {
+      "name": "ds_entra_sp_summary",
+      "displayName": "Entra ID Service Principal — /16 Prefix Diversity vs Resource Fanout",
+      "queryLines": [
+        "SELECT service_principal_name,\n",
+        "       COUNT(*) AS sign_ins,\n",
+        "       COUNT(DISTINCT ip_address) AS distinct_ips,\n",
+        "       COUNT(DISTINCT CASE WHEN ip_address LIKE '%:%' THEN COALESCE(GET(SPLIT(ip_address, ':'), 0), '') || ':' || COALESCE(GET(SPLIT(ip_address, ':'), 1), '') || ':' || COALESCE(GET(SPLIT(ip_address, ':'), 2), '') ELSE COALESCE(GET(SPLIT(ip_address, '\\\\.'), 0), '') || '.' || COALESCE(GET(SPLIT(ip_address, '\\\\.'), 1), '') END) AS distinct_16_prefixes,\n",
+        "       COUNT(DISTINCT resource_display_name) AS distinct_resources\n",
+        "FROM workspace.default.artex_entra_sp_logs\n",
+        "WHERE result_type IN ('0', '200')\n",
+        "GROUP BY service_principal_name\n",
+        "ORDER BY distinct_16_prefixes DESC, distinct_resources DESC\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_exec_rba",
+      "displayName": "Executive RBA Triage",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "hdr_banner",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## ARTEX & Autonomous Agentic Threats — Behavioral Hunt Dashboard (v0.2.6)\n",
+                "100% Read-Only Spark SQL across IPFIX, TLS/JA4+, HTTP, DNS, Entra ID SP, and GCP Cloud Audit (`workspace.default.artex_*`)."
+              ]
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 2 }
+        },
+        {
+          "widget": {
+            "name": "kpi_alerts",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "count_alerts", "expression": "COUNT_IF(`alert_tier` = 'alert')" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "count_alerts", "displayName": "Tier A Alerts (>=70)" }
+              },
+              "frame": { "showTitle": true, "title": "Tier A Alerts (>=70)" }
+            }
+          },
+          "position": { "x": 0, "y": 2, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi_sources",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "uniq_srcs", "expression": "COUNT(DISTINCT `src_ip`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "uniq_srcs", "displayName": "Unique Candidate Sources" }
+              },
+              "frame": { "showTitle": true, "title": "Unique Candidate Sources" }
+            }
+          },
+          "position": { "x": 2, "y": 2, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "kpi_hunts",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "uniq_hunts", "expression": "COUNT(DISTINCT `hunt_id`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": { "fieldName": "uniq_hunts", "displayName": "Active Hunts Triggered" }
+              },
+              "frame": { "showTitle": true, "title": "Active Hunts Triggered" }
+            }
+          },
+          "position": { "x": 4, "y": 2, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "bar_by_hunt",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "hunt_id", "expression": "`hunt_id`" },
+                    { "name": "alert_tier", "expression": "`alert_tier`" },
+                    { "name": "hits", "expression": "COUNT(*)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": { "fieldName": "hunt_id", "scale": { "type": "categorical" }, "displayName": "Hunt ID" },
+                "y": { "fieldName": "hits", "scale": { "type": "quantitative" }, "displayName": "Findings" },
+                "color": { "fieldName": "alert_tier", "scale": { "type": "categorical" }, "displayName": "Tier" }
+              },
+              "frame": { "showTitle": true, "title": "Findings by Behavioral Hunt" }
+            }
+          },
+          "position": { "x": 0, "y": 5, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "line_volume",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_hourly_volume",
+                  "fields": [
+                    { "name": "hour_bucket", "expression": "`hour_bucket`" },
+                    { "name": "surface", "expression": "`surface`" },
+                    { "name": "events", "expression": "SUM(`events`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "hour_bucket", "scale": { "type": "temporal" }, "displayName": "Hour (UTC)" },
+                "y": { "fieldName": "events", "scale": { "type": "quantitative" }, "displayName": "Events" },
+                "color": { "fieldName": "surface", "scale": { "type": "categorical" }, "displayName": "Surface" }
+              },
+              "frame": { "showTitle": true, "title": "72-Hour Multi-Surface Telemetry Volume" }
+            }
+          },
+          "position": { "x": 3, "y": 5, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "tbl_rba_triage",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_unified_rba_findings",
+                  "fields": [
+                    { "name": "risk_score", "expression": "`risk_score`" },
+                    { "name": "alert_tier", "expression": "`alert_tier`" },
+                    { "name": "surface", "expression": "`surface`" },
+                    { "name": "hunt_id", "expression": "`hunt_id`" },
+                    { "name": "src_ip", "expression": "`src_ip`" },
+                    { "name": "target", "expression": "`target`" },
+                    { "name": "event_count", "expression": "`event_count`" },
+                    { "name": "evidence", "expression": "`evidence`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "risk_score", "displayName": "Risk", "type": "integer", "visible": true },
+                  { "fieldName": "alert_tier", "displayName": "Tier", "type": "string", "visible": true },
+                  { "fieldName": "surface", "displayName": "Surface", "type": "string", "visible": true },
+                  { "fieldName": "hunt_id", "displayName": "Hunt ID", "type": "string", "visible": true },
+                  { "fieldName": "src_ip", "displayName": "Source IP", "type": "string", "visible": true },
+                  { "fieldName": "target", "displayName": "Target", "type": "string", "visible": true },
+                  { "fieldName": "event_count", "displayName": "Events", "type": "integer", "visible": true },
+                  { "fieldName": "evidence", "displayName": "Evidence", "type": "string", "visible": true }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Unified RBA Triage Queue (0 Benign FPs)" }
+            }
+          },
+          "position": { "x": 0, "y": 11, "width": 6, "height": 8 }
+        }
+      ]
+    },
+    {
+      "name": "page_network_cloud",
+      "displayName": "Network, Entra & GCP Deep Dive",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "line_sawtooth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sawtooth_profile",
+                  "fields": [
+                    { "name": "flow_ts", "expression": "`flow_ts`" },
+                    { "name": "src_ip", "expression": "`src_ip`" },
+                    { "name": "bytes_out", "expression": "SUM(`bytes_out`)" }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": { "fieldName": "flow_ts", "scale": { "type": "temporal" }, "displayName": "Timestamp" },
+                "y": { "fieldName": "bytes_out", "scale": { "type": "quantitative" }, "displayName": "Outbound Bytes" },
+                "color": { "fieldName": "src_ip", "scale": { "type": "categorical" }, "displayName": "Source IP" }
+              },
+              "frame": { "showTitle": true, "title": "Encrypted TLS 1.3 Sawtooth Growth (10.20.30.40) vs Flat S3 Upload (10.90.1.5)" }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "tbl_entra_sp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_entra_sp_summary",
+                  "fields": [
+                    { "name": "service_principal_name", "expression": "`service_principal_name`" },
+                    { "name": "sign_ins", "expression": "`sign_ins`" },
+                    { "name": "distinct_ips", "expression": "`distinct_ips`" },
+                    { "name": "distinct_16_prefixes", "expression": "`distinct_16_prefixes`" },
+                    { "name": "distinct_resources", "expression": "`distinct_resources`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "service_principal_name", "displayName": "Service Principal", "type": "string", "visible": true },
+                  { "fieldName": "sign_ins", "displayName": "Sign-Ins", "type": "integer", "visible": true },
+                  { "fieldName": "distinct_ips", "displayName": "Distinct IPs", "type": "integer", "visible": true },
+                  { "fieldName": "distinct_16_prefixes", "displayName": "Distinct /16s", "type": "integer", "visible": true },
+                  { "fieldName": "distinct_resources", "displayName": "Resources", "type": "integer", "visible": true }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "Entra ID Service Principal — /16 Prefix Diversity (Storm-0940)" }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 3, "height": 6 }
+        },
+        {
+          "widget": {
+            "name": "tbl_gcp_audit",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_gcp_audit_activity",
+                  "fields": [
+                    { "name": "caller_ip", "expression": "`caller_ip`" },
+                    { "name": "principal_email", "expression": "`principal_email`" },
+                    { "name": "service_name", "expression": "`service_name`" },
+                    { "name": "total_calls", "expression": "`total_calls`" },
+                    { "name": "permission_denied_calls", "expression": "`permission_denied_calls`" },
+                    { "name": "secret_reads_ok", "expression": "`secret_reads_ok`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "caller_ip", "displayName": "Caller IP", "type": "string", "visible": true },
+                  { "fieldName": "principal_email", "displayName": "Principal", "type": "string", "visible": true },
+                  { "fieldName": "service_name", "displayName": "Service", "type": "string", "visible": true },
+                  { "fieldName": "total_calls", "displayName": "Calls", "type": "integer", "visible": true },
+                  { "fieldName": "permission_denied_calls", "displayName": "PERMISSION_DENIED", "type": "integer", "visible": true },
+                  { "fieldName": "secret_reads_ok", "displayName": "Secrets OK", "type": "integer", "visible": true }
+                ]
+              },
+              "frame": { "showTitle": true, "title": "GCP Cloud Audit — Multi-SA & PERMISSION_DENIED Activity (Bitrise TTP)" }
+            }
+          },
+          "position": { "x": 3, "y": 6, "width": 3, "height": 6 }
+        }
+      ]
+    }
+  ]
+}
