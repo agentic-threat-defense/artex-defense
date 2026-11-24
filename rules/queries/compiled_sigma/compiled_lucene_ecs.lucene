@@ -20,7 +20,7 @@
 (url.original:(*\/vpn\/* OR *\/nf\/auth\/* OR *\/logon\/LogonPoint\/* OR *\/p\/u\/* OR *\/nitro\/v1*)) AND (user_agent.original:(*HeadlessChrome* OR *Nuclei* OR *norma\/* OR *norma\-agent* OR *artex\/* OR *artex\-enrich\/* OR *artex\-readonly\/* OR *artex\-worker\/* OR *artex\-agent* OR *artex\-judge\-* OR *artex\-probe* OR *artex\-selfupdate* OR *ArtexProbe* OR *ScopeWeaver*))
 
 # === ARTEX Control-Plane Routes, BLOODALCHEMY C2 URI (/Inform/logger/), or Self-Update User-Agent (artex_console_and_operator_host_forensics.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a018 | level=high) ===
-(url.original:(*\/api\/exploration\/* OR *\/api\/intercept\/* OR *\/api\/sync\/scopesentry* OR *\/api\/llm\/profiles* OR *\/api\/llm\/records* OR *\/function\/tasks* OR *\/function\/findings* OR *\/Inform\/logger\/*)) OR user_agent.original:*artex\-selfupdate*
+(url.original:(*\/api\/exploration\/* OR *\/api\/intercept\/* OR *\/api\/sync\/scopesentry* OR *\/api\/llm\/profiles* OR *\/api\/llm\/records* OR *\/function\/tasks* OR *\/function\/findings* OR *\/function\/traffic* OR *\/function\/llm\-records* OR *\/function\/workspace* OR *\/Inform\/logger\/*)) OR user_agent.original:*artex\-selfupdate*
 
 # === Rapid Automated EDR Sensor Discovery Commands (artex_edr_evasion_probe.yml | id=6d3b2c4e-9a41-4c9e-8b4d-1e7f90c1a003 | level=medium) ===
 (process.command_line:(*sc\ query* OR *Get\-Service* OR *tasklist* OR *wmic\ process*)) AND (process.command_line:(*CSFalcon* OR *CrowdStrike* OR *SentinelAgent* OR *CbDefense* OR *WinDefend* OR *Sysmon*))

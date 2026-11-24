@@ -18,7 +18,21 @@
 (content:"自主渗透测试控制台" OR content:"ARTEX MX" OR (content:"_next/static" AND (content:"ARTEX" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"ARTEX PRO" OR content:"Agent Security Workbench") AND (content:":8787" OR content:":8790" OR content:":8890"))) AND (type:html OR type:javascript OR type:peexe OR type:elf)
 ```
 
-### C. Community OSINT Detection Feeds & Threat-Actor Collections
+### C. Fork-Resilient Recording-Proxy & i18n Source Tarball Pivots (Survives Brand-Stripping)
+*(Confirmed high-yield in GTI against mid-Nov 2026 internationalized Next.js + Go ARTEX binaries and source tarballs; avoids common-substring VTGrep limits.)*
+```text
+entity:file content:"mitmproxy-ca-cert.pem" content:"traffic/_index/index.sqlite"
+```
+*Isolate de-branded / white-labeled forks that stripped `ARTEX` strings while keeping the Go recording proxy intact:*
+```text
+entity:file content:"mitmproxy-ca-cert.pem" content:"traffic/_index/index.sqlite" NOT content:"ARTEX"
+```
+*Next.js i18n console UI & source tarball pivot (`/function/workspace` + UI translation hook):*
+```text
+entity:file content:"/function/workspace" (content:"use-ui-translation" OR content:"WorkspaceEntry" OR content:"/api/exploration/" OR content:"artex_token=")
+```
+
+### D. Community OSINT Detection Feeds & Threat-Actor Collections
 - Monitor GTI curated collections tracking **ARTEX**, **Storm-0940** (zero-interactive-signin OAuth/Graph abuse), **VAPOR PANDA** (`BLOODALCHEMY` backdoor + EDR-skipping logic), and **Onyx Sleet**.
 - Cross-check structured community IOC CSVs & Sigma packs such as `ThreatDefence/agentic-attack-detections`, `jiwoochris/artex-global`, `kh20134/artex-defense-kit`, and `Kshot3000/artex-defense-kit`.
 - Export sanitized GTI IOC JSON bundles to `quarantine/` and run `artex-hunt intel` (local `gemma4-hunter`, $0 cloud tokens) to extract new behavioral signatures and Sigma updates.
@@ -47,7 +61,7 @@ host.services:(port=8080 and endpoints.http.body=~"(?i)(Sub2API|Subscription to 
 ```
 
 **Censys / Hunt.io — Exact ARTEX Console Routes, Cookie, Cert & UI Asset MD5s (Theori AIPT / Hunt.io):**
-- Unique ARTEX routes (`HTTP 200`): `/api/exploration/`, `/api/intercept/`, `/api/sync/scopesentry`, `/api/llm/profiles`, `/api/llm/records`, `/function/tasks`, `/function/findings`, `/system/intercept`
+- Unique ARTEX routes (`HTTP 200`): `/api/exploration/`, `/api/intercept/`, `/api/sync/scopesentry`, `/api/llm/profiles`, `/api/llm/records`, `/function/tasks`, `/function/findings`, `/function/traffic`, `/function/llm-records`, `/function/workspace`, `/system/intercept`
 - Session cookie: `artex_token=`
 - Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) — in CenQL pivot via `host.services.cert.parsed.issuer.organization="ARTEX"`; in HuntSQL pivot via `tls.issuer.organization = 'ARTEX' AND SPLIT(ja4x, '_')[1] = SPLIT(ja4x, '_')[2]`.
 - Next.js UI asset MD5s: `cd3ebd16437d6d3963592f7365dd3980`, `16bf6c5653291854e8c56c8eff7ca20d`

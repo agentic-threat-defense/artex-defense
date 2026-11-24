@@ -79,3 +79,37 @@ def test_unit42_canary_spec_targeting_and_write_readback_detected(tmp_path: Path
     assert "spec_driven_api_targeting" in reasons
     assert "write_then_readback_verification" in reasons
     assert "agentic_user_agent_burst" in reasons
+
+
+def test_artex_function_workspace_console_route_tp_and_tn(tmp_path: Path) -> None:
+    """TP: Next.js i18n ARTEX console route `/function/workspace`; TN: benign workspace paths."""
+    tp_log = tmp_path / "workspace_tp.jsonl"
+    tp_log.write_text(
+        "\n".join(
+            [
+                '{"timestamp": "2026-11-24T12:00:00Z", "source_host": "198.51.100.42", "actor": "op1", "event_type": "http", "http_method": "GET", "http_path": "/function/workspace", "status_code": 200}',
+                '{"timestamp": "2026-11-24T12:00:02Z", "source_host": "198.51.100.42", "actor": "op1", "event_type": "http", "http_method": "GET", "http_path": "/function/workspace?tab=files", "status_code": 200}',
+                '{"timestamp": "2026-11-24T12:00:04Z", "source_host": "198.51.100.42", "actor": "op1", "event_type": "http", "http_method": "GET", "http_path": "/function/workspace/download", "status_code": 200}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    tp_candidates = scan_telemetry_file(tp_log)
+    assert len(tp_candidates) == 1
+    assert "artex_console_or_host_forensics" in tp_candidates[0].reasons
+    assert any("artex_console_route:/function/workspace" in ind for ind in tp_candidates[0].matched_indicators)
+
+    tn_log = tmp_path / "workspace_tn.jsonl"
+    tn_log.write_text(
+        "\n".join(
+            [
+                '{"timestamp": "2026-11-24T12:10:00Z", "source_host": "198.51.100.43", "actor": "alice", "event_type": "http", "http_method": "GET", "http_path": "/function/workspace_docs", "status_code": 200}',
+                '{"timestamp": "2026-11-24T12:10:30Z", "source_host": "198.51.100.43", "actor": "alice", "event_type": "http", "http_method": "GET", "http_path": "/workspaces/dev", "status_code": 200}',
+                '{"timestamp": "2026-11-24T12:11:00Z", "source_host": "198.51.100.43", "actor": "alice", "event_type": "http", "http_method": "GET", "http_path": "/api/workspace/list", "status_code": 200}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(tn_log) == []

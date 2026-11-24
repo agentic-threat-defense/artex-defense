@@ -10,7 +10,7 @@ references:
   - https://github.com/jiwoochris/artex-global/blob/main/docs/defense-en.md
 author: ARTEX Defensive Research Workbench
 date: 2026-11-20
-modified: 2026-11-22
+modified: 2026-11-24
 tags:
   - attack.command_and_control
   - attack.collection
@@ -27,6 +27,9 @@ detection:
       - '/api/llm/records'
       - '/function/tasks'
       - '/function/findings'
+      - '/function/traffic'
+      - '/function/llm-records'
+      - '/function/workspace'
       - '/Inform/logger/'
   selection_selfupdate_ua:
     cs-user-agent|contains:

@@ -26,6 +26,11 @@ def test_yara_rules_enforce_filesize_bounds_and_avoid_fp_traps() -> None:
         assert "CyberStrikeAI" in text and "adaptixc2" in text and "wisp-c2" in text, f"{yf.name} missing CyberStrikeAI/C2 anchors"
         assert "ARTEX_WRITE_PROBE" in text and "E3 80 90 41 52 54 45 58" in text, f"{yf.name} missing Nov 2026 canary/audit anchors"
         assert "0x46445025" in text and "$doc_html" in text, f"{yf.name} missing PDF/HTML CTI report FP guard"
+        assert (
+            "mitmproxy-ca-cert.pem" in text
+            and "traffic/_index/index.sqlite" in text
+            and "$mitm_ca and $traffic_idx" in text
+        ), f"{yf.name} missing fork-resilient mitmproxy CA + SQLite index pair"
 
     livehunt = (RULES_ROOT / "yara" / "gti_livehunt_artex_payloads_transcripts.yar").read_text(encoding="utf-8")
     assert "uint16(0) == 0x5A4D" in livehunt, "Livehunt BLOODALCHEMY branch must be PE-gated"
@@ -140,6 +145,7 @@ def test_zeek_script_decouples_c2_relays_and_bounds_notice_identifiers() -> None
     assert "zscaler_zen_subnets" in text and "18899/tcp" in text
     assert "imds_wildcard_dns_pattern" in text
     assert "Agentic_ControlPlane_Or_Canary_URI" in text
+    assert "workspace" in text, "Zeek controlplane_uri_pattern must cover /function/workspace"
     assert "commercial_llm_api_suffixes in query" in text, "DNS commercial LLM check covers TLS 1.3 ECH"
 
 
@@ -231,6 +237,8 @@ def test_passive_intel_hunt_queries_use_current_platform_syntax() -> None:
     assert "services.http.response." not in md, "Update legacy Censys Search 2.0 paths to CenQL host.services"
     assert "host.services:(" in md, "CenQL multi-field service predicates must be scoped inside host.services:(...)"
     assert "18899" in md and "CyberStrikeAI" in md and "adaptixc2" in md
+    assert 'content:"mitmproxy-ca-cert.pem" content:"traffic/_index/index.sqlite"' in md, "Include GTI fork-resilient proxy pair"
+    assert "/function/workspace" in md, "Include Next.js i18n /function/workspace console route"
     assert "raw_data.web.useragents:*norma/0.*" not in md, "GNQL slashes must be quoted"
     assert "raw_data.web.paths:*artex=*" not in md, "GNQL '=' must be quoted"
     assert 'raw_data.http.useragent:"*artex-enrich/*"' in md, "Include native GNQL v3 raw_data.http.useragent field"
@@ -293,7 +301,10 @@ def test_sigma_rules_avoid_known_critical_fp_and_drift_regressions() -> None:
     assert "'/pip'" in linux_pivot and "'/dpkg'" in linux_pivot
 
     # Verify compiled packs preserve literal `?artex=` (not unescaped `?` wildcard) and CrowdStrike Linux basenames
+    console_sigma = (RULES_ROOT / "sigma" / "artex_console_and_operator_host_forensics.yml").read_text(encoding="utf-8")
+    assert "'/function/workspace'" in console_sigma, "Console Sigma rule must include /function/workspace"
     compiled_kql = (RULES_ROOT / "queries" / "compiled_sigma" / "compiled_kusto_generic.kql").read_text(encoding="utf-8")
+    assert 'UrlOriginal contains "/function/workspace"' in compiled_kql, "Recompile Sigma packs after adding /function/workspace"
     assert 'UrlOriginal contains "artex="' not in compiled_kql
     assert 'UrlOriginal contains "?artex="' in compiled_kql
 

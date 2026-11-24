@@ -37,7 +37,7 @@ KNOWN_ARTIFACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         re.compile(
             r"(/api/exploration/|/api/intercept/|/api/sync/scopesentry|"
             r"/api/llm/profiles|/api/llm/records|/api/update/stream|"
-            r"/function/(?:tasks|findings|traffic|llm-records)|"
+            r"/function/(?:tasks|findings|traffic|llm-records|workspace)(?=$|[\s/?&#])|"
             r"/system/(?:intercept|llm|mcp|skills))",
             re.IGNORECASE,
         ),

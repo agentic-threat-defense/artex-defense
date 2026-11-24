@@ -51,7 +51,7 @@ export {
 
     # High-confidence ARTEX / BLOODALCHEMY / RedAmon / Xalgorix / Pentest Swarm AI control-plane & canary URIs
     const controlplane_uri_pattern: pattern =
-        /(\/Inform\/logger\/|\/api\/exploration\/|\/api\/sync\/scopesentry|[?&]artex=|zz_no_such_user|zzq\.nonexistent|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK|rEdAm0n1337XsS|redamon-poc\.invalid|xalgorix-(nonexistent|missing|xxe)-|evil\.pentestswarm\.invalid)/i &redef;
+        /(\/Inform\/logger\/|\/api\/exploration\/|\/api\/sync\/scopesentry|\/function\/(tasks|findings|traffic|llm-records|workspace)($|[\/?&#])|[?&]artex=|zz_no_such_user|zzq\.nonexistent|ARTEX_WRITE_PROBE|ARTEX_PERSIST_OK|rEdAm0n1337XsS|redamon-poc\.invalid|xalgorix-(nonexistent|missing|xxe)-|evil\.pentestswarm\.invalid)/i &redef;
 
     # Tightened to avoid FP hits on benign strings ("normal", "smartex") or standalone QA HeadlessChrome
     const agentic_ua_pattern: pattern =

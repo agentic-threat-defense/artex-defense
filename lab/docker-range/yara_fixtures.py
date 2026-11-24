@@ -54,6 +54,18 @@ def main(out_dir: Path) -> None:
             b"/Inform/logger/\x00SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\x00" + b"\x00" * 256
         )
     )
+    # 5. Benign generic mitmproxy setup doc & CTI PDF/HTML quoting BOTH mitmproxy-ca-cert.pem + traffic/_index/index.sqlite (must NOT match!)
+    (benign_dir / "benign_generic_mitmproxy.txt").write_text(
+        "Install ~/.mitmproxy/mitmproxy-ca-cert.pem into your browser trust store for local debugging.\n",
+        encoding="utf-8",
+    )
+    (benign_dir / "benign_cti_mitm_pair.pdf").write_bytes(
+        b"%PDF-1.7\nCTI Report: ARTEX uses mitmproxy-ca-cert.pem and traffic/_index/index.sqlite for traffic capture.\n"
+    )
+    (benign_dir / "benign_cti_mitm_pair.html").write_text(
+        "<!DOCTYPE html><html><body>Analysis of mitmproxy-ca-cert.pem and traffic/_index/index.sqlite in ARTEX.</body></html>\n",
+        encoding="utf-8",
+    )
 
     # SEEDED FIXTURES (MUST match their expected YARA rules!)
     # 1. Seeded Go ELF with ScopeWeaver + :8787
@@ -73,6 +85,22 @@ def main(out_dir: Path) -> None:
     # 5. Seeded unsigned PE with BLOODALCHEMY graphics-hook-filter64.dll (validates Retrohunt Path A `pe.is_pe`!)
     (seeded_dir / "seeded_bloodalchemy.pe").write_bytes(
         make_minimal_pe(b"graphics-hook-filter64.dll\x00/Inform/logger/\x00" + b"\x00" * 256)
+    )
+    # 6. Seeded de-branded / white-labeled Go ELF with ZERO ARTEX brand strings (ONLY mitmproxy CA + SQLite index pair!)
+    (seeded_dir / "seeded_debranded_artex_fork.elf").write_bytes(
+        b"\x7fELF"
+        + b"\x00" * 60
+        + b"traffic/_ca/mitmproxy-ca-cert.pem\x00traffic/_index/index.sqlite\x00"
+        + b"\x00" * 10240
+    )
+    # 7. Seeded synthetic i18n source tarball with 512B POSIX header + embedded Next.js `<html` + recording-proxy pair
+    tar_hdr = b"web/src/app/(main)/function/workspace/page.tsx".ljust(512, b"\x00")
+    (seeded_dir / "seeded_artex_i18n_tarball.tar").write_bytes(
+        tar_hdr
+        + b'<html lang="en"><body>Workspace</body></html>\x00'
+        + b"traffic/_ca/mitmproxy-ca-cert.pem\x00"
+        + b"traffic/_index/index.sqlite\x00"
+        + b"\x00" * 512
     )
 
 

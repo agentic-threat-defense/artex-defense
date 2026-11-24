@@ -5,9 +5,9 @@ rule HUNT_APT_VAPORPANDA_BloodAlchemy_ARTEX_Loader {
         description = "Retrohunt rule targeting unsigned BLOODALCHEMY PE payloads/sideloaders and ARTEX/ScopeWeaver/CyberStrikeAI binaries and configs"
         author = "ARTEX Defensive Research Workbench"
         threat_actor = "VAPOR PANDA / REF5961"
-        date = "2026-11-22"
+        date = "2026-11-24"
         reference = "CrowdStrike VAPOR PANDA / Elastic BLOODALCHEMY"
-        version = "1.3"
+        version = "1.4"
 
     strings:
         // BLOODALCHEMY C2 & OBS/Brother masquerading artifacts
@@ -49,6 +49,9 @@ rule HUNT_APT_VAPORPANDA_BloodAlchemy_ARTEX_Loader {
         $canary_persist = "ARTEX_PERSIST_OK" ascii wide
         // UTF-8: 【ARTEX 平台管控·非目标防御】
         $audit_zh = { E3 80 90 41 52 54 45 58 20 E5 B9 B3 E5 8F B0 E7 AE A1 E6 8E A7 C2 B7 E9 9D 9E E7 9B AE E6 A0 87 E9 98 B2 E5 BE A1 E3 80 91 }
+        // Fork-resilient ARTEX recording-proxy CA + SQLite traffic index pair (survives brand-stripping & i18n forks)
+        $mitm_ca     = "mitmproxy-ca-cert.pem" ascii wide
+        $traffic_idx = "traffic/_index/index.sqlite" ascii wide
         $doc_html    = "<html" nocase ascii
         $doc_doctype = "<!doctype" nocase ascii
         // Multi-marker Go runtime anchors (survives `-ldflags="-s -w"` and garble symbol stripping)
@@ -83,7 +86,7 @@ rule HUNT_APT_VAPORPANDA_BloodAlchemy_ARTEX_Loader {
                 )
             )
             or
-            // Path B: Compiled PE / ELF / Mach-O / Universal Fat Mach-O ARTEX / ScopeWeaver / CyberStrikeAI binaries
+            // Path B: Compiled PE / ELF / Mach-O / Universal Fat Mach-O ARTEX / ScopeWeaver / CyberStrikeAI / de-branded fork binaries
             (
                 filesize > 10KB and
                 (
@@ -94,6 +97,7 @@ rule HUNT_APT_VAPORPANDA_BloodAlchemy_ARTEX_Loader {
                     uint32(0) == 0xBEBAFECA
                 ) and (
                     any of ($mod_artex, $mod_norma, $art_ua1, $art_ua2, $art_ua3, $art_ua5, $art_fork2, $name_csai, $name_csai_bin, $name_adaptix, $name_wisp) or
+                    ($mitm_ca and $traffic_idx) or
                     (
                         any of ($go_*) and
                         any of ($art_scope, $art_fork1, $art_fork3, $art_probe, $art_path2, $name_exploit_agent) and
@@ -112,6 +116,13 @@ rule HUNT_APT_VAPORPANDA_BloodAlchemy_ARTEX_Loader {
                     ($art_path2 and any of ($art_tmpl, $art_ua4, $art_probe, $art_scope, $art_fork1, $canary_write, $canary_persist, $c2_*)) or
                     (any of ($c2_*) and any of ($art_tmpl, $art_ua4, $art_probe, $art_scope, $art_fork1, $art_ua1, $art_ua2, $art_ua3, $art_ua5, $name_csai, $canary_write, $canary_persist))
                 )
+            )
+            or
+            // Path D: Fork-resilient recording-proxy CA + SQLite index pair in source tarballs/scripts/configs (blocks PDF & HTML pages without dropping .tar bundles containing Next.js layout.tsx)
+            (
+                not uint32(0) == 0x46445025 and
+                not ($doc_html in (0..511) or $doc_doctype in (0..511)) and
+                $mitm_ca and $traffic_idx
             )
         )
 }

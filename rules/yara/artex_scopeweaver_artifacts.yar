@@ -3,7 +3,7 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
     meta:
         description = "Detects Go/stripped binaries, harness artifacts, CyberStrikeAI/AdaptixC2/Wisp-C2 tooling, or HTML console assets referencing ARTEX, ScopeWeaver, AntiFox, Pojun, FORANG, or norma agentic offensive frameworks"
         author = "ARTEX Defensive Research Workbench"
-        date = "2026-11-22"
+        date = "2026-11-24"
         tlp = "CLEAR"
         mitre_attack = "T1588.002"
 
@@ -52,10 +52,13 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
         $go_buildinf = { FF 20 47 6F 20 62 75 69 6C 64 69 6E 66 3A }
         $go_ver = "go1.2" ascii
         $go_main = "runtime.main" ascii
+        // Fork-resilient ARTEX recording-proxy CA + SQLite traffic index pair (survives brand-stripping & i18n forks)
+        $mitm_ca = "mitmproxy-ca-cert.pem" ascii wide
+        $traffic_idx = "traffic/_index/index.sqlite" ascii wide
 
     condition:
         filesize < 50MB and (
-            // 1. Compiled PE / ELF / Mach-O / Universal Fat Mach-O framework binary (handles stripped Go binaries)
+            // 1. Compiled PE / ELF / Mach-O / Universal Fat Mach-O framework binary (handles stripped Go & de-branded binaries)
             (
                 (
                     uint16(0) == 0x5A4D or
@@ -65,6 +68,7 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
                     uint32(0) == 0xBEBAFECA
                 ) and (
                     any of ($mod_artex, $mod_norma, $name_enrich, $name_readonly, $name_worker, $name_selfupd, $name_verify, $name_worker_chat, $name_csai, $name_csai_bin, $name_adaptix, $name_wisp) or
+                    ($mitm_ca and $traffic_idx) or
                     (
                         any of ($go_*) and
                         any of ($name_probe, $name_scope, $name_antifox, $name_pojun, $name_forang, $name_scofix, $name_artex_mx, $name_guanlan, $name_norma, $name_norma_agent, $path_stage, $name_exploit_agent) and
@@ -91,6 +95,13 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
                     $audit_zh or
                     (any of ($canary_write, $canary_persist) and any of ($name_enrich, $name_readonly, $name_worker, $name_norma, $name_probe, $name_scope, $path_stage, $port_8787, $port_8788, $port_8790, $port_8890))
                 )
+            )
+            or
+            // 4. Fork-resilient recording-proxy CA + SQLite index pair in source tarballs/scripts/configs (blocks PDF & HTML pages without dropping .tar bundles containing Next.js layout.tsx)
+            (
+                not uint32(0) == 0x46445025 and
+                not ($doc_html in (0..511) or $doc_doctype in (0..511)) and
+                $mitm_ca and $traffic_idx
             )
         )
 }
