@@ -92,6 +92,7 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     # High-signal ARTEX & Offensive-AI Detection Repos (commits, always_relevant=True)
     FeedSpec("ThreatDefence/agentic-attack-detections", "https://github.com/ThreatDefence/agentic-attack-detections/commits/main.atom", True, "commit"),
     FeedSpec("theori-io/aipt-detections", "https://github.com/theori-io/aipt-detections/commits/main.atom", True, "commit"),
+    FeedSpec("Athar-HQ/Athar", "https://github.com/Athar-HQ/Athar/commits/main.atom", True, "commit"),
     FeedSpec("jiwoochris/artex-global", "https://github.com/jiwoochris/artex-global/commits/main.atom", True, "commit"),
     FeedSpec("ja1sh/artex-defense", "https://github.com/ja1sh/artex-defense/commits/main.atom", True, "commit"),
     FeedSpec("logsexe/artex-detection-as-code", "https://github.com/logsexe/artex-detection-as-code/commits/main.atom", True, "commit"),
@@ -105,6 +106,7 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
     FeedSpec("SigmaHQ/sigma [Releases]", "https://github.com/SigmaHQ/sigma/releases.atom", True, "release"),
     FeedSpec("ThreatDefence/agentic-attack-detections [Releases]", "https://github.com/ThreatDefence/agentic-attack-detections/releases.atom", True, "release"),
     FeedSpec("theori-io/aipt-detections [Releases]", "https://github.com/theori-io/aipt-detections/releases.atom", True, "release"),
+    FeedSpec("Athar-HQ/Athar [Releases]", "https://github.com/Athar-HQ/Athar/releases.atom", True, "release"),
     FeedSpec("jiwoochris/artex-global [Releases]", "https://github.com/jiwoochris/artex-global/releases.atom", True, "release"),
     FeedSpec("ja1sh/artex-defense [Releases]", "https://github.com/ja1sh/artex-defense/releases.atom", True, "release"),
     FeedSpec("logsexe/artex-detection-as-code [Releases]", "https://github.com/logsexe/artex-detection-as-code/releases.atom", True, "release"),
@@ -153,7 +155,8 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
 WATCHTOWER_RELEVANCE_RE = re.compile(
     r"(\bartex\b|artex\s*pro|autumn-27|\bantifox\b|\bscopeweaver\b|\bpojun\b|\bforang\b|guanlan\s*sec|"
     r"\bbloodalchemy\b|\bdarksword\b|\bbabidighost\b|norma/|artexprobe|artex-probe|zzz[-_]nonexistent|"
-    r"\bhexstrike\b|\bcyberstrikeai\b|\bpentagi\b|\bcairn\b|"
+    r"\bhexstrike\b|\bcyberstrikeai\b|\bpentagi\b|\bcairn\b|\bredamon\b|\bautocve\b|\bdeepaudit\b|"
+    r"\bgoogtex\b|\bhekerai\b|\bvaptx\b|\barkanaai\b|"
     r"\bstrix\b.*\bagent|\bshannon\b.*\bagent|\breaper\b.*\bartex|hermes[-_ ]agent|agent[-_ ]zero|"
     r"\bcarbonato\b|qwen[-_ ]code|kimi[-_ ]cli|\bopencode\b|exploit_agent|storm-0940|"
     r"storm-3358|vapor\s*panda|madpot|openbullet|sub2api|xcai\.pro|lanmao666|"
@@ -162,7 +165,7 @@ WATCHTOWER_RELEVANCE_RE = re.compile(
     r"\bmcp\b.*(?:pentest|offensive|exploit|agent)|"
     r"(?:litellm|ragflow|open\s*webui|langflow|dify|ollama).*(?:exploit|cve|rce|api\s*key|exposed|hijack|steal|harvest|attack|artex|compromise)|"
     r"okta.*(?:mfa|2fa|fatigue|agent|workflow|brute)|entra.*(?:service\s+principal|mfa\s+fatigue)|"
-    r"인공지능.*(?:공격|침해|해킹|에이전트)|AI\s*에이전트|자율\s*침투|아텍스)",
+    r"인공지능.*(?:공격|침해|해킹|에이전트)|AI\s*에이전트|자율\s*침투(?:\s*테스트\s*콘솔)?|아텍스)",
     re.IGNORECASE,
 )
 

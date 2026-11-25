@@ -15,7 +15,7 @@
 
 ### B. Exposed Console Title / Embedded Next.js Web UI Strings
 ```text
-(content:"自主渗透测试控制台" OR content:"ARTEX MX" OR (content:"_next/static" AND (content:"ARTEX" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"ARTEX PRO" OR content:"Agent Security Workbench") AND (content:":8787" OR content:":8790" OR content:":8890"))) AND (type:html OR type:javascript OR type:peexe OR type:elf)
+(content:"自主渗透测试控制台" OR content:"자율 침투 테스트 콘솔" OR content:"Autonomous Penetration Testing Console" OR content:"LLM 驱动的自主渗透测试系统控制台" OR content:"ARTEX MX" OR (content:"_next/static" AND (content:"ARTEX" OR content:"ScopeWeaver" OR content:"AntiFox" OR content:"ARTEX PRO" OR content:"Agent Security Workbench") AND (content:":8787" OR content:":8790" OR content:":8890"))) AND (type:html OR type:javascript OR type:peexe OR type:elf)
 ```
 
 ### C. Fork-Resilient Recording-Proxy & i18n Source Tarball Pivots (Survives Brand-Stripping)
@@ -49,8 +49,8 @@ host.services:(endpoints.http.headers:(key="WWW-Authenticate" and value=~'(?i)Ba
 or host.services:(
   port in [8787, 8788, 8790, 8890, 18899, 5001, 5002, 5003, 8082]
   and (
-    endpoints.http.html_title=~"(?i)(自主渗透测试控制台|Agent Security Workbench|ARTEX MX|AntiFox|Guanlan SEC|ScopeWeaver|CyberStrikeAI)"
-    or endpoints.http.body=~"(?i)(ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|Autonomous Penetration|artex_token=|CyberStrikeAI|adaptixc2|ARTEX_WRITE_PROBE)"
+    endpoints.http.html_title=~"(?i)(自主渗透测试控制台|자율 침투 테스트 콘솔|Autonomous Penetration Testing Console|Agent Security Workbench|ARTEX MX|AntiFox|Guanlan SEC|ScopeWeaver|CyberStrikeAI|GOOGTEX|HekerAI|VaptX|ArkanaAI|AutoCVE|DeepAudit)"
+    or endpoints.http.body=~"(?i)(LLM 驱动的自主渗透测试系统控制台|ScopeWeaver|AntiFox|Pojun|FORANG|sco-fix2|Autonomous Penetration|artex_token=|CyberStrikeAI|adaptixc2|ARTEX_WRITE_PROBE)"
   )
 )
 ```
@@ -62,6 +62,11 @@ host.services:(port=8080 and endpoints.http.body=~"(?i)(Sub2API|Subscription to 
 
 **Censys / Hunt.io — Exact ARTEX Console Routes, Cookie, Cert & UI Asset MD5s (Theori AIPT / Hunt.io):**
 - Unique ARTEX routes (`HTTP 200`): `/api/exploration/`, `/api/intercept/`, `/api/sync/scopesentry`, `/api/llm/profiles`, `/api/llm/records`, `/function/tasks`, `/function/findings`, `/function/traffic`, `/function/llm-records`, `/function/workspace`, `/system/intercept`
+- **Athar Portable Service-Fingerprint Pivots (`Athar-HQ/Athar`, DRL 1.1 — Gameel Ali `@MalGamy12` & Florian Roth `@cyb3rops`):**
+  - **Console Title Suffixes (all rebrands, incl. NKW, LMTex, MiniHunter, GOOGTEX, HekerAI, ExploitFinder, RedOps):** Chinese `自主渗透测试控制台`, Korean `자율 침투 테스트 콘솔`, English `Autonomous Penetration Testing Console`, and meta tag `LLM 驱动的自主渗透测试系统控制台`.
+  - **ARTEX Favicon MurmurHash3:** `-576220750` (Shodan `http.favicon.hash:-576220750`, FOFA `icon_hash="-576220750"`; invert with `icon_hash!="-576220750"` alongside `body="/function/tasks"` to isolate non-ARTEX rebrands).
+  - **AntiFox Wildcard-DNS TLS SAN (TCP 443):** `^antifox\..+\.nip\.io$` (avoid generic `*.sslip.io` / `*.nip.io` without the `antifox.` prefix).
+  - **Title-Stripped Rebrand Stylesheets (`urlscan.io` `hash:` — catches VaptX, ARTIFEX, HACK DOG, Cybrion, ArkanaAI, DAO, HekerAI, AntiFox):** `/_next/static/chunks/4384baud_6ozc.css` (`ff75f55ed6baeb22cee166fd7281a5f3b9243678b9b04ae41c8a84ae39cc02f5`, DAO: `37761e79441b9be7852117179316c4893cba3077be14e2dc293a4d87478576ce`), `/_next/static/chunks/21_ph5otuqxv2.css` (`c455b9a8cfd0ea9223c9043053f9cf8cc83a6357e78b53800c989f7a6037ec42`), `/_next/static/chunks/3ij6fl1kqv7_b.css` (`c4186f06f5b1c6a89e47736f5ef32d037917f52c3c6e6e5df0b54ec571373e77`), `/_next/static/chunks/2ks5kxw4iystr.css` (`c37a40193c02b10c9e6b71141b9cde1f132f1a0333fbeee0163da067d78fbd80`), `/_next/static/css/eba9231147484ecf.css` (`432281d1bc8715666a33ba779673f805b698d7a229b2fb2a0250eacca9855ceb`). Use `athar convert` from `https://github.com/Athar-HQ/Athar` to auto-generate FOFA, Shodan, Censys, ZoomEye, Modat Magnify, and urlscan.io queries across ARTEX, Cairn, CyberStrikeAI, PentAGI, RedAmon, Strix, AutoCVE, and DeepAudit.
 - Session cookie: `artex_token=`
 - Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) — in CenQL pivot via `host.services.cert.parsed.issuer.organization="ARTEX"`; in HuntSQL pivot via `tls.issuer.organization = 'ARTEX' AND SPLIT(ja4x, '_')[1] = SPLIT(ja4x, '_')[2]`.
 - Next.js UI asset MD5s: `cd3ebd16437d6d3963592f7365dd3980`, `16bf6c5653291854e8c56c8eff7ca20d`
@@ -75,6 +80,8 @@ FROM httpv2
 WHERE http.headers.raw ILIKE '%WWW-Authenticate%realm="ARTEX"%'
    OR (port IN (8787, 8788, 8790, 8890, 18899, 5001, 5002, 5003, 8082) AND (
         html.head.title ILIKE '%自主渗透测试%'
+     OR html.head.title ILIKE '%자율 침투 테스트 콘솔%'
+     OR html.head.title ILIKE '%Autonomous Penetration Testing Console%'
      OR html.head.title ILIKE '%Agent Security Workbench%'
      OR html.head.title ILIKE '%ARTEX MX%'
      OR html.head.title ILIKE '%CyberStrikeAI%'

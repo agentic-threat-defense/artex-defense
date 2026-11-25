@@ -7,6 +7,7 @@ import pytest
 
 from artex_defense.watchtower import (
     DEFAULT_FEEDS,
+    WATCHTOWER_RELEVANCE_RE,
     parse_feed_xml,
     run_watchtower,
     validate_feed_url,
@@ -69,9 +70,16 @@ def test_validate_feed_url_enforces_https_and_strict_allowlist() -> None:
     validate_feed_url("https://threatdefence.com/security-advisories/feed")
     validate_feed_url("https://github.com/kh20134/artex-defense-kit/commits/main.atom")
     validate_feed_url("https://github.com/Kshot3000/artex-defense-kit/commits/main.atom")
+    validate_feed_url("https://github.com/Athar-HQ/Athar/commits/main.atom")
+    validate_feed_url("https://github.com/Athar-HQ/Athar/releases.atom")
     validate_feed_url("https://feeds.feedburner.com/TheHackersNews")
     validate_feed_url("https://www.malware-traffic-analysis.net/blog-entries.rss")
     validate_feed_url("https://suricata.io/feed/")
+    feed_urls = {spec.url for spec in DEFAULT_FEEDS}
+    assert "https://github.com/Athar-HQ/Athar/commits/main.atom" in feed_urls
+    assert "https://github.com/Athar-HQ/Athar/releases.atom" in feed_urls
+    assert WATCHTOWER_RELEVANCE_RE.search("Add AutoCVE and DeepAudit service fingerprint rules")
+    assert WATCHTOWER_RELEVANCE_RE.search("GOOGTEX 자율 침투 테스트 콘솔 rebrand observed")
     for spec in DEFAULT_FEEDS:
         validate_feed_url(spec.url)
 

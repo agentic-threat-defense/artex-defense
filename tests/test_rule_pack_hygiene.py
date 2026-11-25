@@ -239,6 +239,9 @@ def test_passive_intel_hunt_queries_use_current_platform_syntax() -> None:
     assert "18899" in md and "CyberStrikeAI" in md and "adaptixc2" in md
     assert 'content:"mitmproxy-ca-cert.pem" content:"traffic/_index/index.sqlite"' in md, "Include GTI fork-resilient proxy pair"
     assert "/function/workspace" in md, "Include Next.js i18n /function/workspace console route"
+    assert "Athar-HQ/Athar" in md and "-576220750" in md and "자율 침투 테스트 콘솔" in md, (
+        "Include DRL 1.1-attributed Athar ARTEX favicon hash and Korean/English console pivots"
+    )
     assert "raw_data.web.useragents:*norma/0.*" not in md, "GNQL slashes must be quoted"
     assert "raw_data.web.paths:*artex=*" not in md, "GNQL '=' must be quoted"
     assert 'raw_data.http.useragent:"*artex-enrich/*"' in md, "Include native GNQL v3 raw_data.http.useragent field"

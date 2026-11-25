@@ -66,6 +66,15 @@ def main(out_dir: Path) -> None:
         "<!DOCTYPE html><html><body>Analysis of mitmproxy-ca-cert.pem and traffic/_index/index.sqlite in ARTEX.</body></html>\n",
         encoding="utf-8",
     )
+    (benign_dir / "benign_korean_vendor.html").write_text(
+        "<!DOCTYPE html><html><head><title>침투 테스트 서비스 | Example Corp</title></head><body>Penetration Testing Services</body></html>\n",
+        encoding="utf-8",
+    )
+    (benign_dir / "benign_cti_en_console_blog.html").write_text(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>CTI Report</title></head>'
+        "<body>Analysis of Autonomous Penetration Testing Console deployments.</body></html>\n",
+        encoding="utf-8",
+    )
 
     # SEEDED FIXTURES (MUST match their expected YARA rules!)
     # 1. Seeded Go ELF with ScopeWeaver + :8787
@@ -101,6 +110,15 @@ def main(out_dir: Path) -> None:
         + b"traffic/_ca/mitmproxy-ca-cert.pem\x00"
         + b"traffic/_index/index.sqlite\x00"
         + b"\x00" * 512
+    )
+    # 8. Seeded Korean & English rebranded ARTEX console HTML (validates Athar-derived console title matches)
+    (seeded_dir / "seeded_korean_artex_console.html").write_text(
+        "<!DOCTYPE html><html><head><title>GOOGTEX — 자율 침투 테스트 콘솔</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
+    (seeded_dir / "seeded_english_artex_console.html").write_text(
+        "<!DOCTYPE html><html><head><title>NKW — Autonomous Penetration Testing Console</title></head><body></body></html>\n",
+        encoding="utf-8",
     )
 
 
