@@ -146,6 +146,8 @@ def run_baseline() -> None:
         ("/login", "smartex-agent/1.0", 5.4),
         ("/login", "smartex-judge-prod", 2.3),
         ("/nonexistent-image.png", "Mozilla/5.0 Chrome/131.0.0.0", 3.8),
+        ("/function/workspace_docs", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 2.9),
+        ("/cti-blog", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 3.1),
     ]
     benign_browser_hdrs = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -269,10 +271,14 @@ def _run_attack_behaviors_inner() -> None:
     http_req("/api/v1/update-documents", method="GET", ua="python-httpx/0.28.1")
     http_req("/.env", ua="python-httpx/0.28.1")
 
-    # 4. BLOODALCHEMY C2 URI + ARTEX console routes/headers/titles + port 8787 (sid:9100006, 9100010, 9100008, 9100003, 9100002)
+    # 4. BLOODALCHEMY C2 URI + ARTEX console routes/headers/titles (CN/KR/EN + /function/workspace + Bitrise _i<N>_probe) + port 8787
     http_req("/Inform/logger/heartbeat", ua="artex-selfupdate")
     http_req("/api/exploration/graph", port=8787, ua="artex-enrich/1.0")
     http_req("/console", port=8787, ua="artex-enrich/1.0")
+    http_req("/console-kr", port=8787, ua="artex-enrich/1.0")
+    http_req("/console-en", port=8787, ua="artex-enrich/1.0")
+    http_req("/function/workspace?tab=files", ua="Mozilla/5.0 Chrome/131.0.0.0")
+    http_req("/_i0142_probe_auth", ua="python-httpx/0.28.1")
 
     # 5. Rapid edge VPN probing with Nuclei UA (6 hits -> triggers Suricata sid:9100005 detection_filter count 5)
     for uri in [

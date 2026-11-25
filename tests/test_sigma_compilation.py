@@ -135,6 +135,12 @@ def test_compiled_siem_packs_pass_real_wire_schema_and_syntax_linter(tmp_path: P
         assert "(?:" not in pat and "^" not in pat and "$" not in pat and "(|" not in pat, (
             f"Invalid Lucene ES|QL rlike regex: {pat!r}"
         )
+    # Standard ES|QL `"..."` literals reject bare single-backslash `\?`; LIKE wildcard escapes must be `"\\?"`
+    for match in re.finditer(r'\blike\s+"((?:[^"\\]|\\.)*)"', esql_text):
+        lit = match.group(1)
+        assert not re.search(r'(?<!\\)\\[?*]', lit), f"Invalid single-backslash ES|QL LIKE escape in: {lit!r}"
+    assert r'url.original like "*/function/workspace\\?*"' in esql_text
+    assert r'url.original like "*\\?artex=*"' in esql_text
 
     lucene_text = Path(by_key["lucene_ecs"]["exported_file"]).read_text(encoding="utf-8")
     for match in re.finditer(r":/((?:[^/\\]|\\.)+)/", lucene_text):

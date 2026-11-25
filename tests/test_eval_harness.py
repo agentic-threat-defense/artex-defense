@@ -11,9 +11,9 @@ def test_eval_harness_achieves_perfect_precision_and_recall_on_synthetic_suite()
     report = run_evaluation(rules_dir=RULES_DIR, with_gemma4=False)
     metrics = report["metrics"]
 
-    assert metrics["tp"] == 19, f"Expected all 19 synthetic scenarios detected: {report['scenarios']}"
+    assert metrics["tp"] == 22, f"Expected all 22 synthetic scenarios detected: {report['scenarios']}"
     assert metrics["fp"] == 0, f"Unexpected false positives on benign baselines: {report['scenarios']}"
-    assert metrics["tn"] == 17
+    assert metrics["tn"] == 20
     assert metrics["fn"] == 0
     assert metrics["precision"] == 1.0
     assert metrics["recall"] == 1.0

@@ -1495,6 +1495,285 @@ def generate_synthetic_suite(out_dir: str | Path, *, seed: int = 42) -> dict[str
         "expected_reasons": ["k8s_privileged_pod_staging"],
     }
 
+    # Baseline 18: Benign GCP microservice reading 2 secrets + GCS bucket with cloud-service words + Google-managed SAs -> 0 FPs
+    cur = t0 + timedelta(hours=24)
+    gcp_benign: list[dict[str, Any]] = [
+        {
+            "timestamp": _iso(cur),
+            "protoPayload": {
+                "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+                "serviceName": "secretmanager.googleapis.com",
+                "methodName": "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion",
+                "resourceName": "projects/111122223333/secrets/db-pass/versions/latest",
+                "authenticationInfo": {"principalEmail": "svc-billing@prod-proj.iam.gserviceaccount.com"},
+                "requestMetadata": {"callerIp": "198.51.100.110", "callerSuppliedUserAgent": "google-cloud-go/1.12.0"},
+                "status": {"code": 0},
+            },
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=25)),
+            "protoPayload": {
+                "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+                "serviceName": "secretmanager.googleapis.com",
+                "methodName": "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion",
+                "resourceName": "projects/111122223333/secrets/stripe-key/versions/latest",
+                "authenticationInfo": {"principalEmail": "svc-billing@prod-proj.iam.gserviceaccount.com"},
+                "requestMetadata": {"callerIp": "198.51.100.110", "callerSuppliedUserAgent": "google-cloud-go/1.12.0"},
+                "status": {"code": 0},
+            },
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=55)),
+            "protoPayload": {
+                "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+                "serviceName": "storage.googleapis.com",
+                "methodName": "storage.objects.get",
+                "resourceName": "projects/_/buckets/arm-compute-container-iam-storage-logs/objects/2026.log",
+                "authenticationInfo": {"principalEmail": "svc-billing@prod-proj.iam.gserviceaccount.com"},
+                "requestMetadata": {"callerIp": "198.51.100.110", "callerSuppliedUserAgent": "google-cloud-go/1.12.0"},
+                "status": {"code": 0},
+            },
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=85)),
+            "protoPayload": {
+                "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+                "serviceName": "cloudbuild.googleapis.com",
+                "methodName": "google.devtools.cloudbuild.v1.CloudBuild.GetBuild",
+                "resourceName": "projects/prod-proj/builds/abc",
+                "authenticationInfo": {"principalEmail": "service-111122223333@gcp-sa-cloudbuild.iam.gserviceaccount.com"},
+                "requestMetadata": {"callerIp": "198.51.100.110", "callerSuppliedUserAgent": "Google-Cloud-Build"},
+                "status": {"code": 0},
+            },
+        },
+    ]
+    p = _write_jsonl(base_dir / "baseline_gcp_microservice_normal.jsonl", gcp_benign)
+    manifest["baseline_gcp_microservice_normal"] = {
+        "path": str(p),
+        "expected_positive": False,
+        "format": "jsonl",
+        "surface": "cloud_iam",
+        "expected_reasons": [],
+    }
+
+    # Scenario 20: Bitrise ARTEX GCP Cloud Audit (native protoPayload) multi-SA pivot + PERMISSION_DENIED -> AccessSecretVersion + _i<N>_probe
+    cur = t0 + timedelta(hours=25)
+    gcp_atk_ip = "203.0.113.244"
+    gcp_attack: list[dict[str, Any]] = [
+        {
+            "timestamp": _iso(cur + timedelta(seconds=idx * 1.2)),
+            "protoPayload": {
+                "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+                "serviceName": svc,
+                "methodName": meth,
+                "resourceName": res,
+                "authenticationInfo": {"principalEmail": sa},
+                "requestMetadata": {"callerIp": gcp_atk_ip, "callerSuppliedUserAgent": "google-cloud-sdk gcloud/501.0.0"},
+                "status": {"code": code, "message": msg},
+            },
+        }
+        for idx, (svc, meth, res, sa, code, msg) in enumerate(
+            [
+                ("iam.googleapis.com", "google.iam.admin.v1.ListServiceAccounts", "projects/prod-proj", "111122223333-compute@developer.gserviceaccount.com", 7, "PERMISSION_DENIED"),
+                ("compute.googleapis.com", "v1.compute.instances.list", "projects/prod-proj/zones/us-central1-a", "111122223333-compute@developer.gserviceaccount.com", 7, "PERMISSION_DENIED"),
+                ("compute.googleapis.com", "v1.compute.instances.list", "projects/prod-proj/zones/us-central1-a", "ci-runner@prod-proj.iam.gserviceaccount.com", 7, "PERMISSION_DENIED"),
+                ("storage.googleapis.com", "storage.buckets.list", "projects/prod-proj", "backup-sa@prod-proj.iam.gserviceaccount.com", 7, "PERMISSION_DENIED"),
+                ("secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.ListSecrets", "projects/prod-proj", "111122223333-compute@developer.gserviceaccount.com", 7, "PERMISSION_DENIED"),
+                ("secretmanager.googleapis.com", "google.cloud.secretmanager.v1.SecretManagerService.AccessSecretVersion", "projects/prod-proj/secrets/prod-signing-key/versions/latest", "111122223333-compute@developer.gserviceaccount.com", 0, "OK"),
+            ]
+        )
+    ] + [
+        {
+            "timestamp": _iso(cur + timedelta(seconds=9)),
+            "source_host": gcp_atk_ip,
+            "actor": "111122223333-compute@developer.gserviceaccount.com",
+            "surface": "web_portal",
+            "event_type": "http",
+            "http_method": "GET",
+            "http_path": "/_i0142_probe_auth",
+            "status_code": 404,
+            "user_agent": "python-httpx/0.28.1",
+        }
+    ]
+    p = _write_jsonl(base_dir / "scenario_bitrise_gcp_multi_sa_secret_dump.jsonl", gcp_attack)
+    manifest["scenario_bitrise_gcp_multi_sa_secret_dump"] = {
+        "path": str(p),
+        "expected_positive": True,
+        "format": "jsonl",
+        "surface": "cloud_iam",
+        "expected_reasons": [
+            "cloud_multi_identity_from_single_ip",
+            "cloud_secret_search_or_dryrun_burst",
+            "unit42_agentic_canary_probe",
+        ],
+    }
+
+    # Baseline 19: Benign Azure Key Vault startup (2 SecretGet 200s from 1 static IP) + single-/16 Entra SP -> 0 FPs
+    cur = t0 + timedelta(hours=26)
+    kv_benign: list[dict[str, Any]] = [
+        {
+            "timestamp": _iso(cur),
+            "source_host": "198.51.100.120",
+            "actor": "app-payments-sp",
+            "surface": "cloud_iam",
+            "appliance": "entra_id",
+            "event_type": "idp_sp_auth",
+            "dest_host": "Azure Key Vault",
+            "action": "ServicePrincipalSignIn",
+            "status_code": 200,
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=25)),
+            "source_host": "198.51.100.120",
+            "actor": "app-payments-sp",
+            "surface": "cloud_iam",
+            "event_type": "cloud_api",
+            "dest_host": "prod-kv.vault.azure.net",
+            "action": "SecretGet",
+            "status_code": 200,
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=55)),
+            "source_host": "198.51.100.120",
+            "actor": "app-payments-sp",
+            "surface": "cloud_iam",
+            "event_type": "cloud_api",
+            "dest_host": "prod-kv.vault.azure.net",
+            "action": "SecretGet",
+            "status_code": 200,
+        },
+    ]
+    p = _write_jsonl(base_dir / "baseline_azure_keyvault_startup_normal.jsonl", kv_benign)
+    manifest["baseline_azure_keyvault_startup_normal"] = {
+        "path": str(p),
+        "expected_positive": False,
+        "format": "jsonl",
+        "surface": "cloud_iam",
+        "expected_reasons": [],
+    }
+
+    # Scenario 21: Microsoft 2026-11-25 Storm-0940 zero-401 multi-/16 SP replay + <5m Azure Key Vault denied -> SecretGet dump
+    cur = t0 + timedelta(hours=27)
+    msft_kv_attack: list[dict[str, Any]] = [
+        {
+            "timestamp": _iso(cur + timedelta(seconds=i * 2)),
+            "source_host": ip,
+            "actor": "ConnectWise-Backup-Sync",
+            "surface": "cloud_iam",
+            "appliance": "entra_id",
+            "event_type": "idp_sp_auth",
+            "dest_host": res,
+            "action": "ServicePrincipalSignIn",
+            "status_code": 200,
+        }
+        for i, (ip, res) in enumerate(
+            [
+                ("203.0.113.91", "Microsoft Graph"),
+                ("198.51.100.91", "SharePoint Online"),
+                ("192.0.2.91", "Azure Key Vault"),
+            ]
+        )
+    ] + [
+        {
+            "timestamp": _iso(cur + timedelta(seconds=10 + i)),
+            "source_host": "192.0.2.91",
+            "actor": "ConnectWise-Backup-Sync",
+            "surface": "cloud_iam",
+            "event_type": "cloud_api",
+            "dest_host": "corp-prod-kv.vault.azure.net",
+            "action": act,
+            "status_code": code,
+        }
+        for i, (act, code) in enumerate(
+            [
+                ("VaultGet", 403),
+                ("KeyList", 403),
+                ("CertificateList", 403),
+                ("SecretList", 200),
+                ("SecretGet", 200),
+                ("SecretGet", 200),
+            ]
+        )
+    ]
+    p = _write_jsonl(base_dir / "scenario_msft_storm0940_sp_replay_and_keyvault_dump.jsonl", msft_kv_attack)
+    manifest["scenario_msft_storm0940_sp_replay_and_keyvault_dump"] = {
+        "path": str(p),
+        "expected_positive": True,
+        "format": "jsonl",
+        "surface": "cloud_iam",
+        "expected_reasons": [
+            "idp_sp_multi_ip_replay",
+            "cloud_secret_search_or_dryrun_burst",
+        ],
+    }
+
+    # Baseline 20: Benign /function/workspace_docs & /workspaces/dev web requests -> 0 FPs
+    cur = t0 + timedelta(hours=28)
+    ws_benign: list[dict[str, Any]] = [
+        {
+            "timestamp": _iso(cur + timedelta(seconds=i * 30)),
+            "source_host": "198.51.100.130",
+            "actor": "dev-alice",
+            "surface": "web_portal",
+            "event_type": "http",
+            "http_method": "GET",
+            "http_path": path,
+            "status_code": 200,
+            "user_agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0.0.0",
+        }
+        for i, path in enumerate(["/function/workspace_docs", "/workspaces/dev", "/api/workspace/list"])
+    ]
+    p = _write_jsonl(base_dir / "baseline_web_workspace_and_dev_mitmproxy.jsonl", ws_benign)
+    manifest["baseline_web_workspace_and_dev_mitmproxy"] = {
+        "path": str(p),
+        "expected_positive": False,
+        "format": "jsonl",
+        "surface": "web_portal",
+        "expected_reasons": [],
+    }
+
+    # Scenario 22: v0.2.7 ARTEX Next.js i18n /function/workspace console + de-branded recording-proxy index pair
+    cur = t0 + timedelta(hours=29)
+    ws_attack: list[dict[str, Any]] = [
+        {
+            "timestamp": _iso(cur),
+            "source_host": "203.0.113.249",
+            "actor": "op-i18n",
+            "surface": "web_portal",
+            "event_type": "http",
+            "http_method": "GET",
+            "http_path": "/function/workspace?tab=files",
+            "status_code": 200,
+            "user_agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0.0.0",
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=3)),
+            "source_host": "203.0.113.249",
+            "actor": "op-i18n",
+            "surface": "endpoint",
+            "event_type": "file",
+            "command_line": "sqlite3 /opt/workbench/traffic/_index/index.sqlite .tables && cat /opt/workbench/traffic/_ca/mitmproxy-ca-cert.pem",
+            "status_code": 0,
+        },
+        {
+            "timestamp": _iso(cur + timedelta(seconds=5)),
+            "source_host": "203.0.113.249",
+            "actor": "op-i18n",
+            "surface": "endpoint",
+            "event_type": "file",
+            "command_line": "cat /opt/workbench/tasks/211/i0042/cmd-output/001.txt",
+            "status_code": 0,
+        },
+    ]
+    p = _write_jsonl(base_dir / "scenario_artex_i18n_workspace_and_debranded_proxy.jsonl", ws_attack)
+    manifest["scenario_artex_i18n_workspace_and_debranded_proxy"] = {
+        "path": str(p),
+        "expected_positive": True,
+        "format": "jsonl",
+        "surface": "web_portal",
+        "expected_reasons": ["artex_console_or_host_forensics"],
+    }
+
     manifest_path = base_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest

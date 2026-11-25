@@ -316,11 +316,14 @@ def test_sigma_rules_avoid_known_critical_fp_and_drift_regressions() -> None:
     assert "filter_legit_builds" in linux_pivot
     assert "'/pip'" in linux_pivot and "'/dpkg'" in linux_pivot
 
-    # Verify compiled packs preserve literal `?artex=` (not unescaped `?` wildcard) and CrowdStrike Linux basenames
+    # Verify compiled packs preserve literal `?artex=` (not unescaped `?` wildcard) and segment-bounded /function/workspace
     console_sigma = (RULES_ROOT / "sigma" / "artex_console_and_operator_host_forensics.yml").read_text(encoding="utf-8")
-    assert "'/function/workspace'" in console_sigma, "Console Sigma rule must include /function/workspace"
+    assert "'/function/workspace'" in console_sigma and "c-uri|endswith:" in console_sigma, (
+        "Console Sigma rule must segment-bound /function/workspace via endswith + delimiter-suffixed contains"
+    )
     compiled_kql = (RULES_ROOT / "queries" / "compiled_sigma" / "compiled_kusto_generic.kql").read_text(encoding="utf-8")
-    assert 'UrlOriginal contains "/function/workspace"' in compiled_kql, "Recompile Sigma packs after adding /function/workspace"
+    assert 'UrlOriginal endswith "/function/workspace"' in compiled_kql, "Recompile Sigma packs after bounding /function/workspace"
+    assert 'UrlOriginal contains "/function/workspace"' not in compiled_kql, "Unbounded contains /function/workspace FPs on /function/workspace_docs"
     assert 'UrlOriginal contains "artex="' not in compiled_kql
     assert 'UrlOriginal contains "?artex="' in compiled_kql
 
@@ -422,6 +425,11 @@ def test_tenable_one_audit_files_syntax_and_safety_hygiene() -> None:
     assert "find / " not in linux_audit, "Linux .audit must never run unbounded full-disk `find /`"
     assert "-xdev" in linux_audit
     assert "tolower($0)" in linux_audit, "ARTEX-LNX-03 must use POSIX case-insensitive tolower($0) matching"
+    expected_lnx06_hex = "|".join(f"{p:04X}" for p in (8787, 8788, 8790, 8890, 18899))
+    expected_lnx07_hex = "|".join(f"{p:04X}" for p in (11434, 4000, 3000, 8081))
+    assert "/proc/net/tcp" in linux_audit and expected_lnx06_hex in linux_audit and expected_lnx07_hex in linux_audit, (
+        "ARTEX-LNX-06/07 must include exact /proc/net/tcp hex port fallbacks for minimal Linux hosts"
+    )
     cmds = re.findall(r'^\s*cmd\s*:\s*"((?:[^"\\]|\\.)*)"\s*$', linux_audit, re.MULTILINE)
     assert len(cmds) == linux_audit.count("<custom_item>")
     for idx, raw_cmd in enumerate(cmds, 1):

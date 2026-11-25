@@ -98,6 +98,57 @@ docker run --rm --network=none \
     } | tee /out/yara_seeded.txt
   '
 
+echo "=== [6b/7] Validating REAL Tenable One Linux .audit (Clean vs. Seeded Compromised Container) ==="
+docker run --rm --network=none \
+  -v "${REPO_ROOT}/rules/tenable:/tenable:ro" \
+  artex-range-sensor:local \
+  python3 -c '
+import re, socket, subprocess
+from pathlib import Path
+
+text = Path("/tenable/artex_aof_linux_triage.audit").read_text(encoding="utf-8")
+descs = re.findall(r"description\s*:\s*\"([^\"]+)\"", text)
+cmds = re.findall(r"^\s*cmd\s*:\s*\"((?:[^\"\\]|\\.)*)\"\s*$", text, re.MULTILINE)
+assert len(cmds) == 7
+
+# Phase A: Clean container + benign mitmproxy-ca-cert.pem alone + loopback 127.0.0.1:11434 -> ALL 7 MUST PASS (CLEAN_NO_MATCH)
+Path("/tmp/mitmproxy-ca-cert.pem").write_text("benign local mitmproxy cert\n", encoding="utf-8")
+loop_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+loop_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+loop_sock.bind(("127.0.0.1", 11434))
+loop_sock.listen(1)
+for d, raw in zip(descs, cmds):
+    cmd = raw.replace("\\\\", "\\").replace("\\\"", "\"")
+    p = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, timeout=15)
+    assert p.returncode == 0 and p.stdout.strip() == "CLEAN_NO_MATCH", f"Tenable clean FP on {d}: {p.stdout!r} {p.stderr!r}"
+loop_sock.close()
+
+# Phase B: Seeded artifacts (recording-proxy sqlite, artex_config.json, /tmp/chisel, non-loopback 0.0.0.0:8787 & 0.0.0.0:11434)
+Path("/opt/sim/traffic/_index").mkdir(parents=True, exist_ok=True)
+Path("/opt/sim/traffic/_index/index.sqlite").write_bytes(b"SQLite format 3\x00")
+Path("/opt/sim/artex_config.json").write_text("{}\n", encoding="utf-8")
+Path("/tmp/chisel").write_text("#!/bin/sh\n", encoding="utf-8")
+s8787 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s8787.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s8787.bind(("0.0.0.0", 8787))
+s8787.listen(1)
+s11434 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s11434.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s11434.bind(("0.0.0.0", 11434))
+s11434.listen(1)
+try:
+    for idx, (d, raw) in enumerate(zip(descs, cmds), 1):
+        cmd = raw.replace("\\\\", "\\").replace("\\\"", "\"")
+        p = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, timeout=15)
+        assert p.returncode == 0
+        if idx in (1, 2, 5, 6, 7):
+            assert p.stdout.strip() != "CLEAN_NO_MATCH", f"Tenable seeded miss on {d}"
+finally:
+    s8787.close()
+    s11434.close()
+print("TENABLE_ONE_LINUX_AUDIT_SIM_PASS (7/7 clean 0 FP | 5/5 seeded file+socket checks detected)")
+'
+
 echo "=== [7/7] Asserting Real-Sensor Scorecard (Suricata, Zeek, YARA, artex-hunt) ==="
 PY_BIN="${REPO_ROOT}/.venv/bin/python"
 [[ -x "${PY_BIN}" ]] || PY_BIN="python3"

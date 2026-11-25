@@ -2409,6 +2409,7 @@ def _inspect_window_signals(
                 "getsecretvalue" in action_norm
                 or "get-secret-value" in cloud_ctx.lower()
                 or "getsecret" in action_norm
+                or "secretget" in action_norm
                 or "accesssecretversion" in action_norm
             ):
                 saw_cloud_secret_read_200 = True

@@ -86,10 +86,30 @@ class MockTargetHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/openapi.json":
             self._send(200, json.dumps({"openapi": "3.0.0", "paths": {"/api/v1/update-documents": {}}}).encode())
-        elif path in {"/dashboard", "/assets/app.js", "/assets/app.css", "/+CSCOE+/logon.html", "/.env.example", "/login"}:
+        elif path in {"/dashboard", "/assets/app.js", "/assets/app.css", "/+CSCOE+/logon.html", "/.env.example", "/login", "/function/workspace_docs"}:
             self._send(200, b"<html><title>Corp Portal</title><body>OK</body></html>", "text/html")
+        elif path == "/cti-blog":
+            self._send(
+                200,
+                b"<!DOCTYPE html><html><head><title>CTI Threat Report</title></head><body>Overview of Autonomous Penetration Testing Console frameworks.</body></html>",
+                "text/html",
+            )
         elif path in {"/api/v1/update-documents", "/api/v1/status", "/api/v1/profile"}:
             self._send(200, b'{"status":"ok"}')
+        elif path == "/function/workspace":
+            self._send(200, b'{"workspace":"artex_i18n_sim"}')
+        elif path == "/console-kr":
+            self._send(
+                200,
+                "<html><head><title>GOOGTEX — 자율 침투 테스트 콘솔</title></head><body>Mock KR console</body></html>".encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+        elif path == "/console-en":
+            self._send(
+                200,
+                b"<html><head><title>NKW - Autonomous Penetration Testing Console</title></head><body>Mock EN console</body></html>",
+                "text/html",
+            )
         elif path == "/api/v1/internal/credential-export":
             # Operator-planted honey route for deterministic canary_deception_tripwire validation
             self._send(200, b'{"export":"decoy_honey_route_only"}')

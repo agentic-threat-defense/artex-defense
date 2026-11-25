@@ -172,8 +172,25 @@ class HardenedKustoBackend(KustoBackend):
         return as_in_expr + wildcard_exprs
 
 
+_ESQL_LIKE_LITERAL_RE = re.compile(r'(\blike\s+")((?:[^"\\]|\\.)*)"')
+_ESQL_BAD_WILDCARD_ESCAPE_RE = re.compile(r'(?<!\\)\\([?*])')
+
+
+def _fix_esql_like_escapes(expr: str | DeferredQueryExpression) -> str | DeferredQueryExpression:
+    """Double-escape LIKE wildcard escapes (`\\?`, `\\*`) inside standard ES|QL double-quoted strings."""
+    if not isinstance(expr, str) or ' like "' not in expr:
+        return expr
+
+    def _repl(match: re.Match[str]) -> str:
+        prefix, body = match.group(1), match.group(2)
+        fixed = _ESQL_BAD_WILDCARD_ESCAPE_RE.sub(lambda m: "\\\\" + m.group(1), body)
+        return f'{prefix}{fixed}"'
+
+    return _ESQL_LIKE_LITERAL_RE.sub(_repl, expr)
+
+
 class HardenedESQLBackend(ESQLBackend):
-    """ESQLBackend fixed for lowercase `*.caseless` literals, string-typed ECS `keyword` fields, and Lucene-valid `rlike`."""
+    """ESQLBackend fixed for lowercase `*.caseless` literals, string-typed ECS `keyword` fields, Lucene-valid `rlike`, and ES|QL `LIKE` escapes."""
 
     def convert_value_re(
         self, r: SigmaRegularExpression, state: ConversionState
@@ -189,7 +206,7 @@ class HardenedESQLBackend(ESQLBackend):
                 field=cond.field,
                 value=_lowercase_sigma_string(cond.value),
             )
-        return super().convert_condition_field_eq_val_str(cond, state)
+        return _fix_esql_like_escapes(super().convert_condition_field_eq_val_str(cond, state))
 
     def convert_condition_field_eq_val_num(
         self, cond: ConditionFieldEqualsValueExpression, state: ConversionState
@@ -229,7 +246,7 @@ class HardenedESQLBackend(ESQLBackend):
                     for arg in cond.args
                 ]
                 cond = type(cond)(str_args)
-        return super().convert_condition_as_in_expression(cond, state)
+        return _fix_esql_like_escapes(super().convert_condition_as_in_expression(cond, state))
 
 
 class HardenedSentinelOneBackend(SentinelOneBackend):

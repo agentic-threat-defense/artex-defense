@@ -82,7 +82,7 @@
   info          : "Identifies listening TCP sockets on default ARTEX console/proxy/MCP ports (8787, 8788, 8790, 8890, 18899). Excludes Zscaler Client Connector (ZSA*) on port 8890."
   solution      : "Confirm whether the listening process is an authorized application (such as internal RStudio Server on 8787). Terminate and investigate unauthorized consoles."
   reference     : "800-53|CM-7,CSF|PR.IP-1,MITRE|T1571"
-  cmd           : "if command -v ss >/dev/null 2>&1; then hits=$(ss -lntp 2>/dev/null | awk 'NR>1 && ($4 ~ /:(8787|8788|8790|8890|18899)$/) && !($4 ~ /:8890$/ && $0 ~ /ZSA/) {print}' | head -n 20); else hits=$(netstat -lntp 2>/dev/null | awk '($4 ~ /:(8787|8788|8790|8890|18899)$/) && !($4 ~ /:8890$/ && $0 ~ /ZSA/) {print}' | head -n 20); fi; if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  cmd           : "if command -v ss >/dev/null 2>&1; then hits=$(ss -lntp 2>/dev/null | awk 'NR>1 && ($4 ~ /:(8787|8788|8790|8890|18899)$/) && !($4 ~ /:8890$/ && $0 ~ /ZSA/) {print}' | head -n 20); elif command -v netstat >/dev/null 2>&1; then hits=$(netstat -lntp 2>/dev/null | awk '($4 ~ /:(8787|8788|8790|8890|18899)$/) && !($4 ~ /:8890$/ && $0 ~ /ZSA/) {print}' | head -n 20); elif [ -r /proc/net/tcp ]; then hits=$(awk '$4==\"0A\" && $2 ~ /:(2253|2254|2256|22BA|49D3)$/ {print $2}' /proc/net/tcp /proc/net/tcp6 2>/dev/null | head -n 20); else hits=''; fi; if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
   expect        : "^CLEAN_NO_MATCH$"
   timeout       : "60"
   dont_echo_cmd : YES
@@ -95,7 +95,7 @@
   info          : "Proactive attack-surface check: autonomous offensive agents actively scan for exposed Ollama (11434), LiteLLM (4000), Open WebUI/DeepAudit (3000), and Cairn (8081) services to harvest API keys or hijack inference."
   solution      : "Bind local LLM/MCP services strictly to 127.0.0.1 or place them behind an authenticated, network-segmented AI gateway."
   reference     : "800-53|AC-3,CSF|PR.AC-5,MITRE|T1552"
-  cmd           : "if command -v ss >/dev/null 2>&1; then hits=$(ss -lntp 2>/dev/null | awk 'NR>1 && ($4 ~ /:(11434|4000|3000|8081)$/) && !($4 ~ /^(127\\.|\\[?::1\\]?:)/) {print}' | head -n 20); else hits=$(netstat -lntp 2>/dev/null | awk '($4 ~ /:(11434|4000|3000|8081)$/) && !($4 ~ /^(127\\.|::1:)/) {print}' | head -n 20); fi; if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  cmd           : "if command -v ss >/dev/null 2>&1; then hits=$(ss -lntp 2>/dev/null | awk 'NR>1 && ($4 ~ /:(11434|4000|3000|8081)$/) && !($4 ~ /^(127\\.|\\[?::1\\]?:)/) {print}' | head -n 20); elif command -v netstat >/dev/null 2>&1; then hits=$(netstat -lntp 2>/dev/null | awk '($4 ~ /:(11434|4000|3000|8081)$/) && !($4 ~ /^(127\\.|::1:)/) {print}' | head -n 20); elif [ -r /proc/net/tcp ]; then hits=$(awk '$4==\"0A\" && $2 ~ /:(2CAA|0FA0|0BB8|1F91)$/ && !($2 ~ /^([0-9A-F]{6}7F|00000000000000000000000001000000|0000000000000000FFFF0000[0-9A-F]{6}7F):/) {print $2}' /proc/net/tcp /proc/net/tcp6 2>/dev/null | head -n 20); else hits=''; fi; if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
   expect        : "^CLEAN_NO_MATCH$"
   timeout       : "60"
   dont_echo_cmd : YES

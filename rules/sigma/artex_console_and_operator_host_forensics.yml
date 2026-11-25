@@ -10,7 +10,7 @@ references:
   - https://github.com/jiwoochris/artex-global/blob/main/docs/defense-en.md
 author: ARTEX Defensive Research Workbench
 date: 2026-11-20
-modified: 2026-11-24
+modified: 2026-11-25
 tags:
   - attack.command_and_control
   - attack.collection
@@ -25,16 +25,28 @@ detection:
       - '/api/sync/scopesentry'
       - '/api/llm/profiles'
       - '/api/llm/records'
+      - '/function/tasks/'
+      - '/function/tasks\?'
+      - '/function/findings/'
+      - '/function/findings\?'
+      - '/function/traffic/'
+      - '/function/traffic\?'
+      - '/function/llm-records/'
+      - '/function/llm-records\?'
+      - '/function/workspace/'
+      - '/function/workspace\?'
+      - '/Inform/logger/'
+  selection_console_routes_exact:
+    c-uri|endswith:
       - '/function/tasks'
       - '/function/findings'
       - '/function/traffic'
       - '/function/llm-records'
       - '/function/workspace'
-      - '/Inform/logger/'
   selection_selfupdate_ua:
     cs-user-agent|contains:
       - 'artex-selfupdate'
-  condition: selection_console_routes or selection_selfupdate_ua
+  condition: selection_console_routes or selection_console_routes_exact or selection_selfupdate_ua
 falsepositives:
   - Authorized red-team infrastructure validation.
 level: high
