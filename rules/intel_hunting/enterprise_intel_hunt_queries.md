@@ -67,6 +67,20 @@ host.services:(port=8080 and endpoints.http.body=~"(?i)(Sub2API|Subscription to 
   - **ARTEX Favicon MurmurHash3:** `-576220750` (Shodan `http.favicon.hash:-576220750`, FOFA `icon_hash="-576220750"`; invert with `icon_hash!="-576220750"` alongside `body="/function/tasks"` to isolate non-ARTEX rebrands).
   - **AntiFox Wildcard-DNS TLS SAN (TCP 443):** `^antifox\..+\.nip\.io$` (avoid generic `*.sslip.io` / `*.nip.io` without the `antifox.` prefix).
   - **Title-Stripped Rebrand Stylesheets (`urlscan.io` `hash:` — catches VaptX, ARTIFEX, HACK DOG, Cybrion, ArkanaAI, DAO, HekerAI, AntiFox):** `/_next/static/chunks/4384baud_6ozc.css` (`ff75f55ed6baeb22cee166fd7281a5f3b9243678b9b04ae41c8a84ae39cc02f5`, DAO: `37761e79441b9be7852117179316c4893cba3077be14e2dc293a4d87478576ce`), `/_next/static/chunks/21_ph5otuqxv2.css` (`c455b9a8cfd0ea9223c9043053f9cf8cc83a6357e78b53800c989f7a6037ec42`), `/_next/static/chunks/3ij6fl1kqv7_b.css` (`c4186f06f5b1c6a89e47736f5ef32d037917f52c3c6e6e5df0b54ec571373e77`), `/_next/static/chunks/2ks5kxw4iystr.css` (`c37a40193c02b10c9e6b71141b9cde1f132f1a0333fbeee0163da067d78fbd80`), `/_next/static/css/eba9231147484ecf.css` (`432281d1bc8715666a33ba779673f805b698d7a229b2fb2a0250eacca9855ceb`). Use `athar convert` from `https://github.com/Athar-HQ/Athar` to auto-generate FOFA, Shodan, Censys, ZoomEye, Modat Magnify, and urlscan.io queries across ARTEX, Cairn, CyberStrikeAI, PentAGI, RedAmon, Strix, AutoCVE, and DeepAudit.
+
+#### Multi-Framework AOF Favicon & TLS Certificate Cheat Sheet (`Athar-HQ/Athar`, DRL 1.1 — Gameel Ali `@MalGamy12` & Florian Roth `@cyb3rops`)
+*(Use Shodan `http.favicon.hash:<mmh3>`, FOFA `icon_hash="<mmh3>"`, or Censys Platform CenQL `host.services.endpoints.http.favicons.hash_sha256="<sha256>"` / `host.services.cert.parsed.*`.)*
+
+| Framework | Typical Ports | Favicon MurmurHash3 (Shodan / FOFA) | Favicon SHA-256 (Censys / Modat) | Default TLS Cert / SAN Pivot |
+| :--- | :--- | :--- | :--- | :--- |
+| **ARTEX** *(+ AntiFox)* | `8787`, `8788`, `8790`, `8890`, `18899`, `443` | `-576220750` *(invert `!=` with `body="/function/tasks"` to isolate rebrands)* | — *(use Next.js stylesheet SHA-256s above)* | `Issuer O=ARTEX` *(Hunt.io)*; AntiFox SAN `^antifox\..+\.nip\.io$` |
+| **CyberStrikeAI** | `5001`–`5003`, `8082` | `-1349384020` | `483ddc84a99698971d21d4ac6eb6057fbedb575ab12d7cff51434b305665d4b7` | `Subject CN=CyberStrikeAI` |
+| **PentAGI** | `8443` | `1567951828`, `535491455`, `-1596753120` | `2a620e3c5f7b49dfc6f5278352607f7931f8c38ef9d4689908af65538dd95366`<br>`c3667d36ed782d868a693a16530bd91df49417b6ece9ab63f57a1cacdeebc773`<br>`ec0eb56172d3c3fd926c7cee40c36624aee63369f3fab227408b5575756232bb` | `Issuer CN=PentAGI CA`; `SAN=pentagi.local` |
+| **Cairn** *(CL-STA-1238 fork)* | `8081` | — | — | `Subject CN` contains `Cairn auto-generated TLS certificate`; `Subject O=Cairn Platform` |
+| **RedAmon** | Web UI | `964522141`, `-1953467025` | `94309d127e1669150c5fd002b4dfd5c7168ee654d4022f6ecb8ad376d92e8ac5`<br>`ee50a0eb4fc75bda9e004889c2d3c43b0b4c15178aeea66e2eda52e338674201` | — |
+| **Strix** | Results viewer | `-566184040` | `a6d5ca4b84523e651c7151d0bcb6bc0c132ecc311566bb48ed2da6c82efcb9eb` | — |
+| **AutoCVE** | Web UI | `1166126950` *(SVG icon — FOFA/Censys)* | `a805c431c4208b9bae3a273bc99320ede36aacec4b9f06b57c6a30779bee62b2` | — |
+| **DeepAudit** | `3000` | `-757437337` | `63e81620181b1795051f40ef1c8bcd8e5e3f4df5fb1e22d60a31e251e352ad29` | — |
 - Session cookie: `artex_token=`
 - Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) — in CenQL pivot via `host.services.cert.parsed.issuer.organization="ARTEX"`; in HuntSQL pivot via `tls.issuer.organization = 'ARTEX' AND SPLIT(ja4x, '_')[1] = SPLIT(ja4x, '_')[2]`.
 - Next.js UI asset MD5s: `cd3ebd16437d6d3963592f7365dd3980`, `16bf6c5653291854e8c56c8eff7ca20d`

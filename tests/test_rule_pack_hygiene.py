@@ -242,6 +242,9 @@ def test_passive_intel_hunt_queries_use_current_platform_syntax() -> None:
     assert "Athar-HQ/Athar" in md and "-576220750" in md and "자율 침투 테스트 콘솔" in md, (
         "Include DRL 1.1-attributed Athar ARTEX favicon hash and Korean/English console pivots"
     )
+    assert "-1349384020" in md and "PentAGI CA" in md and "1166126950" in md and "-757437337" in md, (
+        "Include multi-framework AOF favicon/cert cheat sheet from Athar-HQ/Athar"
+    )
     assert "raw_data.web.useragents:*norma/0.*" not in md, "GNQL slashes must be quoted"
     assert "raw_data.web.paths:*artex=*" not in md, "GNQL '=' must be quoted"
     assert 'raw_data.http.useragent:"*artex-enrich/*"' in md, "Include native GNQL v3 raw_data.http.useragent field"
