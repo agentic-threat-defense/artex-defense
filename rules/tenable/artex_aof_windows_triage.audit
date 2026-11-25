@@ -1,0 +1,93 @@
+# ============================================================================
+# Tenable One / Tenable Vulnerability Management (Tenable.io) Custom Audit
+# ARTEX, BLOODALCHEMY & Agentic Offensive Framework — Windows Host Triage Pack
+#
+# Compatible with: Tenable One / Tenable VM (SMB/WinRM & Nessus Agents),
+#                  Tenable.sc, and Nessus Professional (zero unsigned NASL).
+# Safety: Strictly read-only, scoped to high-risk staging roots (never runs
+#         unbounded C:\ full-disk recursion), filters out the audit PID itself.
+# ============================================================================
+
+<check_type:"Windows" version:"2">
+<group_policy:"ARTEX and Agentic Offensive Framework Windows Host Triage">
+
+<custom_item>
+  type                 : AUDIT_POWERSHELL
+  description          : "ARTEX-WIN-01: Ensure no ARTEX staging directory (ProgramData\\artx5v), config, or recording-proxy index exists"
+  info                 : "Checks C:\\ProgramData\\artx5v and high-risk staging directories for ARTEX config/shim files (artex_config.json, artex.yaml, xcai-effort-shim.py) and recording-proxy index.sqlite."
+  solution             : "Investigate any matched path immediately under incident response procedures and isolate the host if unauthorized ARTEX tooling is confirmed."
+  reference            : "800-53|SI-4,CSF|DE.CM-1,MITRE|T1588.002"
+  value_type           : POLICY_TEXT
+  value_data           : "^CLEAN_NO_MATCH$"
+  check_type           : CHECK_REGEX
+  only_show_cmd_output : NO
+  powershell_args      : "$hits = @(); if (Test-Path 'C:\\ProgramData\\artx5v') { $hits += 'C:\\ProgramData\\artx5v' }; $roots = @('C:\\ProgramData','C:\\Users\\Public','C:\\Windows\\Temp','C:\\Temp') | Where-Object { $_ -and (Test-Path $_) }; foreach ($r in $roots) { $found = @(Get-ChildItem -Path $r -Depth 4 -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('artex_config.json','artex.yaml','xcai-effort-shim.py') -or $_.FullName -like '*\\traffic\\_index\\index.sqlite' } | Select-Object -First 20 -ExpandProperty FullName); if ($found.Count -gt 0) { $hits += $found } }; $hits = @($hits | Where-Object { $_ } | Select-Object -Unique -First 20); if ($hits.Count -eq 0) { 'CLEAN_NO_MATCH' } else { $hits -join [Environment]::NewLine }"
+</custom_item>
+
+<custom_item>
+  type                 : AUDIT_POWERSHELL
+  description          : "ARTEX-WIN-02: Ensure no VAPOR PANDA BLOODALCHEMY DLL sideloading artifacts exist in staging paths"
+  info                 : "Checks scoped Windows staging directories for BLOODALCHEMY masqueraded OBS/Brother sideloading artifacts (graphics-hook-filter64.dll, graphics-hook_config.bin)."
+  solution             : "Quarantine any matched unsigned DLL/config artifacts for forensic analysis, check EDR sensor tampering/exclusions, and rotate local/domain credentials."
+  reference            : "800-53|SI-3,CSF|DE.CM-4,MITRE|T1574.002"
+  value_type           : POLICY_TEXT
+  value_data           : "^CLEAN_NO_MATCH$"
+  check_type           : CHECK_REGEX
+  only_show_cmd_output : NO
+  powershell_args      : "$userTemps = @(Get-ChildItem 'C:\\Users\\*\\AppData\\Local\\Temp' -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName); $roots = @('C:\\ProgramData','C:\\Users\\Public','C:\\Windows\\Temp','C:\\Temp') + $userTemps; $hits = foreach ($r in ($roots | Where-Object { $_ -and (Test-Path $_) })) { Get-ChildItem -Path $r -Depth 3 -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('graphics-hook-filter64.dll','graphics-hook_config.bin') } | Select-Object -ExpandProperty FullName }; $hits = @($hits | Where-Object { $_ } | Select-Object -Unique -First 20); if ($hits.Count -eq 0) { 'CLEAN_NO_MATCH' } else { $hits -join [Environment]::NewLine }"
+</custom_item>
+
+<custom_item>
+  type                 : AUDIT_POWERSHELL
+  description          : "ARTEX-WIN-03: Ensure no active ARTEX, CyberStrikeAI, BLOODALCHEMY, or temp-staged tunnel process is running"
+  info                 : "Inspects running Win32_Process command lines for ARTEX/AOF binaries, BLOODALCHEMY DLL execution, or temp-staged cloudflared/devtunnel/chisel/ligolo pivots. Excludes the audit PowerShell PID."
+  solution             : "Capture volatile telemetry and network connections for any matched process before isolating the endpoint."
+  reference            : "800-53|SI-4,CSF|DE.AE-2,MITRE|T1059"
+  value_type           : POLICY_TEXT
+  value_data           : "^CLEAN_NO_MATCH$"
+  check_type           : CHECK_REGEX
+  only_show_cmd_output : NO
+  powershell_args      : "$hits = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine -notmatch 'CLEAN_NO_MATCH' -and ($_.CommandLine -match 'artex-selfupdate|artex-worker|scopeweaver|cyberstrikeai|graphics-hook-filter64\\.dll|xcai-effort-shim\\.py|ligolo-agent|chisel\\.exe.*client|cloudflared(\\.exe)?\\s+tunnel\\s+[^\\r\\n]*--url|devtunnel(\\.exe)?\\s+host') } | Select-Object -First 20 | ForEach-Object { $_.ProcessId.ToString() + ': ' + $_.Name + ' -> ' + $_.CommandLine } | Where-Object { $_ }); if ($hits.Count -eq 0) { 'CLEAN_NO_MATCH' } else { $hits -join [Environment]::NewLine }"
+</custom_item>
+
+<custom_item>
+  type                 : AUDIT_POWERSHELL
+  description          : "ARTEX-WIN-04: Ensure no unauthorized ephemeral tunnel persistence (cloudflared/devtunnel/chisel) exists in Services or Scheduled Tasks"
+  info                 : "Checks Windows Services and Scheduled Tasks for persistent cloudflared quick tunnels (--url), devtunnel host, chisel, or ARTEX/BLOODALCHEMY persistence entries."
+  solution             : "Disable and investigate any unauthorized service or scheduled task exposing internal hosts to outbound quick tunnels."
+  reference            : "800-53|SC-7,CSF|DE.CM-1,MITRE|T1572"
+  value_type           : POLICY_TEXT
+  value_data           : "^CLEAN_NO_MATCH$"
+  check_type           : CHECK_REGEX
+  only_show_cmd_output : NO
+  powershell_args      : "$hits = @(); $svcHits = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.PathName -match 'cloudflared.*--url|devtunnel.*host|chisel|ligolo|artx5v|graphics-hook-filter64' } | ForEach-Object { 'SVC:' + $_.Name + '=' + $_.PathName }); if ($svcHits.Count -gt 0) { $hits += $svcHits }; $taskHits = @(Get-ScheduledTask -ErrorAction SilentlyContinue | ForEach-Object { $tn = $_.TaskName; foreach ($a in $_.Actions) { $cmd = $a.Execute + ' ' + $a.Arguments; if ($cmd -match 'cloudflared.*--url|devtunnel.*host|chisel|ligolo|artx5v|graphics-hook-filter64') { 'TASK:' + $tn + '=' + $cmd } } }); if ($taskHits.Count -gt 0) { $hits += $taskHits }; $hits = @($hits | Where-Object { $_ } | Select-Object -Unique -First 20); if ($hits.Count -eq 0) { 'CLEAN_NO_MATCH' } else { $hits -join [Environment]::NewLine }"
+</custom_item>
+
+<custom_item>
+  type                 : AUDIT_POWERSHELL
+  description          : "ARTEX-WIN-05: Ensure no unauthorized listeners are bound on default ARTEX or MCP console ports (8787/8788/8790/8890/18899)"
+  info                 : "Identifies listening TCP sockets on default ARTEX console/proxy/MCP ports (8787, 8788, 8790, 8890, 18899). Excludes Zscaler Client Connector (ZSA*) on port 8890."
+  solution             : "Verify owning process legitimacy; terminate and investigate unauthorized consoles or recording proxies."
+  reference            : "800-53|CM-7,CSF|PR.IP-1,MITRE|T1571"
+  value_type           : POLICY_TEXT
+  value_data           : "^CLEAN_NO_MATCH$"
+  check_type           : CHECK_REGEX
+  only_show_cmd_output : NO
+  powershell_args      : "$ports = @(8787,8788,8790,8890,18899); $hits = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in $ports } | ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; $pn = if ($p) { $p.ProcessName } else { 'unknown' }; if (-not ($_.LocalPort -eq 8890 -and $pn -like 'ZSA*')) { $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess + ' proc=' + $pn } }; $hits = @($hits | Where-Object { $_ } | Select-Object -Unique -First 20); if ($hits.Count -eq 0) { 'CLEAN_NO_MATCH' } else { $hits -join [Environment]::NewLine }"
+</custom_item>
+
+<custom_item>
+  type                 : AUDIT_POWERSHELL
+  description          : "ARTEX-WIN-06: Ensure local AI/LLM gateways (Ollama/LiteLLM/Open WebUI) are not bound to non-loopback interfaces"
+  info                 : "Proactive attack-surface check: autonomous offensive agents actively target exposed Ollama (11434), LiteLLM (4000), and Open WebUI/DeepAudit (3000) services to steal LLM API keys or abuse local inference."
+  solution             : "Reconfigure local LLM services to listen strictly on 127.0.0.1 or place behind an authenticated internal gateway."
+  reference            : "800-53|AC-3,CSF|PR.AC-5,MITRE|T1552"
+  value_type           : POLICY_TEXT
+  value_data           : "^CLEAN_NO_MATCH$"
+  check_type           : CHECK_REGEX
+  only_show_cmd_output : NO
+  powershell_args      : "$hits = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(11434,4000,3000,8081) -and $_.LocalAddress -notmatch '^127\\.' -and $_.LocalAddress -ne '::1' } | ForEach-Object { $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; $pn = if ($p) { $p.ProcessName } else { 'unknown' }; $_.LocalAddress + ':' + $_.LocalPort + ' pid=' + $_.OwningProcess + ' proc=' + $pn }; $hits = @($hits | Where-Object { $_ } | Select-Object -Unique -First 20); if ($hits.Count -eq 0) { 'CLEAN_NO_MATCH' } else { $hits -join [Environment]::NewLine }"
+</custom_item>
+
+</group_policy>
+</check_type>

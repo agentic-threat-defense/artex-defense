@@ -1,0 +1,104 @@
+# ============================================================================
+# Tenable One / Tenable Vulnerability Management (Tenable.io) Custom Audit
+# ARTEX & Agentic Offensive Framework (AOF) — Linux Host Triage & Exposure Pack
+#
+# Compatible with: Tenable One / Tenable VM (Credentialed SSH & Nessus Agents),
+#                  Tenable.sc, and Nessus Professional (zero unsigned NASL).
+# Safety: Strictly read-only, bounded `-xdev -maxdepth 5` directory scopes
+#         (never traverses NFS/proc/sys/full-disk), 60s timeout per check.
+# ============================================================================
+
+<check_type:"Unix">
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-01: Ensure no ARTEX recording-proxy SQLite traffic index or CA pair exists on host"
+  info          : "Detects ARTEX / de-branded fork recording-proxy artifacts (traffic/_index/index.sqlite, paired with mitmproxy-ca-cert.pem). Generic developer mitmproxy without traffic/_index/index.sqlite does not fail this check."
+  solution      : "Investigate any matched path immediately under incident response procedures. Isolate the host if unauthorized ARTEX or rebranded AOF operator tooling is confirmed."
+  reference     : "800-53|SI-4,CSF|DE.CM-1,MITRE|T1588.002"
+  cmd           : "hits=$(find /opt /srv /root /home /tmp /var/tmp /dev/shm /usr/local -xdev -maxdepth 5 -path '*/traffic/_index/index.sqlite' 2>/dev/null | head -n 20); if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-02: Ensure no ARTEX worker cmd-output spill dirs, configs, JWT key, or effort-shim exist"
+  info          : "Checks high-risk directories for ARTEX worker spill layouts (/tasks/<id>/i<id>/cmd-output), artex_config.json, artex.yaml, xcai-effort-shim.py, and /artex/jwt.key."
+  solution      : "Verify whether matched files belong to authorized security testing. If unauthorized, quarantine artifacts offline and initiate incident response."
+  reference     : "800-53|SI-4,CSF|DE.CM-1,MITRE|T1588.002"
+  cmd           : "hits=$(find /opt /srv /root /home /tmp /var/tmp /dev/shm /etc /usr/local -xdev -maxdepth 5 \\( -name 'artex_config.json' -o -name 'artex.yaml' -o -name 'xcai-effort-shim.py' -o -path '*/artex/jwt.key' -o -path '*/tasks/*/cmd-output' \\) 2>/dev/null | head -n 20); if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-03: Ensure no active ARTEX, ScopeWeaver, CyberStrikeAI, or mitmproxy-injected worker process is running"
+  info          : "Inspects running process command lines for ARTEX/AOF binaries, self-update workers, or ARTEX recording-proxy CA injection. Excludes the audit shell process itself."
+  solution      : "Inspect the matched PID, parent lineage, network sockets, and /proc/<pid>/environ. Isolate compromised hosts before killing attacker processes if volatile memory capture is required."
+  reference     : "800-53|SI-4,CSF|DE.AE-2,MITRE|T1059"
+  cmd           : "hits=$(ps -eo pid=,args= 2>/dev/null | awk '!/CLEAN_NO_MATCH/ && tolower($0) ~ /artex-selfupdate|artex-worker|artex-enrich|scopeweaver|cyberstrikeai|xcai-effort-shim\\.py|traffic\\/_index\\/index\\.sqlite|tomicdd\\/artex|congdonglinux\\/artex/ {print}' | head -n 20); if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-04: Ensure no trojanized ARTEX community Docker images or containers are present"
+  info          : "Checks local Docker engine (when installed) for known trojanized community ARTEX images (tomicdd/artex, congdonglinux/artex) or ARTEX/CyberStrikeAI/PentAGI/RedAmon containers."
+  solution      : "Stop and preserve any unauthorized container for forensic inspection, rotate exposed host/cloud credentials, and remove untrusted images."
+  reference     : "800-53|CM-7,CSF|DE.CM-7,MITRE|T1610"
+  cmd           : "if ! command -v docker >/dev/null 2>&1; then echo CLEAN_NO_MATCH; else hits=$( { docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null; docker ps -a --format '{{.Image}} {{.Names}}' 2>/dev/null; } | grep -Ei 'tomicdd/artex|congdonglinux/artex|artex-console|cyberstrikeai|scopeweaver|pentagi|redamon' | head -n 20 ); if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-05: Ensure no ephemeral tunnel or pivot binaries are staged in /tmp, /dev/shm, or /var/tmp"
+  info          : "Detects attacker-staged pivot or tunneling tooling (cloudflared, chisel, ligolo-agent, proxychains, Responder.py) dropped in world-writable volatile staging directories."
+  solution      : "Remove unauthorized binaries from /tmp, /dev/shm, and /var/tmp, mount temp filesystems with noexec where feasible, and review host/network logs for lateral movement."
+  reference     : "800-53|SC-7,CSF|DE.CM-1,MITRE|T1572"
+  cmd           : "hits=$(find /tmp /dev/shm /var/tmp -xdev -maxdepth 4 \\( -name 'cloudflared' -o -name 'chisel' -o -name 'ligolo-agent' -o -name 'proxychains*' -o -name 'Responder.py' \\) 2>/dev/null | head -n 20); if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-06: Ensure no unauthorized listeners are bound on default ARTEX or MCP console ports (8787/8788/8790/8890/18899)"
+  info          : "Identifies listening TCP sockets on default ARTEX console/proxy/MCP ports (8787, 8788, 8790, 8890, 18899). Excludes Zscaler Client Connector (ZSA*) on port 8890."
+  solution      : "Confirm whether the listening process is an authorized application (such as internal RStudio Server on 8787). Terminate and investigate unauthorized consoles."
+  reference     : "800-53|CM-7,CSF|PR.IP-1,MITRE|T1571"
+  cmd           : "if command -v ss >/dev/null 2>&1; then hits=$(ss -lntp 2>/dev/null | awk 'NR>1 && ($4 ~ /:(8787|8788|8790|8890|18899)$/) && !($4 ~ /:8890$/ && $0 ~ /ZSA/) {print}' | head -n 20); else hits=$(netstat -lntp 2>/dev/null | awk '($4 ~ /:(8787|8788|8790|8890|18899)$/) && !($4 ~ /:8890$/ && $0 ~ /ZSA/) {print}' | head -n 20); fi; if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+<custom_item>
+  system        : "Linux"
+  type          : CMD_EXEC
+  description   : "ARTEX-LNX-07: Ensure local AI/LLM gateways (Ollama/LiteLLM/Open WebUI/Cairn) are not exposed on non-loopback interfaces"
+  info          : "Proactive attack-surface check: autonomous offensive agents actively scan for exposed Ollama (11434), LiteLLM (4000), Open WebUI/DeepAudit (3000), and Cairn (8081) services to harvest API keys or hijack inference."
+  solution      : "Bind local LLM/MCP services strictly to 127.0.0.1 or place them behind an authenticated, network-segmented AI gateway."
+  reference     : "800-53|AC-3,CSF|PR.AC-5,MITRE|T1552"
+  cmd           : "if command -v ss >/dev/null 2>&1; then hits=$(ss -lntp 2>/dev/null | awk 'NR>1 && ($4 ~ /:(11434|4000|3000|8081)$/) && !($4 ~ /^(127\\.|\\[?::1\\]?:)/) {print}' | head -n 20); else hits=$(netstat -lntp 2>/dev/null | awk '($4 ~ /:(11434|4000|3000|8081)$/) && !($4 ~ /^(127\\.|::1:)/) {print}' | head -n 20); fi; if [ -z \"$hits\" ]; then echo CLEAN_NO_MATCH; else echo \"$hits\"; fi"
+  expect        : "^CLEAN_NO_MATCH$"
+  timeout       : "60"
+  dont_echo_cmd : YES
+</custom_item>
+
+</check_type>

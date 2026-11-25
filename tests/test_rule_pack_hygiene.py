@@ -384,3 +384,54 @@ def test_ja4_agentic_patterns_json_schema_and_blocklist_safety_guard() -> None:
     )
     rows = con.execute(m_sql.group(1)).fetchall()
     assert len(rows) == 1 and rows[0][0] == "10.0.0.10" and "JA4_PROXY_COLLAPSE" in rows[0][-1], f"Unexpected SQL rows: {rows}"
+
+
+def test_tenable_one_audit_files_syntax_and_safety_hygiene() -> None:
+    """Validate Tenable One Linux/Windows .audit syntax, unique descriptions, bounded paths, and YARA compatibility."""
+    import subprocess
+
+    tenable_dir = RULES_ROOT / "tenable"
+    linux_audit = (tenable_dir / "artex_aof_linux_triage.audit").read_text(encoding="utf-8")
+    win_audit = (tenable_dir / "artex_aof_windows_triage.audit").read_text(encoding="utf-8")
+    readme = (tenable_dir / "README.md").read_text(encoding="utf-8")
+
+    # 1. Structural wrappers & balanced <custom_item> tags
+    assert '<check_type:"Unix">' in linux_audit and linux_audit.strip().endswith("</check_type>")
+    assert '<check_type:"Windows" version:"2">' in win_audit
+    assert "<group_policy:" in win_audit and "</group_policy>" in win_audit and win_audit.strip().endswith("</check_type>")
+
+    for name, text in (("linux", linux_audit), ("windows", win_audit)):
+        opens = text.count("<custom_item>")
+        closes = text.count("</custom_item>")
+        assert opens >= 6 and opens == closes, f"Unbalanced <custom_item> in {name} audit ({opens} vs {closes})"
+        descs = re.findall(r'description\s*:\s*"([^"]+)"', text)
+        assert len(descs) == opens, f"Missing description in {name} audit"
+        assert len(set(descs)) == len(descs), f"Duplicate description (Tenable plugin ID collision) in {name} audit"
+
+    # 2. Linux safety: bounded find scopes (-xdev), no unbounded `find / `, case-insensitive awk, valid POSIX /bin/sh syntax
+    assert "find / " not in linux_audit, "Linux .audit must never run unbounded full-disk `find /`"
+    assert "-xdev" in linux_audit
+    assert "tolower($0)" in linux_audit, "ARTEX-LNX-03 must use POSIX case-insensitive tolower($0) matching"
+    cmds = re.findall(r'^\s*cmd\s*:\s*"((?:[^"\\]|\\.)*)"\s*$', linux_audit, re.MULTILINE)
+    assert len(cmds) == linux_audit.count("<custom_item>")
+    for idx, raw_cmd in enumerate(cmds, 1):
+        # Unescape Tenable .audit double-quoted string escapes (`\"` -> `"`, `\\` -> `\`)
+        unescaped = raw_cmd.replace(r"\\", "\\").replace(r'\"', '"')
+        proc = subprocess.run(["/bin/sh", "-n", "-c", unescaped], capture_output=True, text=True, check=False)
+        assert proc.returncode == 0, f"Linux .audit check #{idx} failed /bin/sh -n: {proc.stderr}\nCMD: {unescaped}"
+
+    # 3. Windows safety: only_show_cmd_output must be NO (YES skips pass/fail evaluation), null-safe PowerShell arrays, self-PID guard
+    assert "only_show_cmd_output : NO" in win_audit
+    assert "only_show_cmd_output : YES" not in win_audit
+    assert "check_type           : CHECK_REGEX" in win_audit
+    assert "$_.ProcessId -ne $PID" in win_audit, "Windows process check must exclude the audit PowerShell PID"
+    assert win_audit.count("Where-Object { $_ }") == win_audit.count("<custom_item>"), (
+        "Every Windows AUDIT_POWERSHELL check must null-filter $hits to avoid PowerShell @() += $null false failures"
+    )
+    assert "Get-ChildItem -Path 'C:\\'" not in win_audit and "Get-ChildItem C:\\ -Recurse" not in win_audit
+
+    # 4. Tenable VM Malware Scan YARA compatibility: local YARA file must have zero `import "..."` modules
+    local_yara = (RULES_ROOT / "yara" / "artex_scopeweaver_artifacts.yar").read_text(encoding="utf-8")
+    assert 'import "' not in local_yara, "artex_scopeweaver_artifacts.yar must stay module-free for Tenable VM Malware Scan"
+    assert "artex_aof_linux_triage.audit" in readme and "artex_aof_windows_triage.audit" in readme
+    assert "Tenable ASM" in readme and "Tenable Cloud Security" in readme and "Tenable Identity Exposure" in readme
