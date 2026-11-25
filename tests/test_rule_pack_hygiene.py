@@ -210,6 +210,16 @@ def test_handwritten_siem_queries_pass_syntax_and_fp_linter() -> None:
     assert "GCPAuditLogs" in kql and "RequestMetadata.callerIp" in kql and "Status.code" in kql and "AccessSecretVersion" in kql and "@gcp-sa-" in kql, (
         "Sentinel KQL T2-J must extract CallerIp/StatusCode from dynamic RequestMetadata/Status columns"
     )
+    assert "MICROSOFT.KEYVAULT" in kql and "SecretList" in kql and "SecretGet" in kql and "identity_claim_appid_g" in kql, (
+        "Sentinel KQL T2-K must cover <5m Azure Key Vault enumeration/exfiltration"
+    )
+    assert 'tostring(column_ifexists("identity_claim_appid_g", ""))' in kql and 'tostring(column_ifexists("identity_claim_oid_g", ""))' in kql, (
+        "Sentinel KQL T2-K must cast _g guid columns with tostring() before coalesce() with _s string columns"
+    )
+    assert "CloudAppEvents" in kql and "ActionType" in kql and "ActionDisplayName" not in kql, (
+        "Defender XDR CloudAppEvents T2-L must use native ActionType column (not non-existent ActionDisplayName)"
+    )
+    assert "not(ipv4_is_private(CallerIPAddress))" not in kql, "T2-K must handle IPv6 explicitly"
     assert "gcloud\\s+(?:auth|iam|secrets)" in kql
     kql_t1 = _tier1_query_code(kql)
     assert "webhook" not in kql_t1.lower() and "8890" not in kql_t1

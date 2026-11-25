@@ -159,7 +159,7 @@ WATCHTOWER_RELEVANCE_RE = re.compile(
     r"\bgoogtex\b|\bhekerai\b|\bvaptx\b|\barkanaai\b|"
     r"\bstrix\b.*\bagent|\bshannon\b.*\bagent|\breaper\b.*\bartex|hermes[-_ ]agent|agent[-_ ]zero|"
     r"\bcarbonato\b|qwen[-_ ]code|kimi[-_ ]cli|\bopencode\b|exploit_agent|storm-0940|"
-    r"storm-3358|vapor\s*panda|madpot|openbullet|sub2api|xcai\.pro|lanmao666|"
+    r"storm-3358|onyx\s*sleet|pearl\s*sleet|salt\s*typhoon|crystal\s*typhoon|vapor\s*panda|madpot|openbullet|sub2api|xcai\.pro|lanmao666|"
     r"agentic\s+(?:attack|pentest|offensive|exploit|framework|intrusion)|"
     r"autonomous\s+(?:pentest|penetration|exploit|red\s*team|offensive)|"
     r"\bmcp\b.*(?:pentest|offensive|exploit|agent)|"

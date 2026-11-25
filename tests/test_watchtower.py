@@ -80,6 +80,8 @@ def test_validate_feed_url_enforces_https_and_strict_allowlist() -> None:
     assert "https://github.com/Athar-HQ/Athar/releases.atom" in feed_urls
     assert WATCHTOWER_RELEVANCE_RE.search("Add AutoCVE and DeepAudit service fingerprint rules")
     assert WATCHTOWER_RELEVANCE_RE.search("GOOGTEX 자율 침투 테스트 콘솔 rebrand observed")
+    assert WATCHTOWER_RELEVANCE_RE.search("Pearl Sleet and Onyx Sleet adopt autonomous offensive tooling")
+    assert WATCHTOWER_RELEVANCE_RE.search("Salt Typhoon and Crystal Typhoon edge abuse update")
     for spec in DEFAULT_FEEDS:
         validate_feed_url(spec.url)
 

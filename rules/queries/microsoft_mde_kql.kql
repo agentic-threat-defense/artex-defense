@@ -246,3 +246,53 @@ GCPAuditLogs
     by CallerIp, bin(TimeGenerated, 30m)
 | where DistinctServiceAccounts >= 3 or DeniedAPIs >= 5 or (DeniedAPIs >= 3 and SecretReadsOk >= 1)
 | order by DistinctServiceAccounts desc, DeniedAPIs desc
+
+// T2-K. Sentinel AzureDiagnostics (Azure Key Vault): Machine-Speed <5m Secret Enumeration & Exfiltration
+//       (Grounded in Microsoft Threat Intelligence 2026-11-25 GitHub-secret -> Azure Key Vault <5 min exfil chain;
+//        uses native AzureDiagnostics Key Vault AuditEvent columns and IPv6-safe external IP filtering)
+AzureDiagnostics
+| where TimeGenerated > ago(24h)
+| where ResourceProvider == "MICROSOFT.KEYVAULT" and Category == "AuditEvent"
+| where isnotempty(CallerIPAddress)
+| where iff(CallerIPAddress contains ":",
+    not(ipv6_is_in_range(CallerIPAddress, "::1/128") or ipv6_is_in_range(CallerIPAddress, "fe80::/10") or ipv6_is_in_range(CallerIPAddress, "fc00::/7")),
+    ipv4_is_private(CallerIPAddress) == false)
+| extend CallerId = coalesce(
+    tostring(column_ifexists("identity_claim_upn_s", "")),
+    tostring(column_ifexists("identity_claim_appid_g", "")),
+    tostring(column_ifexists("identity_claim_oid_g", "")),
+    "unknown")
+| extend IsList = OperationName in ("SecretList", "KeyList", "CertificateList")
+| extend IsReadOk = OperationName in ("SecretGet", "KeyGet", "CertificateGet") and (ResultType =~ "Success" or toint(httpStatusCode_d) == 200)
+| extend IsDenied = ResultType in~ ("Forbidden", "Unauthorized") or toint(httpStatusCode_d) in (401, 403)
+| summarize
+    ListCalls = countif(IsList),
+    DistinctSecretsRead = dcountif(id_s, IsReadOk),
+    DeniedCalls = countif(IsDenied),
+    Vaults = make_set(Resource, 10),
+    Operations = make_set(OperationName, 10)
+    by CallerId, CallerIPAddress, bin(TimeGenerated, 5m)
+| where (ListCalls >= 1 and DistinctSecretsRead >= 5)
+    or (DeniedCalls >= 3 and DistinctSecretsRead >= 1)
+    or DistinctSecretsRead >= 10
+| order by DistinctSecretsRead desc, DeniedCalls desc
+
+// T2-L. Microsoft Defender XDR CloudAppEvents: 5-Minute Machine-Speed Multi-Action Velocity Burst
+//       (Grounded in Microsoft Threat Intelligence 2026-11-25 behavioral velocity guidance;
+//        uses native CloudAppEvents columns ActionType/AccountObjectId/Application and IPv6-safe external IP filtering)
+CloudAppEvents
+| where Timestamp > ago(24h)
+| where isnotempty(IPAddress) and isnotempty(AccountObjectId)
+| where iff(IPAddress contains ":",
+    not(ipv6_is_in_range(IPAddress, "::1/128") or ipv6_is_in_range(IPAddress, "fe80::/10") or ipv6_is_in_range(IPAddress, "fc00::/7")),
+    ipv4_is_private(IPAddress) == false)
+| summarize
+    RequestCount = count(),
+    DistinctActions = dcount(ActionType),
+    DistinctApps = dcount(Application),
+    SampleActions = make_set(ActionType, 12),
+    Apps = make_set(Application, 10)
+    by AccountObjectId, AccountDisplayName, IPAddress, bin(Timestamp, 5m)
+| where (RequestCount >= 100 and DistinctActions >= 10)
+    or (DistinctApps >= 3 and DistinctActions >= 8 and RequestCount >= 40)
+| order by RequestCount desc, DistinctActions desc
