@@ -57,6 +57,12 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
         // ARTEX landing-page redirect stub (`<title>artex</title>` + `url=/function/tasks/`) — Athar v0.5.0 / Florian Roth (DRL 1.1)
         $title_artex_exact = "<title>artex</title>" nocase ascii
         $redir_tasks = "url=/function/tasks/" nocase ascii
+        // Adjacent AOF exact HTML titles (LuaN1aoAgent, PentestCode, Xalgorix) — Athar PR #64 / Marco Pedrinazzi (@pedrinazziM), DRL 1.1
+        // UTF-8: <title>鸾鸟渗透智能体 · Agent Workbench</title>
+        $title_luan1ao = { 3C 74 69 74 6C 65 3E E9 B8 BE E9 B8 9F E6 B8 97 E9 80 8F E6 99 BA E8 83 BD E4 BD 93 20 C2 B7 20 41 67 65 6E 74 20 57 6F 72 6B 62 65 6E 63 68 3C 2F 74 69 74 6C 65 3E }
+        $title_pentestcode = "<title>PentestCode</title>" ascii
+        // UTF-8: <title>Xalgorix — Security Scanner</title>
+        $title_xalgorix = { 3C 74 69 74 6C 65 3E 58 61 6C 67 6F 72 69 78 20 E2 80 94 20 53 65 63 75 72 69 74 79 20 53 63 61 6E 6E 65 72 3C 2F 74 69 74 6C 65 3E }
         $next_static = "_next/static" ascii
         $doc_html = "<html" nocase ascii
         $doc_doctype = "<!doctype" nocase ascii
@@ -98,7 +104,7 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
                     )
                 )
                 or $console_en_title
-                or (($doc_html in (0..511) or $doc_doctype in (0..511)) and filesize < 64KB and $title_artex_exact and $redir_tasks)
+                or (($doc_html in (0..511) or $doc_doctype in (0..511)) and filesize < 64KB and (($title_artex_exact and $redir_tasks) or any of ($title_luan1ao, $title_pentestcode, $title_xalgorix)))
                 or (
                     $console_en and (
                         uint16(0) == 0x5A4D or uint32(0) == 0x464C457F or uint32(0) == 0xFEEDFACF or uint32(0) == 0xCFFAEDFE or uint32(0) == 0xBEBAFECA or

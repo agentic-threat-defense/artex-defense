@@ -464,8 +464,19 @@ def test_athar_v050_redirect_stub_and_opx_indicators_present() -> None:
 
     yara = (RULES_ROOT / "yara" / "artex_scopeweaver_artifacts.yar").read_text(encoding="utf-8")
     assert "$title_artex_exact" in yara and "$redir_tasks" in yara
-    assert "filesize < 64KB and $title_artex_exact and $redir_tasks" in yara
+    assert "filesize < 64KB and (($title_artex_exact and $redir_tasks) or any of ($title_luan1ao, $title_pentestcode, $title_xalgorix))" in yara
 
     intel = (RULES_ROOT / "intel_hunting" / "enterprise_intel_hunt_queries.md").read_text(encoding="utf-8")
     assert "376abrpuqh_at.css" in intel and "18800" in intel
     assert "url=/function/tasks/" in intel and "huntio" in intel
+
+    # Athar PR #64: LuaN1aoAgent, PentestCode, Xalgorix exact title SIDs + exact YARA UTF-8 hex + CyberStrikeAI/RedAgents
+    for sid in ("sid:9100023;", "sid:9100024;", "sid:9100025;"):
+        assert sid in suri, f"Missing Athar PR #64 Suricata {sid}"
+    assert 'content:"<title>PentestCode</title>";' in suri
+    expected_luan1ao_hex = " ".join(f"{b:02X}" for b in "<title>鸾鸟渗透智能体 · Agent Workbench</title>".encode("utf-8"))
+    expected_xalgorix_hex = " ".join(f"{b:02X}" for b in "<title>Xalgorix — Security Scanner</title>".encode("utf-8"))
+    assert expected_luan1ao_hex in yara, "YARA $title_luan1ao UTF-8 hex mismatch"
+    assert expected_xalgorix_hex in yara, "YARA $title_xalgorix UTF-8 hex mismatch"
+    assert "$title_pentestcode" in yara
+    assert all(tok in intel for tok in ("LuaN1aoAgent", "PentestCode", "Xalgorix", "RedAgents", "4096", "9137"))

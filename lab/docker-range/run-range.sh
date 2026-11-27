@@ -182,7 +182,7 @@ def zeek_notes(path: Path) -> set[str]:
 base_sids = suri_sids(out / "suricata_base/eve.json")
 atk_sids = suri_sids(out / "suricata_atk/eve.json")
 assert len(base_sids) == 0, f"Suricata baseline FP alerts: {sorted(base_sids)}"
-assert len(atk_sids) == 22, f"Expected 22/22 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
+assert len(atk_sids) == 25, f"Expected 25/25 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
 
 base_notes = zeek_notes(out / "zeek_base/notice.log")
 atk_notes = zeek_notes(out / "zeek_atk/notice.log")
@@ -288,7 +288,7 @@ all_proxy_reasons = {r for c in proxy_zk for r in c.reasons}
 assert "ja4_proxy_collapse_multi_ua" in all_proxy_reasons, f"Missing ja4_proxy_collapse_multi_ua in proxy_collapse: {sorted(all_proxy_reasons)}"
 
 print(
-    f"PASS: Suricata 0 FP / {len(atk_sids)}/22 SIDs (EVE JSON direct OK) | "
+    f"PASS: Suricata 0 FP / {len(atk_sids)}/25 SIDs (EVE JSON direct OK) | "
     f"Zeek 0 FP / {len(atk_notes)}/6 notices (+DNS OOB) | "
     f"Wire JA4 1 base / {len(atk_ja4s)} atk + JA4H + Persistent TLS 1.3 + Proxy Collapse | "
     f"YARA 0 FP / {len(yara_seeded)} seeded hits | "

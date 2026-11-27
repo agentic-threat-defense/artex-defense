@@ -65,3 +65,11 @@ alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Ruby2Shell (CVE-2026-132
 
 # 15. ARTEX Landing-Page Redirect Stub (`<title>artex</title>` + `url=/function/tasks/` — Athar v0.5.0 / Florian Roth, DRL 1.1)
 alert http any any -> any any (msg:"ARTEX-DEFENSE ARTEX Landing-Page Redirect Stub to /function/tasks/"; flow:from_server,established; http.response_body; content:"url=/function/tasks/"; nocase; content:"<title>artex</title>"; nocase; classtype:policy-violation; sid:9100022; rev:1;)
+
+# 16. Adjacent AOF Exact Console HTML Titles: LuaN1aoAgent, PentestCode, Xalgorix (Athar-HQ/Athar PR #64 / Marco Pedrinazzi, DRL 1.1)
+# Exact `<title>...</title>` matching enforces Athar near-miss exclusions (avoids generic "Agent Workbench", "PentestCode — Security, Orchestrated.", and "Security Scanner").
+alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed LuaN1aoAgent Autonomous Pentest Workbench HTML Title"; flow:from_server,established; http.response_body; content:"<title>|e9 b8 be e9 b8 9f e6 b8 97 e9 80 8f e6 99 ba e8 83 bd e4 bd 93| |c2 b7| Agent Workbench</title>"; classtype:policy-violation; sid:9100023; rev:1;)
+
+alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed PentestCode Agentic Pentest Web Interface HTML Title"; flow:from_server,established; http.response_body; content:"<title>PentestCode</title>"; classtype:policy-violation; sid:9100024; rev:1;)
+
+alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed Xalgorix AI Security Scanner Dashboard HTML Title"; flow:from_server,established; http.response_body; content:"<title>Xalgorix |e2 80 94| Security Scanner</title>"; classtype:policy-violation; sid:9100025; rev:1;)

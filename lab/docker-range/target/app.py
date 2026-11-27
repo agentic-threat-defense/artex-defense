@@ -106,6 +106,42 @@ class MockTargetHandler(BaseHTTPRequestHandler):
                 b'<!DOCTYPE html><html><head><title>artex</title><meta http-equiv="refresh" content="0;url=/function/tasks/"/></head><body></body></html>',
                 "text/html",
             )
+        elif path == "/nearmiss-workbench":
+            self._send(
+                200,
+                "<!DOCTYPE html><html><head><title>文献精读工作台 · Agent Workbench</title></head><body>OK</body></html>".encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+        elif path == "/nearmiss-marketing":
+            self._send(
+                200,
+                "<!DOCTYPE html><html><head><title>PentestCode — Security, Orchestrated.</title></head><body>OK</body></html>".encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+        elif path == "/nearmiss-terminal":
+            self._send(
+                200,
+                "<!DOCTYPE html><html><head><title>Xalgorix — Access Terminal</title></head><body>OK</body></html>".encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+        elif path == "/console-luan1ao":
+            self._send(
+                200,
+                "<!DOCTYPE html><html><head><title>鸾鸟渗透智能体 · Agent Workbench</title></head><body>Mock LuaN1aoAgent</body></html>".encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
+        elif path == "/console-pentestcode":
+            self._send(
+                200,
+                b"<!DOCTYPE html><html><head><title>PentestCode</title></head><body>Mock PentestCode</body></html>",
+                "text/html",
+            )
+        elif path == "/console-xalgorix":
+            self._send(
+                200,
+                "<!DOCTYPE html><html><head><title>Xalgorix — Security Scanner</title></head><body>Mock Xalgorix</body></html>".encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
         elif path in {"/api/v1/update-documents", "/api/v1/status", "/api/v1/profile"}:
             self._send(200, b'{"status":"ok"}')
         elif path == "/function/workspace":

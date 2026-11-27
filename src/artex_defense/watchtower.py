@@ -155,7 +155,8 @@ DEFAULT_FEEDS: tuple[FeedSpec, ...] = (
 WATCHTOWER_RELEVANCE_RE = re.compile(
     r"(\bartex\b|artex\s*pro|autumn-27|\bantifox\b|\bscopeweaver\b|\bpojun\b|\bforang\b|guanlan\s*sec|"
     r"\bbloodalchemy\b|\bdarksword\b|\bbabidighost\b|norma/|artexprobe|artex-probe|zzz[-_]nonexistent|"
-    r"\bhexstrike\b|\bcyberstrikeai\b|\bpentagi\b|\bcairn\b|\bredamon\b|\bautocve\b|\bdeepaudit\b|"
+    r"\bhexstrike\b|\bcyberstrikeai\b|\bredagents\b|\bpentagi\b|\bcairn\b|\bredamon\b|\bautocve\b|\bdeepaudit\b|"
+    r"\bxalgorix\b|\bpentestcode\b|\bluan1aoagent\b|鸾鸟渗透智能体|"
     r"\bgoogtex\b|\bhekerai\b|\bvaptx\b|\barkanaai\b|"
     r"\bstrix\b.*\bagent|\bshannon\b.*\bagent|\breaper\b.*\bartex|hermes[-_ ]agent|agent[-_ ]zero|"
     r"\bcarbonato\b|qwen[-_ ]code|kimi[-_ ]cli|\bopencode\b|exploit_agent|storm-0940|"

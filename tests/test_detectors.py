@@ -206,3 +206,36 @@ def test_wiz_leaked_intent_id_sequence_tp_and_benign_catalog_tn(tmp_path: Path) 
             encoding="utf-8",
         )
         assert scan_telemetry_file(tn_sub) == [], f"Unexpected FP on {name}"
+
+
+def test_athar_pr64_adjacent_aof_keywords_tp_and_nearmiss_tn(tmp_path: Path) -> None:
+    """TP: Xalgorix / PentestCode / LuaN1aoAgent artifacts; TN: generic workbench/scanner phrasing."""
+    tp_log = tmp_path / "aof_pr64_tp.jsonl"
+    tp_log.write_text(
+        "\n".join(
+            [
+                '{"timestamp": "2026-11-27T08:00:00Z", "source_host": "srv-aof-01", "actor": "svc", "event_type": "process", "process": "python3", "command_line": "python3 /opt/LuaN1aoAgent/main.py --port 8787"}',
+                '{"timestamp": "2026-11-27T08:00:05Z", "source_host": "srv-aof-01", "actor": "svc", "event_type": "process", "process": "node", "command_line": "node /opt/pentestcode/server.js --port 4096"}',
+                '{"timestamp": "2026-11-27T08:00:10Z", "source_host": "srv-aof-01", "actor": "svc", "event_type": "process", "process": "xalgorix", "command_line": "/usr/local/bin/xalgorix serve --port 9137"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    tp = scan_telemetry_file(tp_log)
+    assert len(tp) == 1 and "known_artex_artifact" in tp[0].reasons
+    inds = " ".join(tp[0].matched_indicators).lower()
+    assert "luan1aoagent" in inds and "pentestcode" in inds and "xalgorix" in inds
+
+    tn_log = tmp_path / "aof_pr64_tn.jsonl"
+    tn_log.write_text(
+        "\n".join(
+            [
+                '{"timestamp": "2026-11-27T08:10:00Z", "source_host": "wkstn-dev", "actor": "alice", "event_type": "http", "http_method": "GET", "http_path": "/agent-workbench/docs", "status_code": 200}',
+                '{"timestamp": "2026-11-27T08:11:00Z", "source_host": "wkstn-dev", "actor": "alice", "event_type": "http", "http_method": "GET", "http_path": "/security-scanner/status", "status_code": 200}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert scan_telemetry_file(tn_log) == []

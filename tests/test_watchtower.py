@@ -82,6 +82,8 @@ def test_validate_feed_url_enforces_https_and_strict_allowlist() -> None:
     assert WATCHTOWER_RELEVANCE_RE.search("GOOGTEX 자율 침투 테스트 콘솔 rebrand observed")
     assert WATCHTOWER_RELEVANCE_RE.search("Pearl Sleet and Onyx Sleet adopt autonomous offensive tooling")
     assert WATCHTOWER_RELEVANCE_RE.search("Salt Typhoon and Crystal Typhoon edge abuse update")
+    assert WATCHTOWER_RELEVANCE_RE.search("Athar PR #64 adds Xalgorix, PentestCode, and LuaN1aoAgent rules")
+    assert WATCHTOWER_RELEVANCE_RE.search("ThreatBook retires CyberStrikeAI OSS in favor of RedAgents")
     for spec in DEFAULT_FEEDS:
         validate_feed_url(spec.url)
 

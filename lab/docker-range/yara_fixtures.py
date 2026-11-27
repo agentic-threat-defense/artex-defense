@@ -84,6 +84,19 @@ def main(out_dir: Path) -> None:
         'title: ARTEX Redirect Stub\ndetection:\n  strings:\n    - "<title>artex</title>"\n    - "url=/function/tasks/"\n',
         encoding="utf-8",
     )
+    # 7. Athar PR #64 exact near-miss benign HTML baselines (must all stay 0 FP!)
+    (benign_dir / "benign_luan1ao_nearmiss.html").write_text(
+        "<!DOCTYPE html><html><head><title>文献精读工作台 · Agent Workbench</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
+    (benign_dir / "benign_pentestcode_marketing.html").write_text(
+        "<!DOCTYPE html><html><head><title>PentestCode — Security, Orchestrated.</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
+    (benign_dir / "benign_xalgorix_nearmiss.html").write_text(
+        "<!DOCTYPE html><html><head><title>Xalgorix — Access Terminal</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
 
     # SEEDED FIXTURES (MUST match their expected YARA rules!)
     # 1. Seeded Go ELF with ScopeWeaver + :8787
@@ -132,6 +145,19 @@ def main(out_dir: Path) -> None:
     # 9. Seeded ARTEX landing-page redirect stub HTML (validates Athar v0.5.0 redirect-stub detection)
     (seeded_dir / "seeded_artex_redirect_stub.html").write_text(
         '<!DOCTYPE html><html><head><title>artex</title><meta http-equiv="refresh" content="0;url=/function/tasks/"/></head><body></body></html>\n',
+        encoding="utf-8",
+    )
+    # 10. Seeded Athar PR #64 adjacent AOF console HTML titles (LuaN1aoAgent, PentestCode, Xalgorix)
+    (seeded_dir / "seeded_luan1ao_console.html").write_text(
+        "<!DOCTYPE html><html><head><title>鸾鸟渗透智能体 · Agent Workbench</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
+    (seeded_dir / "seeded_pentestcode_console.html").write_text(
+        "<!DOCTYPE html><html><head><title>PentestCode</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
+    (seeded_dir / "seeded_xalgorix_console.html").write_text(
+        "<!DOCTYPE html><html><head><title>Xalgorix — Security Scanner</title></head><body></body></html>\n",
         encoding="utf-8",
     )
 

@@ -60,7 +60,8 @@ KNOWN_ARTIFACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"artex-verify|artex-spawn|artex-agent|artex-judge-[a-z0-9_-]+|artex-i\d+-canary|"
             r"artexprobe|artex-probe|scopeweaver|antifox|pojun|forang|sco-fix2|guanlan\s*sec|"
             r"bloodalchemy|artex\s*mx|agent\s+security\s+workbench|tomicdd/artex|congdonglinux/artex|"
-            r"cyberstrikeai|pentagi|hexstrike|cairn|reaper-agent|strix-agent|shannon-agent|"
+            r"cyberstrikeai|pentagi|hexstrike|cairn|xalgorix|pentestcode|luan1aoagent|"
+            r"reaper-agent|strix-agent|shannon-agent|"
             r"hermes-agent|agent-zero|carbonato|exploit_agent|openbullet)\b",
             re.IGNORECASE,
         ),
