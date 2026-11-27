@@ -182,7 +182,7 @@ def zeek_notes(path: Path) -> set[str]:
 base_sids = suri_sids(out / "suricata_base/eve.json")
 atk_sids = suri_sids(out / "suricata_atk/eve.json")
 assert len(base_sids) == 0, f"Suricata baseline FP alerts: {sorted(base_sids)}"
-assert len(atk_sids) == 21, f"Expected 21/21 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
+assert len(atk_sids) == 22, f"Expected 22/22 Suricata SIDs, got {len(atk_sids)}: {sorted(atk_sids)}"
 
 base_notes = zeek_notes(out / "zeek_base/notice.log")
 atk_notes = zeek_notes(out / "zeek_atk/notice.log")
@@ -280,6 +280,7 @@ for req_reason in (
     "dns_oob_callback_after_probe",
     "canary_deception_tripwire",
     "web_memory_corruption_crash_loop",
+    "leaked_intent_id_sequence",
 ):
     assert req_reason in all_atk_zk_reasons, f"Missing expected live-wire reason {req_reason!r} in Zeek+PCAP: {sorted(all_atk_zk_reasons)}"
 
@@ -287,11 +288,11 @@ all_proxy_reasons = {r for c in proxy_zk for r in c.reasons}
 assert "ja4_proxy_collapse_multi_ua" in all_proxy_reasons, f"Missing ja4_proxy_collapse_multi_ua in proxy_collapse: {sorted(all_proxy_reasons)}"
 
 print(
-    f"PASS: Suricata 0 FP / {len(atk_sids)}/21 SIDs (EVE JSON direct OK) | "
+    f"PASS: Suricata 0 FP / {len(atk_sids)}/22 SIDs (EVE JSON direct OK) | "
     f"Zeek 0 FP / {len(atk_notes)}/6 notices (+DNS OOB) | "
     f"Wire JA4 1 base / {len(atk_ja4s)} atk + JA4H + Persistent TLS 1.3 + Proxy Collapse | "
     f"YARA 0 FP / {len(yara_seeded)} seeded hits | "
     f"artex-hunt 0 base / Nginx risk={atk_ng[0].risk_score} / "
-    f"Zeek+PCAP {len(all_atk_zk_reasons)} reasons (sawtooth+tls_loop+causal+ja4+ja4h_impersonation+dns_oob+canary+ruby2shell_5xx+proxy_collapse)"
+    f"Zeek+PCAP {len(all_atk_zk_reasons)} reasons (sawtooth+tls_loop+causal+ja4+ja4h_impersonation+dns_oob+canary+ruby2shell_5xx+intent_seq+proxy_collapse)"
 )
 PYEOF

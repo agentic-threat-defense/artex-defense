@@ -3,8 +3,8 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
     meta:
         description = "Detects Go/stripped binaries, harness artifacts, CyberStrikeAI/AdaptixC2/Wisp-C2 tooling, or HTML console assets referencing ARTEX, ScopeWeaver, AntiFox, Pojun, FORANG, or norma agentic offensive frameworks"
         author = "ARTEX Defensive Research Workbench"
-        date = "2026-11-25"
-        reference = "https://github.com/Athar-HQ/Athar (DRL 1.1: Gameel Ali & Florian Roth — Korean/English console titles & Chinese meta tag)"
+        date = "2026-11-26"
+        reference = "https://github.com/Athar-HQ/Athar (DRL 1.1: Gameel Ali & Florian Roth — Korean/English console titles, meta tag, and /function/tasks/ redirect stub)"
         tlp = "CLEAR"
         mitre_attack = "T1588.002"
 
@@ -54,6 +54,9 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
         $audit_zh = { E3 80 90 41 52 54 45 58 20 E5 B9 B3 E5 8F B0 E7 AE A1 E6 8E A7 C2 B7 E9 9D 9E E7 9B AE E6 A0 87 E9 98 B2 E5 BE A1 E3 80 91 }
         $console_title = "<title" nocase ascii
         $meta_desc = "<meta" nocase ascii
+        // ARTEX landing-page redirect stub (`<title>artex</title>` + `url=/function/tasks/`) — Athar v0.5.0 / Florian Roth (DRL 1.1)
+        $title_artex_exact = "<title>artex</title>" nocase ascii
+        $redir_tasks = "url=/function/tasks/" nocase ascii
         $next_static = "_next/static" ascii
         $doc_html = "<html" nocase ascii
         $doc_doctype = "<!doctype" nocase ascii
@@ -95,6 +98,7 @@ rule ARTEX_ScopeWeaver_Framework_Artifacts
                     )
                 )
                 or $console_en_title
+                or (($doc_html in (0..511) or $doc_doctype in (0..511)) and filesize < 64KB and $title_artex_exact and $redir_tasks)
                 or (
                     $console_en and (
                         uint16(0) == 0x5A4D or uint32(0) == 0x464C457F or uint32(0) == 0xFEEDFACF or uint32(0) == 0xCFFAEDFE or uint32(0) == 0xBEBAFECA or

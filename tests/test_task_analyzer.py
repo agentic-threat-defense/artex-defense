@@ -115,3 +115,45 @@ def test_analyze_task_artifacts_plain_text_tool_and_cross_intent_retry_chains(tm
     )
     ures = analyze_task_artifacts(unrelated, sanitize=False)
     assert ures["retry_mutation_chains"] == []
+
+
+def test_intent_id_pacing_monotonic_artex_vs_cairn_reset(tmp_path: Path) -> None:
+    """Wiz Research (2026-11-25): classify monotonic ARTEX Intent IDs vs per-project Cairn counter resets."""
+    artex_log = tmp_path / "artex_pacing.log"
+    artex_log.write_text(
+        "\n".join(
+            [
+                '2026-11-26T10:00:01Z intent=i104 tool=nuclei cmd="nuclei -u https://a.corp.local" status=403',
+                '2026-11-26T10:00:05Z intent=i105 tool=curl cmd="curl https://a.corp.local/admin" status=200',
+                '2026-11-26T10:05:10Z intent=i109 tool=curl cmd="curl https://b.corp.local/login" status=200',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ares = analyze_task_artifacts(artex_log, sanitize=False)
+    apacing = ares["intent_id_pacing"]
+    assert apacing["distinct_numeric_intents"] == 3
+    assert apacing["min_intent"] == 104
+    assert apacing["max_intent"] == 109
+    assert apacing["counter_resets"] == 0
+    assert apacing["counter_behavior"] == "monotonic_global_like_artex"
+
+    cairn_log = tmp_path / "cairn_reset.log"
+    cairn_log.write_text(
+        "\n".join(
+            [
+                '2026-11-26T11:00:01Z intent=i041 tool=curl cmd="curl https://proj1.corp.local" status=200',
+                '2026-11-26T11:00:10Z intent=i042 tool=curl cmd="curl https://proj1.corp.local/api" status=200',
+                '2026-11-26T11:15:00Z intent=i001 tool=curl cmd="curl https://proj2.corp.local" status=200',
+                '2026-11-26T11:15:08Z intent=i002 tool=curl cmd="curl https://proj2.corp.local/api" status=200',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cres = analyze_task_artifacts(cairn_log, sanitize=False)
+    cpacing = cres["intent_id_pacing"]
+    assert cpacing["distinct_numeric_intents"] == 4
+    assert cpacing["counter_resets"] == 1
+    assert cpacing["counter_behavior"] == "per_project_reset_like_cairn"

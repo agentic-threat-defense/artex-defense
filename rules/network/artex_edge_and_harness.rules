@@ -62,3 +62,6 @@ alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Apache .htaccess PHP Exe
 # 14. Ruby2Shell (CVE-2026-132825) Legacy Single-Byte Charset + Dense 0xDF ('ß') Expansion Heap-Overflow Probe
 # Requires BOTH ISO-8859-1/Windows-1252 charset AND >=4 consecutive 0xDF / %DF bytes so normal European text (e.g. "Straße") produces 0 FP.
 alert http any any -> $HOME_NET any (msg:"ARTEX-DEFENSE Ruby2Shell (CVE-2026-132825) ISO-8859-1/Windows-1252 Dense 0xDF Heap-Overflow Probe"; flow:to_server,established; http.header; content:"charset="; nocase; pcre:"/charset=\s*\"?(?:iso[-_]?8859[-_]?1|windows[-_]?1252|latin[-_]?1)\b/i"; http.request_body; pcre:"/(?:\xdf{4,}|(?:%df){4,})/i"; classtype:web-application-attack; sid:9100021; rev:1;)
+
+# 15. ARTEX Landing-Page Redirect Stub (`<title>artex</title>` + `url=/function/tasks/` — Athar v0.5.0 / Florian Roth, DRL 1.1)
+alert http any any -> any any (msg:"ARTEX-DEFENSE ARTEX Landing-Page Redirect Stub to /function/tasks/"; flow:from_server,established; http.response_body; content:"url=/function/tasks/"; nocase; content:"<title>artex</title>"; nocase; classtype:policy-violation; sid:9100022; rev:1;)

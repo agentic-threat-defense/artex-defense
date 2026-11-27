@@ -232,6 +232,7 @@ REASON_RISK_WEIGHTS: dict[str, int] = {
     "endpoint_compressed_recon_burst": 75,
     "spec_driven_api_targeting": 75,
     "distributed_proxy_pool_probe": 75,
+    "leaked_intent_id_sequence": 75,
     "multi_account_credential_spray": 75,
     "llm_sawtooth_context_flow": 70,
     "canary_deception_tripwire": 100,
@@ -4140,6 +4141,162 @@ def scan_telemetry_file(
                 sample_events=[
                     {k: v for k, v in ev.items() if k not in {"ts_epoch", "raw_json"} and v not in ("", None)}
                     for ev in h_events[:max_sample_events]
+                ],
+            )
+        )
+
+    # Eleventh pass: Wiz Research (2026-11-25) Leaked Monotonic Intent-ID Sequence Pacing (`iNNN`..`iNNNNNN`)
+    # Correlates >=3 strictly ascending Intent IDs (0 < delta <= 250) even across rotating source IPs while
+    # requiring suspicious context (>=2 4xx/5xx errors, >=2 token-bounded offensive/canary/cloud indicators, or
+    # >=2 distinct source IPs combined with >=1 error/suspicious/automated-client/write indicator) so benign
+    # single- or multi-customer catalog/media/author paths like /uploads/item_i1001.jpg, /author/profile_i1001,
+    # or https://admin.corp.local/invoices/i1001 (200 OK) produce 0 FP.
+    intent_id_re = re.compile(r"(?<![a-z0-9])i(?P<num>\d{3,6})(?![a-z0-9])", re.IGNORECASE)
+    intent_ignore_nums = {386, 486, 586, 686, 2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030}
+    intent_suspicious_ctx_re = re.compile(
+        r"(?:/tmp/|/dev/shm/|(?<![a-z0-9])cmd-output(?![a-z0-9])|"
+        r"(?<![a-z0-9])(?:probe|canary|nonexistent|zz_no_such|artex|cairn|"
+        r"ssrf|oast|interact|webhook|shell|curl|wget)(?![a-z0-9]))",
+        re.IGNORECASE,
+    )
+    intent_cloud_ctx_re = re.compile(
+        r"(?<![a-z0-9])(?:bucket|role|secret|token|policy|ssm|vault)(?![a-z0-9])",
+        re.IGNORECASE,
+    )
+    intent_auto_ua_re = re.compile(
+        r"(?:python-httpx|python-requests|aiohttp|curl/|go-http-client|nuclei|artex|norma/|cairn)",
+        re.IGNORECASE,
+    )
+    intent_groups: dict[str, list[tuple[float, int, str, str, int, bool, bool, str, dict[str, Any]]]] = {}
+    for ev in events:
+        sh = str(ev.get("source_host") or "")
+        if _is_allowlisted_scanner_ip(sh, authorized_scanner_ips):
+            continue
+        id_fields = " ".join(
+            str(ev.get(k) or "") for k in ("http_path", "command_line", "actor", "action", "user_agent")
+        )
+        if not id_fields.strip():
+            continue
+        matched_nums: list[tuple[int, str]] = []
+        for m in intent_id_re.finditer(id_fields):
+            raw_tok = m.group(0).lower()
+            num_val = int(m.group("num"))
+            if num_val in intent_ignore_nums or num_val == 0:
+                continue
+            matched_nums.append((num_val, raw_tok))
+        if not matched_nums:
+            continue
+        num_val, raw_tok = matched_nums[0]
+        grp_key = str(ev.get("dest_host") or "all_targets").lower()
+        status_int = int(ev.get("status_code") or 0)
+        surf_str = str(ev.get("surface") or "web_portal")
+        ua_str = str(ev.get("user_agent") or "")
+        method_str = str(ev.get("http_method") or "").upper()
+        # Scope offensive context strictly to path/command/action (never dest_host or actor)
+        ctx_fields = " ".join(str(ev.get(k) or "") for k in ("http_path", "command_line", "action"))
+        cmd_action_fields = " ".join(str(ev.get(k) or "") for k in ("command_line", "action"))
+        is_susp = (
+            bool(intent_suspicious_ctx_re.search(ctx_fields))
+            or surf_str == "cloud_iam"
+            or bool(intent_cloud_ctx_re.search(cmd_action_fields))
+        )
+        is_auto_or_write = bool(intent_auto_ua_re.search(ua_str)) or method_str in {"POST", "PUT", "DELETE", "PATCH"}
+        intent_groups.setdefault(grp_key, []).append(
+            (float(ev["ts_epoch"]), num_val, raw_tok, sh, status_int, is_susp, is_auto_or_write, surf_str, ev)
+        )
+
+    seq_idx = 0
+    for grp_key, items in intent_groups.items():
+        if len(items) < 3:
+            continue
+        items.sort(key=lambda x: x[0])
+        # Track active monotonic candidate runs (0 < delta <= 250, within 6h window) so a single unrelated
+        # interleaved iNNN token (e.g., /blog/post-i900) does not break a live ARTEX progression.
+        active_runs: list[list[tuple[float, int, str, str, int, bool, bool, str, dict[str, Any]]]] = []
+        best_run: list[tuple[float, int, str, str, int, bool, bool, str, dict[str, Any]]] = []
+        for rec in items:
+            extended = False
+            best_match_idx = -1
+            best_match_delta = 251
+            for ridx, run in enumerate(active_runs):
+                if (rec[0] - run[0][0]) > 21600.0:
+                    continue
+                tail_num = run[-1][1]
+                if rec[1] == tail_num:
+                    # Same intent ID retried; keep progression intact without duplicating step
+                    extended = True
+                    break
+                delta = rec[1] - tail_num
+                if 0 < delta <= 250 and delta < best_match_delta:
+                    best_match_delta = delta
+                    best_match_idx = ridx
+            if not extended:
+                if best_match_idx >= 0:
+                    active_runs[best_match_idx].append(rec)
+                    if len(active_runs[best_match_idx]) > len(best_run):
+                        best_run = active_runs[best_match_idx]
+                else:
+                    active_runs.append([rec])
+                    if len(active_runs) > 64:
+                        # Evict expired or shortest stale run to keep memory/CPU strictly bounded
+                        active_runs = [r for r in active_runs if (rec[0] - r[0][0]) <= 21600.0][-64:]
+        for run in active_runs:
+            if len(run) > len(best_run):
+                best_run = run
+        if len(best_run) < 3:
+            continue
+
+        run_ips = {r[3] for r in best_run if r[3]}
+        run_errs = sum(1 for r in best_run if r[4] >= 400)
+        run_susp = sum(1 for r in best_run if r[5])
+        run_auto = sum(1 for r in best_run if r[6])
+        if not (
+            run_errs >= 2
+            or run_susp >= 2
+            or (len(run_ips) >= 2 and (run_errs >= 1 or run_susp >= 1 or run_auto >= 2))
+        ):
+            continue
+
+        seq_idx += 1
+        seq_min = best_run[0][0]
+        seq_max = best_run[-1][0]
+        seq_span = max(seq_max - seq_min, 1.0)
+        seq_risk, seq_tier = compute_risk_score(["leaked_intent_id_sequence"])
+        seq_tokens = "->".join(r[2] for r in best_run[:8])
+        seq_surf: SurfaceType = (
+            "cloud_iam"
+            if any(r[7] == "cloud_iam" for r in best_run)
+            else ("endpoint" if any(r[7] == "endpoint" for r in best_run) else "web_portal")
+        )
+        lead_src = sorted(run_ips)[0] if run_ips else grp_key
+        candidates.append(
+            CandidateWindow(
+                window_id=f"INTENTSEQ{seq_idx:03d}-{grp_key[:24]}",
+                source_host=lead_src,
+                actor=f"rotating_ips:{len(run_ips)}" if len(run_ips) >= 2 else lead_src,
+                surface=seq_surf,
+                appliance=None,
+                start_time=datetime.fromtimestamp(seq_min, tz=timezone.utc),
+                end_time=datetime.fromtimestamp(seq_max, tz=timezone.utc),
+                reasons=["leaked_intent_id_sequence"],
+                risk_score=seq_risk,
+                alert_tier=seq_tier,  # type: ignore[arg-type]
+                matched_indicators=[
+                    f"intent_id_sequence:{seq_tokens}",
+                    f"distinct_source_ips:{len(run_ips)}",
+                    f"intent_span:{best_run[0][1]}..{best_run[-1][1]}",
+                ],
+                cadence=CadenceStats(
+                    event_count=len(best_run),
+                    window_seconds=round(seq_span, 2),
+                    events_per_minute=round((len(best_run) / seq_span) * 60.0, 2),
+                    error_count=run_errs,
+                    error_ratio=round(run_errs / max(len(best_run), 1), 3),
+                    unique_targets=len({r[8].get("http_path") or r[8].get("dest_host") for r in best_run}),
+                ),
+                sample_events=[
+                    {k: v for k, v in r[8].items() if k not in {"ts_epoch", "raw_json"} and v not in ("", None)}
+                    for r in best_run[:max_sample_events]
                 ],
             )
         )

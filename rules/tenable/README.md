@@ -42,9 +42,9 @@ Use these saved inventory filters in **Tenable ASM** to spot unauthorized or exp
 
 | ASM Hunt Objective | Filter Field(s) | Values / Patterns |
 | :--- | :--- | :--- |
-| **ARTEX & Rebrand Console Titles (CN/KR/EN)** | `Page Title` / `HTTP Title` | Contains any of: `自主渗透测试控制台`, `자율 침투 테스트 콘솔`, `Autonomous Penetration Testing Console`, `Agent Security Workbench`, `ARTEX MX`, `AntiFox`, `ScopeWeaver`, `CyberStrikeAI`, `PentAGI`, `RedAmon`, `AutoCVE`, `DeepAudit` |
+| **ARTEX & Rebrand Console Titles (CN/KR/EN + Redirect Stub)** | `Page Title` / `HTTP Title` / `HTTP Body` | Contains any of: `自主渗透测试控制台`, `자율 침투 테스트 콘솔`, `Autonomous Penetration Testing Console`, `Agent Security Workbench`, `ARTEX MX`, `AntiFox`, `ScopeWeaver`, `CyberStrikeAI`, `PentAGI`, `RedAmon`, `AutoCVE`, `DeepAudit`, or `OPX — 运维控制台` + `LLM 驱动的自主渗透测试系统控制台`, or `<title>artex</title>` + `url=/function/tasks/` |
 | **ARTEX Basic-Auth Protected Consoles** | `HTTP Response Headers` (`WWW-Authenticate`) | Contains `Basic realm="ARTEX"` |
-| **Default AOF Console & Staging Ports** | `Port` | `8787`, `8788`, `8790`, `8890`, `18899`, `8081`, `8443`, `5001`, `5002`, `5003`, `8082` (paired with HTTP/TLS service or non-approved ASN/tag) |
+| **Default AOF Console & Staging Ports** | `Port` | `8787`, `8788`, `8790`, `8890`, `18800`, `18899`, `8081`, `8443`, `5001`, `5002`, `5003`, `8082` (paired with HTTP/TLS service or non-approved ASN/tag) |
 | **Default AOF TLS Certificates & SANs** | `SSL Cert Issuer` / `SSL Cert Subject` / `SAN` | `O=ARTEX`, `CN=CyberStrikeAI`, `CN=PentAGI CA`, `SAN=pentagi.local`, `O=Cairn Platform`, `CN` contains `Cairn auto-generated TLS certificate`, or `SAN` matches `antifox.*.nip.io` |
 | **Favicon & Next.js Build Pivots** | `Favicon Hash` / `HTTP Body` | ARTEX `mmh3: -576220750`; see the full 8-framework `mmh3` + SHA-256 table in [../intel_hunting/enterprise_intel_hunt_queries.md](../intel_hunting/enterprise_intel_hunt_queries.md) |
 | **Open Python `SimpleHTTP` Staging Dirs** | `Page Title` + `HTTP Server Header` | `Page Title = "Directory listing for /"` AND `Server` contains `SimpleHTTP` |

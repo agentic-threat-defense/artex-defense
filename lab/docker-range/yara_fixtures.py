@@ -75,6 +75,15 @@ def main(out_dir: Path) -> None:
         "<body>Analysis of Autonomous Penetration Testing Console deployments.</body></html>\n",
         encoding="utf-8",
     )
+    # 6. Benign shop redirect with `<title>Artex</title>` (non-ARTEX path) + Athar YAML rule quoting both tokens (must NOT match!)
+    (benign_dir / "benign_artex_shop_redirect.html").write_text(
+        '<!DOCTYPE html><html><head><title>Artex</title><meta http-equiv="refresh" content="0;url=/shop/"/></head><body></body></html>\n',
+        encoding="utf-8",
+    )
+    (benign_dir / "benign_athar_rule_yaml.yml").write_text(
+        'title: ARTEX Redirect Stub\ndetection:\n  strings:\n    - "<title>artex</title>"\n    - "url=/function/tasks/"\n',
+        encoding="utf-8",
+    )
 
     # SEEDED FIXTURES (MUST match their expected YARA rules!)
     # 1. Seeded Go ELF with ScopeWeaver + :8787
@@ -118,6 +127,11 @@ def main(out_dir: Path) -> None:
     )
     (seeded_dir / "seeded_english_artex_console.html").write_text(
         "<!DOCTYPE html><html><head><title>NKW — Autonomous Penetration Testing Console</title></head><body></body></html>\n",
+        encoding="utf-8",
+    )
+    # 9. Seeded ARTEX landing-page redirect stub HTML (validates Athar v0.5.0 redirect-stub detection)
+    (seeded_dir / "seeded_artex_redirect_stub.html").write_text(
+        '<!DOCTYPE html><html><head><title>artex</title><meta http-equiv="refresh" content="0;url=/function/tasks/"/></head><body></body></html>\n',
         encoding="utf-8",
     )
 

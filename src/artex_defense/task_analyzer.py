@@ -266,6 +266,23 @@ def analyze_task_artifacts(
                 }
             )
 
+    # Wiz Research (2026-11-25) Intent-ID pacing summary: distinguish monotonic global counters (ARTEX) vs per-project resets (Cairn)
+    numeric_intents: list[int] = []
+    for t in tasks:
+        m_int = re.fullmatch(r"i(\d{1,8})", str(t.get("task_id") or "").strip(), re.IGNORECASE)
+        if m_int:
+            val = int(m_int.group(1))
+            if not numeric_intents or numeric_intents[-1] != val:
+                numeric_intents.append(val)
+    counter_resets = sum(1 for a, b in zip(numeric_intents, numeric_intents[1:]) if b < a)
+    distinct_numeric = sorted(set(numeric_intents))
+    if len(distinct_numeric) >= 2 and counter_resets == 0:
+        counter_behavior = "monotonic_global_like_artex"
+    elif counter_resets >= 1:
+        counter_behavior = "per_project_reset_like_cairn"
+    else:
+        counter_behavior = "insufficient_data"
+
     summary = {
         "source": str(path),
         "files_scanned": len(files),
@@ -273,6 +290,13 @@ def analyze_task_artifacts(
         "unique_task_ids": len(by_task),
         "outcomes": dict(outcome_counts),
         "observed_tools": dict(tool_counts.most_common(15)),
+        "intent_id_pacing": {
+            "distinct_numeric_intents": len(distinct_numeric),
+            "min_intent": distinct_numeric[0] if distinct_numeric else None,
+            "max_intent": distinct_numeric[-1] if distinct_numeric else None,
+            "counter_resets": counter_resets,
+            "counter_behavior": counter_behavior,
+        },
         "retry_mutation_chains": retry_chains[:20],
         "sample_tasks": tasks[:20],
     }

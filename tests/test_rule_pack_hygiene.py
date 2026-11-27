@@ -453,3 +453,19 @@ def test_tenable_one_audit_files_syntax_and_safety_hygiene() -> None:
     assert 'import "' not in local_yara, "artex_scopeweaver_artifacts.yar must stay module-free for Tenable VM Malware Scan"
     assert "artex_aof_linux_triage.audit" in readme and "artex_aof_windows_triage.audit" in readme
     assert "Tenable ASM" in readme and "Tenable Cloud Security" in readme and "Tenable Identity Exposure" in readme
+
+
+def test_athar_v050_redirect_stub_and_opx_indicators_present() -> None:
+    """Verify Athar v0.5.0 OPX & ARTEX redirect-stub detections stay HTML-scoped and DRL-attributed."""
+    suri = (RULES_ROOT / "network" / "artex_edge_and_harness.rules").read_text(encoding="utf-8")
+    assert "sid:9100022;" in suri
+    assert 'content:"url=/function/tasks/";' in suri
+    assert 'content:"<title>artex</title>";' in suri
+
+    yara = (RULES_ROOT / "yara" / "artex_scopeweaver_artifacts.yar").read_text(encoding="utf-8")
+    assert "$title_artex_exact" in yara and "$redir_tasks" in yara
+    assert "filesize < 64KB and $title_artex_exact and $redir_tasks" in yara
+
+    intel = (RULES_ROOT / "intel_hunting" / "enterprise_intel_hunt_queries.md").read_text(encoding="utf-8")
+    assert "376abrpuqh_at.css" in intel and "18800" in intel
+    assert "url=/function/tasks/" in intel and "huntio" in intel

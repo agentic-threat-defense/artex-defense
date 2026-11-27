@@ -94,6 +94,18 @@ class MockTargetHandler(BaseHTTPRequestHandler):
                 b"<!DOCTYPE html><html><head><title>CTI Threat Report</title></head><body>Overview of Autonomous Penetration Testing Console frameworks.</body></html>",
                 "text/html",
             )
+        elif path == "/shop-redirect":
+            self._send(
+                200,
+                b'<!DOCTYPE html><html><head><title>Artex</title><meta http-equiv="refresh" content="0;url=/shop/"/></head><body>Shop</body></html>',
+                "text/html",
+            )
+        elif path == "/artex-redirect":
+            self._send(
+                200,
+                b'<!DOCTYPE html><html><head><title>artex</title><meta http-equiv="refresh" content="0;url=/function/tasks/"/></head><body></body></html>',
+                "text/html",
+            )
         elif path in {"/api/v1/update-documents", "/api/v1/status", "/api/v1/profile"}:
             self._send(200, b'{"status":"ok"}')
         elif path == "/function/workspace":
