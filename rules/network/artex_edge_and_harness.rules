@@ -73,3 +73,7 @@ alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed LuaN1aoAgent Autonomou
 alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed PentestCode Agentic Pentest Web Interface HTML Title"; flow:from_server,established; http.response_body; content:"<title>PentestCode</title>"; classtype:policy-violation; sid:9100024; rev:1;)
 
 alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed Xalgorix AI Security Scanner Dashboard HTML Title"; flow:from_server,established; http.response_body; content:"<title>Xalgorix |e2 80 94| Security Scanner</title>"; classtype:policy-violation; sid:9100025; rev:1;)
+
+# 17. Unauthenticated ARTEX Control-Plane `/api/health` JSON Response (`"service":"artex"`)
+# Scoped to HTTP 200 JSON responses so CTI HTML/text articles quoting `"service":"artex"` and benign `"service":"smartex"` APIs stay 0 FP.
+alert http any any -> any any (msg:"ARTEX-DEFENSE Exposed ARTEX Control Plane Health JSON Response (service:artex)"; flow:from_server,established; http.stat_code; content:"200"; http.content_type; content:"json"; nocase; http.response_body; content:"artex"; nocase; pcre:"/\"service\"\s*:\s*\"artex\"/i"; classtype:policy-violation; sid:9100026; rev:1;)

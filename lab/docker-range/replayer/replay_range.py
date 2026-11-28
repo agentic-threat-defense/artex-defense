@@ -152,6 +152,8 @@ def run_baseline() -> None:
         ("/nearmiss-workbench", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 4.1),
         ("/nearmiss-marketing", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 2.2),
         ("/nearmiss-terminal", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 4.6),
+        ("/api/health-benign", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 2.0),
+        ("/cti-health-blog", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0", 3.9),
     ]
     benign_browser_hdrs = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -285,6 +287,7 @@ def _run_attack_behaviors_inner() -> None:
     http_req("/console-luan1ao", port=8787, ua="Mozilla/5.0 Chrome/131.0.0.0")
     http_req("/console-pentestcode", port=80, ua="Mozilla/5.0 Chrome/131.0.0.0")
     http_req("/console-xalgorix", port=80, ua="Mozilla/5.0 Chrome/131.0.0.0")
+    http_req("/api/health", port=8787, ua="Mozilla/5.0 Chrome/131.0.0.0")
     http_req("/function/workspace?tab=files", ua="Mozilla/5.0 Chrome/131.0.0.0")
     http_req("/_i0142_probe_auth", ua="python-httpx/0.28.1")
     http_req("/_i0145_probe_auth", ua="python-httpx/0.28.1")

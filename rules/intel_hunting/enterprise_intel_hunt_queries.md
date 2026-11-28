@@ -86,9 +86,13 @@ host.services:(port=8080 and endpoints.http.body=~"(?i)(Sub2API|Subscription to 
 | **AutoCVE** | Web UI | `1166126950` *(SVG icon — FOFA/Censys)* | `a805c431c4208b9bae3a273bc99320ede36aacec4b9f06b57c6a30779bee62b2` | — |
 | **DeepAudit** | `3000` | `-757437337` | `63e81620181b1795051f40ef1c8bcd8e5e3f4df5fb1e22d60a31e251e352ad29` | — |
 - Session cookie: `artex_token=`
+- **Unauthenticated Control-Plane Health Fingerprint (`GET /api/health` → JSON `"service":"artex"`):** Query **passively** via Censys/Shodan/FOFA/Hunt.io before considering any blocklist action (avoid active probing from corporate egress, which tips off operators and may hit compromised third-party hosts):
+  - **Censys Platform (CenQL):** ``host.services.endpoints:(path="/api/health" and http.body=~`"service"\s*:\s*"artex"`)`` *(or body-only passive pivot: ``host.services.endpoints.http.body=~`"service"\s*:\s*"artex"` ``)*
+  - **Shodan:** `http.html:"\"service\":\"artex\""` (or scoped to `port:8787,8080,8790,8890,18800,18899`)
+  - **FOFA:** `body="\"service\":\"artex\""`
 - Self-signed ARTEX X.509 certificate (Hunt.io — observed on `38.244.50[.]120` + 19 consoles): **Issuer Organization (`O`) = `ARTEX`**, 10-year validity, CN = host IP (SHA-256 `C7A884AFCD7F91408921890D9617BEF6BFAC3DAE992BC25BB9C48C0395A60842`) — in CenQL pivot via `host.services.cert.parsed.issuer.organization="ARTEX"`; in HuntSQL pivot via `tls.issuer.organization = 'ARTEX' AND SPLIT(ja4x, '_')[1] = SPLIT(ja4x, '_')[2]`.
 - Next.js UI asset MD5s: `cd3ebd16437d6d3963592f7365dd3980`, `16bf6c5653291854e8c56c8eff7ca20d`
-- Observed operator ports: `8787` (default console), `8788` (recording proxy), `8790` / `8890` / `8090` (alternate consoles/APIs), `18899` (MCP/TAG-217 ARTEX console), `5001`–`5003` / `8082` (CyberStrikeAI web consoles), `8000` / `8001` / `8907` (open staging & UnboundID JNDI/LDAP dirs)
+- Observed operator ports (expanded multi-AOF matrix): `8787` (ARTEX / LuaN1aoAgent default console), `8788` (ARTEX recording proxy), `8790` / `8890` / `8090` (alternate consoles/APIs), `8080` (reverse-proxied ARTEX consoles & co-located `Sub2API`), `18800` (`OPX` rebrand), `18899` (MCP/TAG-217 ARTEX console), `443` (TLS-fronted consoles e.g. AntiFox), `5001`–`5003` / `8082` (CyberStrikeAI), `8443` (PentAGI), `8081` (Cairn), `8888` (HexStrike-AI), `4096` (PentestCode), `9137` (Xalgorix), `3000` (DeepAudit), `8000` / `8001` / `8907` (open staging & UnboundID JNDI/LDAP dirs)
 - Exact worker output spill directory layout (for open Python `SimpleHTTP` hunting): `<data>/tasks/<task-id>/i<intent-id>/cmd-output/` + `traffic/_ca/mitmproxy-ca-cert.pem` + `traffic/_index/index.sqlite`
 
 **Hunt.io (HuntSQL — `httpv2` table):**
@@ -96,7 +100,9 @@ host.services:(port=8080 and endpoints.http.body=~"(?i)(Sub2API|Subscription to 
 SELECT ip, port, html.head.title
 FROM httpv2
 WHERE http.headers.raw ILIKE '%WWW-Authenticate%realm="ARTEX"%'
-   OR (port IN (8787, 8788, 8790, 8890, 18899, 5001, 5002, 5003, 8082) AND (
+   OR http.body ILIKE '%"service":"artex"%'
+   OR http.body ILIKE '%"service": "artex"%'
+   OR (port IN (8787, 8788, 8790, 8890, 8080, 18800, 18899, 5001, 5002, 5003, 8082, 4096, 9137) AND (
         html.head.title ILIKE '%自主渗透测试%'
      OR html.head.title ILIKE '%자율 침투 테스트 콘솔%'
      OR html.head.title ILIKE '%Autonomous Penetration Testing Console%'

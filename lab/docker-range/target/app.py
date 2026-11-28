@@ -124,6 +124,16 @@ class MockTargetHandler(BaseHTTPRequestHandler):
                 "<!DOCTYPE html><html><head><title>Xalgorix — Access Terminal</title></head><body>OK</body></html>".encode("utf-8"),
                 "text/html; charset=utf-8",
             )
+        elif path == "/api/health-benign":
+            self._send(200, b'{"status":"ok","service":"smartex"}', "application/json")
+        elif path == "/cti-health-blog":
+            self._send(
+                200,
+                b'<!DOCTYPE html><html><head><title>CTI Advisory</title></head><body>ARTEX returns {"service":"artex"} on health checks.</body></html>',
+                "text/html",
+            )
+        elif path == "/api/health":
+            self._send(200, b'{"status":"ok","service":"artex"}', "application/json")
         elif path == "/console-luan1ao":
             self._send(
                 200,
